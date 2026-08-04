@@ -39,7 +39,7 @@ a{color:inherit;text-decoration:none}
 .wrap{max-width:1200px;margin:0 auto;padding:0 28px}
 
 h1,h2,h3{line-height:1.08;letter-spacing:-.035em;font-weight:800}
-h1{font-size:clamp(2.5rem,5.6vw,4.15rem)}
+h1{font-size:clamp(1.95rem,4.6vw,3.85rem)}
 h2{font-size:clamp(1.9rem,3.4vw,2.7rem)}
 h3{font-size:1.02rem;font-weight:700;letter-spacing:-.015em;line-height:1.3}
 .gold{color:var(--gold)}
@@ -106,7 +106,9 @@ h3{font-size:1.02rem;font-weight:700;letter-spacing:-.015em;line-height:1.3}
   font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
   color:var(--gold);
 }
-.hero h1{margin:26px auto 0;max-width:16ch}
+/* Sized so "Plus Automated Price Drop Refunds." holds one line at desktop
+   width; text-wrap:balance keeps the break sensible once it has to wrap. */
+.hero h1{margin:26px auto 0;max-width:none;text-wrap:balance}
 .hero h1 .l2{display:block;color:var(--gold)}
 .hero p.sub{
   margin:24px auto 0;max-width:56ch;font-size:1.08rem;color:var(--muted);
@@ -302,14 +304,13 @@ footer{border-top:1px solid var(--line-soft);padding:60px 0 0}
     </span>
 
     <h1>
-      Book the lowest fare.
-      <span class="l2">Then keep getting it.</span>
+      Lowest Booking Prices.
+      <span class="l2">Plus Automated Price Drop Refunds.</span>
     </h1>
 
     <p class="sub">
-      Fares move after you book. We keep asking the airline what your exact
-      flight now costs to exchange, and when the answer comes back in your
-      favour we swap the ticket and return the difference.
+      Search flights, hotels, cars and rail at the lowest rates — then let our
+      engine monitor 24/7 and automatically refund you the moment prices drop.
     </p>
 
     <!-- Posts to the existing /search route. Booking logic unchanged. -->
