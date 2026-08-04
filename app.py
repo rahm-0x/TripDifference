@@ -55,6 +55,18 @@ PROFILE = {"title": "mr", "given_name": "Amelia", "family_name": "Earhart",
 PASSENGER_FIELDS = ("title", "given_name", "family_name", "born_on", "gender",
                     "email", "phone_number")
 
+# Landing-page shop window. PLACEHOLDER — not live pricing, not observed
+# savings. Swap for real data before this page is shown to anyone outside
+# the team; see the note in templates/landing.html.
+PLACEHOLDER_DEALS = [
+    {"from": "London",    "to": "New York",  "now": "389", "was": "620", "save": "231"},
+    {"from": "Manchester","to": "Dublin",    "now": "78",  "was": "146", "save": "68"},
+    {"from": "Edinburgh", "to": "Amsterdam", "now": "112", "was": "198", "save": "86"},
+    {"from": "London",    "to": "Lisbon",    "now": "134", "was": "245", "save": "111"},
+    {"from": "Bristol",   "to": "Geneva",    "now": "156", "was": "289", "save": "133"},
+    {"from": "Glasgow",   "to": "Paris",     "now": "94",  "was": "173", "save": "79"},
+]
+
 
 @app.context_processor
 def inject_globals():
@@ -313,7 +325,7 @@ def activate():
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html", nav="search", offers=None, form={})
+    return render_template("landing.html", deals=PLACEHOLDER_DEALS)
 
 
 @app.route("/search", methods=["POST"])
@@ -327,7 +339,7 @@ def search():
         "trip_type": request.form.get("trip_type", "one_way"),
     }
     if not (form["origin"] and form["destination"] and form["date"]):
-        return render_template("index.html", nav="search", offers=None, form=form,
+        return render_template("results.html", nav="search", offers=None, form=form,
                                error="Origin, destination and departure date are required.")
 
     slices = [{"origin": form["origin"], "destination": form["destination"],
@@ -343,11 +355,11 @@ def search():
                      "cabin_class": form["cabin"]}
         }, params={"return_offers": "true"}, label="ui_search")
     except (DuffelError, RuntimeError) as exc:
-        return render_template("index.html", nav="search", offers=None, form=form, error=str(exc))
+        return render_template("results.html", nav="search", offers=None, form=form, error=str(exc))
 
     raw = sorted(data.get("offers", []), key=lambda x: Decimal(x["total_amount"]))
     offers = [offer_view(o) for o in raw[:20]]
-    return render_template("index.html", nav="search", offers=offers, form=form,
+    return render_template("results.html", nav="search", offers=offers, form=form,
                            total=len(raw),
                            unmonitorable=sum(1 for o in offers if not o["monitorable"]))
 
@@ -366,7 +378,7 @@ def passenger_step():
     try:
         return render_template("passenger.html", nav="search", offer=fetch_offer_view(offer_id))
     except (DuffelError, RuntimeError) as exc:
-        return render_template("index.html", nav="search", offers=None, form={},
+        return render_template("results.html", nav="search", offers=None, form={},
                                error=f"{exc} — offers expire; search again.")
 
 
@@ -378,7 +390,7 @@ def payment_step():
         return render_template("payment.html", nav="search",
                                offer=fetch_offer_view(offer_id), passenger=passenger)
     except (DuffelError, RuntimeError) as exc:
-        return render_template("index.html", nav="search", offers=None, form={},
+        return render_template("results.html", nav="search", offers=None, form={},
                                error=f"{exc} — offers expire; search again.")
 
 
@@ -402,7 +414,7 @@ def book():
         if isinstance(exc, DuffelError) and "offer_request_already_booked" in (exc.codes or []):
             hint = (" — an offer request is single use; this search has already been "
                     "booked from. Search again for fresh offers.")
-        return render_template("index.html", nav="search", offers=None, form={},
+        return render_template("results.html", nav="search", offers=None, form={},
                                error=str(exc) + hint)
 
     snap = OrderSnapshot.from_duffel(order)

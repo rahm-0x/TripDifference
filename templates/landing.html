@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trip Difference — book low, then keep the difference</title>
+<link rel="icon" href="/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#010101;
+  --surface:#0A0908;
+  --surface-2:#100D09;
+  --line:#221D15;
+  --line-soft:#171310;
+  --text:#FBF4E6;
+  --muted:#8B8073;
+  --muted-2:#6A6155;
+  --gold:#D4AB4F;
+  --gold-hi:#E4C273;
+  --gold-dim:#8A6F32;
+  --green:#5FBF7F;
+  --green-bg:rgba(95,191,127,.12);
+  --r:8px;
+  --r-card:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  font-size:16px;line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  letter-spacing:-.011em;
+}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1200px;margin:0 auto;padding:0 28px}
+
+h1,h2,h3{line-height:1.08;letter-spacing:-.035em;font-weight:800}
+h1{font-size:clamp(2.5rem,5.6vw,4.15rem)}
+h2{font-size:clamp(1.9rem,3.4vw,2.7rem)}
+h3{font-size:1.02rem;font-weight:700;letter-spacing:-.015em;line-height:1.3}
+.gold{color:var(--gold)}
+.muted{color:var(--muted)}
+
+/* ---------- buttons ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:9px;
+  padding:13px 24px;border-radius:var(--r);
+  font-size:.94rem;font-weight:700;letter-spacing:-.01em;
+  border:1px solid transparent;cursor:pointer;
+  font-family:inherit;transition:background .15s,border-color .15s,color .15s;
+}
+.btn-gold{background:var(--gold);color:#0A0700;font-weight:800}
+.btn-gold:hover{background:var(--gold-hi)}
+.btn-ghost{background:transparent;color:var(--text);border-color:#332B20}
+.btn-ghost:hover{border-color:var(--gold-dim);color:var(--gold)}
+.btn-block{width:100%}
+.btn-sm{padding:10px 18px;font-size:.88rem}
+
+/* ---------- nav ---------- */
+.nav{
+  position:sticky;top:0;z-index:50;
+  background:rgba(1,1,1,.86);backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--line-soft);
+}
+.nav-in{display:flex;align-items:center;gap:26px;padding:14px 0}
+.mark{display:flex;align-items:center;gap:11px}
+.mark img{width:34px;height:34px;border-radius:999px}
+.mark .wm{font-weight:800;font-size:1.04rem;letter-spacing:-.03em;line-height:1.1}
+.mark .wm span{color:var(--gold)}
+.mark .tag{
+  display:block;font-size:.58rem;font-weight:600;letter-spacing:.17em;
+  text-transform:uppercase;color:var(--muted-2);margin-top:1px;
+}
+.nav-links{display:flex;gap:4px;margin:0 auto}
+.nav-links a,.nav-links span{
+  padding:8px 14px;border-radius:999px;font-size:.9rem;font-weight:500;color:var(--muted);
+}
+.nav-links a:hover{color:var(--text);background:var(--surface-2)}
+.nav-links a.on{color:var(--gold)}
+.nav-links span.soon{color:var(--muted-2);cursor:default}
+.nav-links span.soon::after{
+  content:'soon';margin-left:6px;font-size:.58rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--gold-dim);
+  vertical-align:2px;
+}
+.nav-right{display:flex;align-items:center;gap:16px}
+.signin{font-size:.9rem;font-weight:500;color:var(--muted)}
+.signin:hover{color:var(--text)}
+
+/* ---------- hero ---------- */
+.hero{padding:76px 0 0;text-align:center;position:relative;overflow:hidden}
+.hero::before{
+  content:'';position:absolute;top:-380px;left:50%;transform:translateX(-50%);
+  width:1100px;height:700px;pointer-events:none;
+  background:radial-gradient(ellipse at center,rgba(212,171,79,.10),transparent 62%);
+}
+.hero-in{position:relative}
+.pill{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:7px 16px;border-radius:999px;
+  border:1px solid #2A2318;background:var(--surface-2);
+  font-size:.7rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--gold);
+}
+.hero h1{margin:26px auto 0;max-width:16ch}
+.hero h1 .l2{display:block;color:var(--gold)}
+.hero p.sub{
+  margin:24px auto 0;max-width:56ch;font-size:1.08rem;color:var(--muted);
+}
+
+/* ---------- search card ---------- */
+.search{
+  margin:46px auto 0;max-width:960px;text-align:left;
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-card);padding:20px;
+  box-shadow:0 30px 80px rgba(0,0,0,.6);
+}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line-soft);padding-bottom:14px;margin-bottom:16px}
+.tab{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:9px 16px;border-radius:var(--r);
+  font-size:.9rem;font-weight:600;color:var(--muted);background:transparent;
+  border:1px solid transparent;cursor:default;
+}
+.tab.on{color:var(--text);background:var(--surface-2);border-color:var(--line)}
+.tab.off{color:var(--muted-2)}
+.tab.off small{
+  font-size:.56rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--gold-dim);
+}
+.trip{display:flex;gap:8px;margin-bottom:16px}
+.trip label{margin:0}
+.trip input{position:absolute;opacity:0;pointer-events:none}
+.trip span{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:8px 18px;border-radius:999px;cursor:pointer;
+  font-size:.86rem;font-weight:600;color:var(--muted);
+  border:1px solid var(--line);background:transparent;transition:all .15s;
+}
+.trip input:checked + span{color:var(--gold);border-color:var(--gold-dim);background:rgba(212,171,79,.07)}
+
+.fields{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px}
+.f{position:relative}
+.f label{
+  display:block;font-size:.62rem;font-weight:700;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--muted-2);margin-bottom:6px;
+}
+.f .box{display:flex;align-items:center;gap:9px;
+  border:1px solid var(--line);border-radius:var(--r);background:var(--surface-2);
+  padding:0 12px;transition:border-color .15s}
+.f .box:focus-within{border-color:var(--gold-dim)}
+.f svg{flex:none;color:var(--muted-2)}
+.f input,.f select{
+  width:100%;background:transparent;border:0;outline:0;
+  color:var(--text);font-family:inherit;font-size:.94rem;font-weight:500;
+  padding:12px 0;
+}
+.f input::placeholder{color:var(--muted-2)}
+.f input[type=date]{color-scheme:dark}
+.f select option{background:#0F0C08;color:var(--text)}
+.f.dim{opacity:.4;pointer-events:none}
+.search .btn{margin-top:16px}
+
+/* ---------- sections ---------- */
+.sec{padding:96px 0}
+.sec-head{margin-bottom:38px}
+.sec-head.center{text-align:center;max-width:60ch;margin-left:auto;margin-right:auto}
+.sec-head p{margin-top:12px;color:var(--muted);font-size:1.02rem}
+.sec-top{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+
+/* deals */
+.deals{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.deal{
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-card);padding:20px;transition:border-color .18s;
+}
+.deal:hover{border-color:#3A3020}
+.deal-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.ico{
+  width:38px;height:38px;border-radius:999px;
+  display:grid;place-items:center;
+  background:rgba(212,171,79,.10);color:var(--gold);
+}
+.save{
+  padding:4px 11px;border-radius:999px;
+  background:var(--green-bg);color:var(--green);
+  font-size:.72rem;font-weight:700;letter-spacing:-.01em;
+}
+.route{display:flex;align-items:center;gap:9px;font-size:1.02rem;font-weight:700;letter-spacing:-.02em}
+.route .arw{color:var(--gold-dim)}
+.prices{display:flex;align-items:baseline;gap:10px;margin:10px 0 16px}
+.now{font-size:1.85rem;font-weight:800;color:var(--gold);letter-spacing:-.035em}
+.was{font-size:.92rem;color:var(--muted-2);text-decoration:line-through}
+
+/* how it works */
+.steps{position:relative;display:grid;grid-template-columns:repeat(4,1fr);gap:24px}
+.steps::before{
+  content:'';position:absolute;top:31px;left:12.5%;right:12.5%;height:1px;
+  background:linear-gradient(90deg,transparent,var(--line) 12%,var(--line) 88%,transparent);
+}
+.stp{text-align:center;position:relative}
+.stp .n{
+  width:62px;height:62px;margin:0 auto 20px;border-radius:999px;
+  display:grid;place-items:center;
+  background:var(--bg);border:1px solid var(--gold-dim);
+  color:var(--gold);font-weight:700;font-size:.92rem;letter-spacing:.02em;
+  position:relative;z-index:1;
+}
+.stp p{margin-top:9px;font-size:.9rem;color:var(--muted);max-width:30ch;margin-left:auto;margin-right:auto}
+
+/* features */
+.feats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.feat{
+  background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-card);padding:24px;
+}
+.feat .ico{margin-bottom:18px}
+.feat p{margin-top:9px;font-size:.9rem;color:var(--muted)}
+
+/* cta */
+.cta{text-align:center;padding:100px 0;border-top:1px solid var(--line-soft)}
+.cta .ico{width:60px;height:60px;margin:0 auto 26px}
+.cta h2{max-width:20ch;margin:0 auto}
+.cta p{margin:20px auto 0;max-width:52ch;color:var(--muted);font-size:1.02rem}
+.cta-btns{display:flex;gap:12px;justify-content:center;margin-top:32px;flex-wrap:wrap}
+.trust{display:flex;gap:26px;justify-content:center;margin-top:30px;flex-wrap:wrap}
+.trust span{display:inline-flex;align-items:center;gap:7px;font-size:.84rem;color:var(--muted)}
+.trust svg{color:var(--gold-dim)}
+
+/* footer */
+footer{border-top:1px solid var(--line-soft);padding:60px 0 0}
+.fgrid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:40px}
+.fbrand .mark{margin-bottom:16px}
+.fbrand p{font-size:.88rem;color:var(--muted);max-width:34ch}
+.fcol h4{
+  font-size:.66rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--muted-2);margin-bottom:16px;
+}
+.fcol a,.fcol span{display:block;font-size:.9rem;color:var(--muted);padding:5px 0}
+.fcol a:hover{color:var(--gold)}
+.fcol span{color:var(--muted-2)}
+.copy{
+  margin-top:52px;padding:22px 0 40px;border-top:1px solid var(--line-soft);
+  display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;
+  font-size:.82rem;color:var(--muted-2);
+}
+
+@media(max-width:1000px){
+  .fields{grid-template-columns:1fr 1fr 1fr}
+  .deals,.feats{grid-template-columns:1fr 1fr}
+  .steps{grid-template-columns:1fr 1fr;gap:40px 24px}
+  .steps::before{display:none}
+  .fgrid{grid-template-columns:1fr 1fr}
+}
+@media(max-width:720px){
+  .nav-links{display:none}
+  .fields{grid-template-columns:1fr 1fr}
+  .deals,.feats{grid-template-columns:1fr}
+  .steps{grid-template-columns:1fr}
+  .fgrid{grid-template-columns:1fr}
+  .tabs{overflow-x:auto}
+}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-in">
+    <a class="mark" href="/">
+      <img src="/logo.png" alt="">
+      <span>
+        <span class="wm">Trip<span>Difference</span></span>
+        <span class="tag">Smart travel savings</span>
+      </span>
+    </a>
+
+    <div class="nav-links">
+      <a href="/" class="on">Flights</a>
+      <span class="soon" title="Flights only for now">Hotels</span>
+      <span class="soon" title="Flights only for now">Cars</span>
+      <span class="soon" title="Flights only for now">Rail</span>
+      <a href="#deals">Deals</a>
+      <a href="/info">How it works</a>
+    </div>
+
+    <div class="nav-right">
+      <a class="signin" href="/login">Sign in</a>
+      <a class="btn btn-gold btn-sm" href="/activate">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-in">
+    <span class="pill">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.9 6.3 6.8.8-5 4.7 1.3 6.8L12 17.3 6 20.6l1.3-6.8-5-4.7 6.8-.8z"/></svg>
+      No saving, no fee
+    </span>
+
+    <h1>
+      Book the lowest fare.
+      <span class="l2">Then keep getting it.</span>
+    </h1>
+
+    <p class="sub">
+      Fares move after you book. We keep asking the airline what your exact
+      flight now costs to exchange, and when the answer comes back in your
+      favour we swap the ticket and return the difference.
+    </p>
+
+    <!-- Posts to the existing /search route. Booking logic unchanged. -->
+    <form class="search" method="post" action="{{ url_for('search') }}">
+      <div class="tabs">
+        <span class="tab on">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
+          Flights
+        </span>
+        <span class="tab off">Hotels <small>soon</small></span>
+        <span class="tab off">Cars <small>soon</small></span>
+        <span class="tab off">Rail <small>soon</small></span>
+      </div>
+
+      <div class="trip">
+        <label>
+          <input type="radio" name="trip_type" value="round_trip" checked>
+          <span>Round trip</span>
+        </label>
+        <label>
+          <input type="radio" name="trip_type" value="one_way">
+          <span>One way</span>
+        </label>
+      </div>
+
+      <div class="fields">
+        <div class="f">
+          <label for="origin">From</label>
+          <div class="box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
+            <input id="origin" name="origin" maxlength="3" placeholder="LHR" required
+                   autocomplete="off" style="text-transform:uppercase">
+          </div>
+        </div>
+
+        <div class="f">
+          <label for="destination">To</label>
+          <div class="box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
+            <input id="destination" name="destination" maxlength="3" placeholder="JFK" required
+                   autocomplete="off" style="text-transform:uppercase">
+          </div>
+        </div>
+
+        <div class="f">
+          <label for="date">Depart</label>
+          <div class="box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2v2H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2zm12 8v9H5v-9z"/></svg>
+            <input id="date" name="date" type="date" required>
+          </div>
+        </div>
+
+        <div class="f" id="retField">
+          <label for="return_date">Return</label>
+          <div class="box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2v2H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2V2h-2v2H9V2zm12 8v9H5v-9z"/></svg>
+            <input id="return_date" name="return_date" type="date">
+          </div>
+        </div>
+
+        <div class="f">
+          <label for="cabin">Cabin</label>
+          <div class="box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-5 0-9 2.5-9 5.5V22h18v-2.5c0-3-4-5.5-9-5.5z"/></svg>
+            <select id="cabin" name="cabin">
+              <option value="economy">Economy</option>
+              <option value="premium_economy">Premium economy</option>
+              <option value="business">Business</option>
+              <option value="first">First</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-gold btn-block">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+        Search flights
+      </button>
+    </form>
+  </div>
+</header>
+
+<section class="sec" id="deals">
+  <div class="wrap">
+    <div class="sec-head sec-top">
+      <div>
+        <h2>Fares worth watching</h2>
+        <!-- PLACEHOLDER DATA. Defined as PLACEHOLDER_DEALS in app.py. These are
+             illustrative routes and prices, not live pricing and not observed
+             savings. Replace before showing this page outside the team. -->
+        <p>Illustrative routes while live pricing is wired up.</p>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="#deals">Browse all routes</a>
+    </div>
+
+    <div class="deals">
+      {% for d in deals %}
+      <article class="deal">
+        <div class="deal-top">
+          <span class="ico">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
+          </span>
+          <span class="save">Save ${{ d.save }}</span>
+        </div>
+        <div class="route">{{ d['from'] }} <span class="arw">&rarr;</span> {{ d.to }}</div>
+        <div class="prices">
+          <span class="now">${{ d.now }}</span>
+          <span class="was">${{ d.was }}</span>
+        </div>
+        <a class="btn btn-ghost btn-block btn-sm" href="/">Search this route</a>
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="sec">
+  <div class="wrap">
+    <div class="sec-head center">
+      <h2>Four steps, and you only do the first</h2>
+      <p>Everything after booking runs without you.</p>
+    </div>
+
+    <div class="steps">
+      <div class="stp">
+        <div class="n">01</div>
+        <h3>Book through us</h3>
+        <p>Whoever issues the ticket is the only party who can exchange it later.</p>
+      </div>
+      <div class="stp">
+        <div class="n">02</div>
+        <h3>We re-price it</h3>
+        <p>Your exact flight, same carrier and number, checked until a day before departure.</p>
+      </div>
+      <div class="stp">
+        <div class="n">03</div>
+        <h3>The airline quotes</h3>
+        <p>We use what the exchange actually costs, penalties included — not the headline fare.</p>
+      </div>
+      <div class="stp">
+        <div class="n">04</div>
+        <h3>You get the difference</h3>
+        <p>Same flight, same seat, same time. Only the money moves.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec">
+  <div class="wrap">
+    <div class="sec-head center">
+      <h2>Built to be checkable</h2>
+      <p>Every decision has a reason attached, and you can read all of them.</p>
+    </div>
+
+    <div class="feats">
+      <div class="feat">
+        <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M16 6l2.3 2.3-4.9 4.9-4-4L2 16.6 3.4 18l6-6 4 4 6.3-6.3L22 12V6z"/></svg></span>
+        <h3>Priced by the airline</h3>
+        <p>A cheaper seat on the board is not a cheaper exchange. We act on the exchange quote, which already nets out the change penalty.</p>
+      </div>
+      <div class="feat">
+        <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5a6 6 0 0 0-5-5.9V4a1 1 0 0 0-2 0v1.1A6 6 0 0 0 6 11v5l-2 2v1h16v-1z"/></svg></span>
+        <h3>Nothing to chase</h3>
+        <p>No alerts to act on and no forms to file. The exchange happens as one operation, so you are never between two tickets.</p>
+      </div>
+      <div class="feat">
+        <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5zm0 6a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 5.5c1.7 0 3 .8 3 1.8V17H9v-1.7c0-1 1.3-1.8 3-1.8z"/></svg></span>
+        <h3>No saving, no fee</h3>
+        <p>Our share comes out of what we recover. If the exchange never turns in your favour, there is nothing to charge you for.</p>
+      </div>
+      <div class="feat">
+        <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M11 21h-1l1-7H7.5c-.6 0-.6-.3-.4-.7l6.9-11.6c.2-.3.6-.3.6.2l-1 7h3.4c.6 0 .6.3.4.7l-6.9 11.6c-.2.3-.5.3-.5-.2z"/></svg></span>
+        <h3>Same flight, or nothing</h3>
+        <p>We only accept an exchange onto the identical carrier and flight numbers. A cheaper reroute through a connection is not a saving.</p>
+      </div>
+      <div class="feat">
+        <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l9 4.5-9 4.5-9-4.5zm0 7.7l9-4.5V15l-9 4.5L3 15V6.2z"/></svg></span>
+        <h3>Unwatchable fares are flagged</h3>
+        <p>Some fares can never be exchanged, and some carry a change fee too large to beat. We say so before you book, not after.</p>
+      </div>
+      <div class="feat">
+        <span class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 3h16v2H4zm0 4h16v2H4zm0 4h10v2H4zm0 4h10v2H4zm12 0h4v6h-4z"/></svg></span>
+        <h3>An auditable trail</h3>
+        <p>Every check writes a line: what the market showed, what the exchange quoted, which threshold applied and what we decided.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="wrap">
+    <span class="ico" style="display:grid">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1v2.2c-2.5.3-4.4 1.8-4.4 4 0 2.6 2.2 3.6 4.9 4.3 2.4.6 3.1 1.2 3.1 2.2 0 .8-.7 1.8-2.8 1.8-2.2 0-3.1-1-3.2-2.3H6.9c.1 2.4 1.9 3.9 4.4 4.3V20h2.2v-2.5c2.6-.4 4.4-1.9 4.4-4.1 0-2.9-2.5-3.8-4.9-4.4-2.4-.6-3.1-1.3-3.1-2.2 0-1 .9-1.7 2.6-1.7 1.8 0 2.5.9 2.6 2.1h2.6c-.1-2.1-1.5-3.7-3.7-4.1V1z"/></svg>
+    </span>
+    <h2>Stop paying <span class="gold">yesterday's price</span></h2>
+    <p>
+      Book the flight you were going to book anyway. We will keep checking
+      whether the airline will give some of it back.
+    </p>
+    <div class="cta-btns">
+      <a class="btn btn-gold" href="/activate">
+        Get started
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l-1.4 1.4L16.2 11H4v2h12.2l-5.6 5.6L12 20l8-8z"/></svg>
+      </a>
+      <a class="btn btn-ghost" href="/info">See how it works</a>
+    </div>
+    <div class="trust">
+      <span><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 15l-5-5 1.4-1.4L10 14.2l7.6-7.6L19 8z"/></svg> Fee only on what we recover</span>
+      <span><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 15l-5-5 1.4-1.4L10 14.2l7.6-7.6L19 8z"/></svg> Your flight never changes</span>
+      <span><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 15l-5-5 1.4-1.4L10 14.2l7.6-7.6L19 8z"/></svg> Turn monitoring off anytime</span>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div class="fbrand">
+        <div class="mark">
+          <img src="/logo.png" alt="">
+          <span>
+            <span class="wm">Trip<span>Difference</span></span>
+            <span class="tag">Smart travel savings</span>
+          </span>
+        </div>
+        <p>
+          We book your flight at the going rate, then keep asking the airline
+          whether it will cost less to hold the same seat.
+        </p>
+      </div>
+
+      <div class="fcol">
+        <h4>Product</h4>
+        <a href="/">Flights</a>
+        <a href="#deals">Deals</a>
+        <a href="/info">How it works</a>
+        <a href="/trips">My trips</a>
+        <span>Hotels &middot; soon</span>
+      </div>
+
+      <div class="fcol">
+        <h4>Company</h4>
+        <a href="/info">About</a>
+        <a href="/decisions">Decision log</a>
+        <span>Blog</span>
+        <span>Careers</span>
+      </div>
+
+      <div class="fcol">
+        <h4>Legal</h4>
+        <span>Privacy policy</span>
+        <span>Terms of service</span>
+        <span>Cookie policy</span>
+        <span>Fee schedule</span>
+      </div>
+    </div>
+
+    <div class="copy">
+      <span>&copy; 2026 Trip Difference</span>
+      <span>Flights only &middot; same-carrier exchanges &middot; running against the Duffel sandbox</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Return date only applies to round trips — mirrors the /search route.
+  var ret = document.getElementById('return_date');
+  var retField = document.getElementById('retField');
+  function syncTrip(){
+    var round = document.querySelector('input[name=trip_type]:checked').value === 'round_trip';
+    retField.classList.toggle('dim', !round);
+    ret.disabled = !round;
+    if(!round) ret.value = '';
+  }
+  document.querySelectorAll('input[name=trip_type]').forEach(function(r){
+    r.addEventListener('change', syncTrip);
+  });
+  syncTrip();
+
+  // Sensible default dates so the first search always works.
+  (function(){
+    var d = document.getElementById('date');
+    if(!d.value){
+      var out = new Date(Date.now() + 30*864e5);
+      var back = new Date(Date.now() + 37*864e5);
+      d.value = out.toISOString().slice(0,10);
+      ret.value = back.toISOString().slice(0,10);
+    }
+  })();
+</script>
+</body>
+</html>
