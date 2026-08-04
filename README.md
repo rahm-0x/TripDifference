@@ -146,4 +146,42 @@ Documented route-triggered behaviours, narrower than they sound:
   (an RFC 2616 **date**, not a seconds count). Retries once, then gives up.
 - No retry framework, no client abstraction. One `api()` helper, one function
   per command, ~400 lines total.
-# TripDifference
+
+## Deployment
+
+| Environment | URL | Access |
+|---|---|---|
+| Production | https://tripdifference.vercel.app | **public — no authentication** |
+| Staging | https://tripdifference-staging.vercel.app | Vercel SSO (team members only) |
+
+Production tracks `main`, staging tracks the `staging` branch. Deploy with
+`vercel --prod --yes` and `vercel --yes` respectively.
+
+Vercel auto-detects the Flask `app` in root `app.py` and routes every path to a
+single function — no rewrites. Two things that will bite you if changed:
+
+- **`.vercelignore` patterns match at any depth.** An entry of `index.html`
+  silently excluded `templates/index.html` and every page 500'd with
+  `TemplateNotFound`. Root-only excludes are anchored with a leading `/`.
+- **`responses/` must stay excluded.** At 220MB it blows the 225MB function
+  bundle limit on its own.
+
+Static assets live in `public/` (CDN-served). Flask's `static_folder` is not
+used — the platform docs advise against it. `/logo.png` has a local-dev route so
+the same URL works in both environments.
+
+### ⚠️ Ephemeral storage
+
+`orders.json`, `decisions.log` and `simulated_prices.json` are written to
+`DATA_DIR`, which is `/tmp` on Vercel. **That resets when the instance
+recycles.** Bookings create real Duffel sandbox orders that continue to exist at
+Duffel, but our local record of them disappears. Fine for a demo URL; not
+suitable for real bookkeeping without swapping the store for a database.
+
+### ⚠️ Production is unauthenticated
+
+The login screen is decorative (see above) and production is publicly
+reachable, so anyone with the URL can book, cancel and run reshop cycles against
+the sandbox balance, and can read the ops console and decision log. Preview
+deployments are SSO-gated by default; production is not. To gate it, set
+Deployment Protection to *Standard Protection* in Project Settings.

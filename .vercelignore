@@ -1,0 +1,19 @@
+# Vercel does not read .gitignore for uploads — everything must be listed here.
+.venv
+responses/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.*
+orders.json
+decisions.log
+
+# Local-only: source art, dev deps, the superseded stdlib server, tests
+/tripdifference.png
+/static/
+/requirements-dev.txt
+/test_engine.py
+/server.py
+/index.html
+/duffel.py
