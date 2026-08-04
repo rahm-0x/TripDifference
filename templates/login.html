@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="auth">
+  <div class="page-head" style="text-align:center">
+    <h1>Sign in</h1>
+    <p>Book travel and track fare refunds for your team.</p>
+  </div>
+
+  <div class="card">
+    <form method="post" action="{{ url_for('login') }}">
+      <div class="field">
+        <label for="email">Work email</label>
+        <input id="email" name="email" type="email" placeholder="you@company.com"
+               value="{{ prefill_email or '' }}" required autofocus>
+      </div>
+
+      <div class="field">
+        <div style="display:flex; align-items:baseline; justify-content:space-between">
+          <label for="password">Password</label>
+          <a href="#" style="font-size:12px; text-transform:none; letter-spacing:0">Forgot?</a>
+        </div>
+        <input id="password" name="password" type="password" placeholder="••••••••" required>
+      </div>
+
+      <button type="submit" class="btn-block" style="margin-top:6px">Sign in</button>
+    </form>
+
+    <div class="sep"><span>or</span></div>
+
+    <form method="post" action="{{ url_for('login') }}">
+      <input type="hidden" name="sso" value="1">
+      <button type="submit" class="btn-ghost btn-block">
+        <span class="sso-mark">◆</span> Continue with company SSO
+      </button>
+    </form>
+  </div>
+
+  <p class="foot">
+    Invited but haven't set a password?
+    <a href="{{ url_for('activate') }}">Activate your account</a>
+  </p>
+</div>
+
+<style>
+  .auth { max-width:400px; margin:40px auto 0; }
+  .sep { display:flex; align-items:center; gap:12px; margin:20px 0; color:var(--ink-faint); font-size:12px; }
+  .sep::before, .sep::after { content:''; flex:1; height:1px; background:var(--line); }
+  .sso-mark { color:var(--terra); font-size:12px; }
+  .foot { text-align:center; margin-top:18px; font-size:13.5px; color:var(--ink-soft); }
+</style>
+
+{% endblock %}

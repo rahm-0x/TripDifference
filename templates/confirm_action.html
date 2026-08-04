@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Confirm {{ action }} — Trip Difference{% endblock %}
+{% block body %}
+
+{% set d = order.last_decision %}
+
+<div style="max-width:620px; margin:0 auto">
+  <div class="page-head">
+    <h1>Confirm {{ action }}</h1>
+    <p>Step 1 of 2 — nothing has happened yet.</p>
+  </div>
+
+  <div class="card">
+    <dl class="meta">
+      <div><dt>Order</dt><dd>{{ order.booking_reference }}
+        <span class="mono muted">{{ order.order_id }}</span></dd></div>
+      <div><dt>Itinerary</dt><dd>{{ order.route }} · {{ order.itinerary }}</dd></div>
+      <div><dt>Departure</dt><dd>{{ order.departure_date }}</dd></div>
+      <div><dt>Paid</dt><dd>{{ order.paid }} {{ order.currency }}</dd></div>
+      {% if action == 'exchange' and d %}
+      <div><dt>Change total</dt>
+        <dd class="{{ 'neg' if d.change_total and d.change_total.startswith('-') else 'pos' }}">
+          {{ d.change_total }} {{ order.currency }}</dd></div>
+      <div><dt>Change offer</dt><dd class="mono">{{ d.change_offer_id }}</dd></div>
+      <div><dt>Decided by</dt><dd>{{ d.source }} · {{ d.reason }}</dd></div>
+      {% endif %}
+    </dl>
+
+    <div class="notice {{ 'notice-err' if action == 'cancel' else 'notice-terra' }}" style="margin-top:18px">
+      <span>⚠</span>
+      <div>
+        {% if action == 'exchange' %}
+          Creates an order change and immediately confirms it. A positive change
+          total is charged to the Duffel balance.
+        {% else %}
+          Quotes a refund and immediately confirms the cancellation.
+          <b>The order cannot be un-cancelled.</b>
+        {% endif %}
+      </div>
+    </div>
+
+    <form method="post" action="{{ url_for('execute', order_id=order.order_id, action=action) }}"
+          style="margin-top:18px">
+      <div class="field">
+        <label for="confirm_text">Type CONFIRM to proceed</label>
+        <input id="confirm_text" name="confirm_text" autocomplete="off"
+               placeholder="CONFIRM" class="mono" autofocus>
+      </div>
+      <div style="display:flex; gap:10px">
+        <button type="submit" class="{{ 'btn-danger' if action == 'cancel' }}">Execute {{ action }}</button>
+        <a href="{{ url_for('orders') }}" class="btn btn-ghost">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  .meta div { display:flex; justify-content:space-between; gap:14px; padding:8px 0;
+              font-size:13.5px; border-bottom:1px solid var(--line-soft); }
+  .meta div:last-child { border-bottom:0; }
+  .meta dt { color:var(--ink-faint); margin:0; }
+  .meta dd { margin:0; font-weight:600; text-align:right; }
+</style>
+
+{% endblock %}

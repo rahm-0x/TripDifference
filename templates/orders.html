@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}Ops — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Ops console</h1>
+  <p>
+    Operator view of every booked order. Floor {{ policy.min_saving }} ·
+    departure buffer {{ policy.departure_buffer_hours }}h · default source
+    <b>{{ source_name }}</b>.
+  </p>
+</div>
+
+<div class="notice notice-terra" style="margin-bottom:18px">
+  <span>⚠</span>
+  <div>
+    Duffel sandbox pins <span class="mono">change_total_amount</span> at
+    <b>+125.00</b> and cannot produce a price drop. Use the simulate controls to
+    force a negative change total and watch the engine flip. Execution is blocked
+    when the last decision came from the simulated source.
+  </div>
+</div>
+
+{% if not orders %}
+<div class="card" style="text-align:center; padding:44px">
+  <p class="muted" style="margin:0 0 16px">Nothing booked yet.</p>
+  <a href="{{ url_for('index') }}" class="btn">Search flights</a>
+</div>
+{% endif %}
+
+{% for o in orders %}
+{% set d = o.last_decision %}
+<div class="card" style="margin-bottom:16px">
+  <div class="ops-head">
+    <div>
+      <div style="font-family:'Caprasimo',Georgia,serif; font-size:18px">
+        {{ o.route }} <span class="muted" style="font-size:14px">{{ o.departure_date }}</span>
+      </div>
+      <div class="fl-meta">
+        <b>{{ o.booking_reference }}</b> · {{ o.carrier }} ·
+        <span class="mono">{{ o.itinerary }}</span> ·
+        <span class="mono muted">{{ o.order_id }}</span>
+      </div>
+    </div>
+    <div style="margin-left:auto; text-align:right">
+      <div class="lbl" style="margin:0">Paid</div>
+      <div class="price">{{ o.paid }}<span class="cur">{{ o.currency }}</span></div>
+    </div>
+    <form method="post" action="{{ url_for('toggle_monitor', order_id=o.order_id) }}">
+      <button type="submit" class="btn-ghost btn-sm">
+        {% if o.monitoring %}<span class="tag tag-sage"><span class="dot"></span>Monitoring</span>
+        {% else %}<span class="tag tag-mute">Paused</span>{% endif %}
+      </button>
+    </form>
+  </div>
+
+  <div class="ops-stats">
+    <div><div class="lbl">Market</div>
+      <b class="num">{{ d.market_best if d and d.market_best else '—' }}</b></div>
+    <div><div class="lbl">Market delta</div>
+      <b class="num">{{ d.market_delta if d and d.market_delta else '—' }}</b></div>
+    <div><div class="lbl">Change total</div>
+      {% if d and d.change_total %}
+        <b class="num {{ 'neg' if d.change_total.startswith('-') else 'pos' }}">{{ d.change_total }}</b>
+      {% else %}<b>—</b>{% endif %}</div>
+    <div><div class="lbl">Saving</div>
+      <b class="num">{{ d.saving if d and d.saving else '—' }}</b></div>
+    <div><div class="lbl">Floor</div>
+      <b class="num">{{ d.floor if d else policy.min_saving }}</b></div>
+  </div>
+
+  {% if d %}
+  <div class="card-flat" style="margin-top:14px">
+    <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap">
+      <span class="lbl" style="margin:0">Decision</span>
+      {% if d.outcome == 'reshop' %}<span class="tag tag-sage">reshop</span>
+      {% elif d.outcome == 'error' %}<span class="tag tag-danger">error</span>
+      {% else %}<span class="tag tag-mute">skip</span>{% endif %}
+      <b>{{ d.reason }}</b>
+      <span class="muted mono" style="margin-left:auto">{{ d.source }} · {{ d.ts[:19] }}</span>
+    </div>
+    <div style="margin-top:7px; font-size:13.5px; line-height:1.55">{{ d.detail }}</div>
+
+    {% if d.recovered %}
+    <div class="fee">
+      <div><span>Recovered</span><b>{{ d.recovered }} {{ o.currency }}</b></div>
+      <div><span>Our fee (25%)</span><b>−{{ d.service_fee }} {{ o.currency }}</b></div>
+      <div class="fee-net"><span>Net to customer</span><b>{{ d.net_to_customer }} {{ o.currency }}</b></div>
+    </div>
+    {% endif %}
+  </div>
+
+  {# Execution is its own event. A blocked exchange is not a skip. #}
+  {% if d.execution and d.execution != 'not_applicable' %}
+  <div class="card-flat exec {{ 'exec-blocked' if d.execution in ('blocked_simulated','failed') }}"
+       style="margin-top:8px">
+    <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap">
+      <span class="lbl" style="margin:0">Execution</span>
+      <span class="tag {{ 'tag-mute' if d.execution in ('blocked_simulated','failed') else 'tag-terra' }}">
+        {{ d.execution.replace('_',' ') }}</span>
+    </div>
+    <div style="margin-top:6px; font-size:13.5px; line-height:1.55">{{ d.execution_detail }}</div>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if o.executed %}
+  <div class="notice" style="margin-top:12px; background:var(--sage-wash); border-color:#DDE4D6; color:#4A5A40">
+    <span>✓</span><div class="mono">{{ o.executed }}</div>
+  </div>
+  {% endif %}
+
+  <div class="ops-act">
+    <form method="post" action="{{ url_for('simulate', order_id=o.order_id) }}" class="sim">
+      <div>
+        <label for="mp{{ loop.index }}">sim market</label>
+        <input id="mp{{ loop.index }}" name="market_price" class="mono"
+               value="{{ o.sim_market or o.paid }}">
+      </div>
+      <div>
+        <label for="ct{{ loop.index }}">sim change total</label>
+        <input id="ct{{ loop.index }}" name="change_total" class="mono"
+               value="{{ o.sim_change_total or '125.00' }}">
+      </div>
+      <button type="submit" class="btn-sm">Simulate &amp; run</button>
+    </form>
+
+    <form method="post" action="{{ url_for('cycle', order_id=o.order_id) }}">
+      <input type="hidden" name="source" value="duffel">
+      <button type="submit" class="btn-ghost btn-sm">Run live cycle</button>
+    </form>
+
+    {% if d and d.outcome == 'reshop' and d.source == 'duffel' %}
+    <a href="{{ url_for('confirm_action', order_id=o.order_id, action='exchange') }}"
+       class="btn btn-sm">Review exchange →</a>
+    {% endif %}
+
+    <a href="{{ url_for('trip_detail', order_id=o.order_id) }}" class="btn btn-ghost btn-sm">Trip view</a>
+    <a href="{{ url_for('confirm_action', order_id=o.order_id, action='cancel') }}"
+       class="btn btn-ghost btn-sm" style="margin-left:auto; color:var(--danger)">Cancel order →</a>
+  </div>
+</div>
+{% endfor %}
+
+<style>
+  .ops-head { display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+  .ops-stats {
+    display:grid; grid-template-columns:repeat(5,1fr); gap:1px; margin-top:16px;
+    background:var(--line-soft); border:1px solid var(--line-soft); border-radius:var(--r-sm);
+    overflow:hidden;
+  }
+  .ops-stats > div { background:var(--surface-2); padding:10px 12px; }
+  .ops-stats .lbl { margin-bottom:3px; }
+  .ops-act { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-top:16px; }
+  .sim {
+    display:flex; gap:8px; align-items:flex-end; padding:10px;
+    border:1px dashed var(--line); border-radius:var(--r-sm); background:var(--surface-2);
+  }
+  .sim input { width:104px; }
+  .fee { margin-top:10px; border-top:1px solid var(--line); padding-top:8px; max-width:320px; }
+  .fee div { display:flex; justify-content:space-between; gap:12px; font-size:12.5px; padding:2px 0; }
+  .fee span { color:var(--ink-faint); }
+  .fee-net { border-top:1px solid var(--line-soft); margin-top:4px; padding-top:5px !important; }
+  .fee-net b { color:var(--sage); }
+  .exec.exec-blocked { background:var(--surface-2); border-style:dashed; }
+  @media (max-width:820px){ .ops-stats { grid-template-columns:repeat(2,1fr); } }
+</style>
+
+{% endblock %}

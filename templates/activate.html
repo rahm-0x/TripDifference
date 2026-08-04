@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Activate your account — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="auth">
+  <div class="page-head" style="text-align:center">
+    <h1>Activate your account</h1>
+    <p>{{ invite.company }} invited you to book travel with Trip Difference.</p>
+  </div>
+
+  <div class="card">
+    <div class="invited">
+      <div class="avatar" style="width:38px; height:38px; font-size:14px">{{ invite.initials }}</div>
+      <div>
+        <b>{{ invite.name }}</b>
+        <span class="muted" style="display:block; font-size:13px">{{ invite.email }}</span>
+      </div>
+      <span class="tag tag-mute" style="margin-left:auto">Invited</span>
+    </div>
+
+    <form method="post" action="{{ url_for('activate') }}">
+      <div class="grid2">
+        <div class="field">
+          <label for="name">Name</label>
+          <input id="name" value="{{ invite.name }}" readonly>
+        </div>
+        <div class="field">
+          <label for="email">Work email</label>
+          <input id="email" value="{{ invite.email }}" readonly>
+        </div>
+      </div>
+      <p class="hint" style="margin:-4px 0 16px">
+        Locked to your invitation. Contact your travel admin to change these.
+      </p>
+
+      <div class="field">
+        <label for="password">Create a password</label>
+        <input id="password" name="password" type="password" minlength="10"
+               placeholder="At least 10 characters" required autofocus>
+      </div>
+
+      <div class="field">
+        <label for="confirm">Confirm password</label>
+        <input id="confirm" name="confirm" type="password" minlength="10"
+               placeholder="Re-enter it" required>
+      </div>
+
+      <button type="submit" class="btn-block" style="margin-top:6px">Activate account</button>
+    </form>
+  </div>
+
+  <p class="foot">Already set up? <a href="{{ url_for('login') }}">Sign in</a></p>
+</div>
+
+<style>
+  .auth { max-width:440px; margin:40px auto 0; }
+  .invited {
+    display:flex; align-items:center; gap:12px; padding:12px 14px; margin-bottom:20px;
+    background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r-sm);
+  }
+  .foot { text-align:center; margin-top:18px; font-size:13.5px; color:var(--ink-soft); }
+</style>
+
+{% endblock %}

@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Payment — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="steps">
+  <span class="step done"><i>✓</i> Flight</span><span class="step-sep"></span>
+  <span class="step done"><i>✓</i> Passenger</span><span class="step-sep"></span>
+  <span class="step on"><i>3</i> Payment</span><span class="step-sep"></span>
+  <span class="step"><i>4</i> Confirmation</span>
+</div>
+
+<div class="book-grid">
+  <div>
+    <div class="page-head">
+      <h1>Payment</h1>
+      <p>Charged to the company account. Any savings from a rebooking are refunded to the same card.</p>
+    </div>
+
+    <form method="post" action="{{ url_for('book') }}" id="payForm">
+      <input type="hidden" name="offer_id" value="{{ offer.id }}">
+      {% for k, v in passenger.items() %}
+      <input type="hidden" name="{{ k }}" value="{{ v }}">
+      {% endfor %}
+
+      <div class="card" style="padding:0; overflow:hidden;">
+        <label class="pay-opt on" for="pm_card">
+          <input type="radio" id="pm_card" name="payment_method" value="on_file" checked>
+          <span class="radio"></span>
+          <span class="pay-body">
+            <span class="pay-title">
+              <b>{{ card.brand }} ending {{ card.last4 }}</b>
+              <span class="tag tag-sage">Company card</span>
+            </span>
+            <span class="pay-sub">{{ card.holder }} · expires {{ card.expiry }}</span>
+          </span>
+        </label>
+
+        <label class="pay-opt" for="pm_new">
+          <input type="radio" id="pm_new" name="payment_method" value="new">
+          <span class="radio"></span>
+          <span class="pay-body">
+            <span class="pay-title"><b>Use a different card</b></span>
+            <span class="pay-sub">Entered securely with our payment provider.</span>
+          </span>
+        </label>
+
+        <div id="newCard" class="hosted" hidden>
+          <div class="hosted-bar">
+            <span class="lock">🔒</span>
+            <span>Secure fields hosted by <b>Duffel Payments</b></span>
+            <span class="hosted-tag">iframe</span>
+          </div>
+          <div class="hosted-body">
+            <div class="field">
+              <label>Card number</label>
+              <input inputmode="numeric" placeholder="4242 4242 4242 4242" class="hosted-input" disabled>
+            </div>
+            <div class="grid3">
+              <div class="field"><label>Expiry</label>
+                <input placeholder="MM / YY" class="hosted-input" disabled></div>
+              <div class="field"><label>CVC</label>
+                <input placeholder="123" class="hosted-input" disabled></div>
+              <div class="field"><label>Postcode</label>
+                <input placeholder="SW1A 1AA" class="hosted-input" disabled></div>
+            </div>
+            <div class="hint" style="margin:0">
+              These inputs are rendered by the payment processor. Card data never reaches
+              the Trip Difference server, so they are inert in this build.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="notice" style="margin-top:16px">
+        <span>ℹ</span>
+        <div>
+          Booking is immediate and ticketed on confirmation. Refunds and changes
+          follow the fare rules shown with your flight.
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; margin-top:20px; align-items:center;">
+        <a href="{{ url_for('index') }}" class="btn btn-ghost">Back</a>
+        <button type="submit" id="payBtn">Pay {{ offer.amount }} {{ offer.currency }} &amp; book</button>
+      </div>
+    </form>
+  </div>
+
+  {% include "_summary.html" %}
+</div>
+
+<style>
+  .book-grid { display:grid; grid-template-columns:1fr 330px; gap:26px; align-items:start; }
+  @media (max-width:900px){ .book-grid{ grid-template-columns:1fr; } }
+
+  .pay-opt {
+    display:flex; gap:13px; align-items:flex-start; padding:18px 20px; cursor:pointer;
+    border-bottom:1px solid var(--line-soft); margin:0; text-transform:none;
+    letter-spacing:0; font-size:14px; color:var(--ink); transition:background .12s;
+  }
+  .pay-opt:hover { background:var(--surface-2); }
+  .pay-opt input { position:absolute; opacity:0; pointer-events:none; }
+  .radio {
+    width:18px; height:18px; border-radius:50%; border:2px solid var(--line);
+    flex:none; margin-top:2px; position:relative; transition:border-color .12s;
+  }
+  .pay-opt input:checked ~ .radio { border-color:var(--terra); }
+  .pay-opt input:checked ~ .radio::after {
+    content:''; position:absolute; inset:3px; border-radius:50%; background:var(--terra);
+  }
+  .pay-body { display:block; }
+  .pay-title { display:flex; align-items:center; gap:9px; }
+  .pay-sub { display:block; font-size:13px; color:var(--ink-faint); margin-top:3px; }
+
+  /* Deliberately reads as a third-party embed, not a native form. */
+  .hosted { border-top:1px solid var(--line); background:#F4F1EC; }
+  .hosted-bar {
+    display:flex; align-items:center; gap:9px; padding:9px 16px;
+    background:#E9E4DA; border-bottom:1px dashed #C9C0B1;
+    font-size:12px; color:#5E5648;
+  }
+  .hosted-tag {
+    margin-left:auto; font:11px ui-monospace,Menlo,monospace; color:#8A8071;
+    border:1px solid #C9C0B1; border-radius:5px; padding:1px 6px;
+  }
+  .hosted-body { padding:18px 16px; border:1px dashed #C9C0B1; margin:12px; border-radius:10px;
+                 background:#FBFAF7; }
+  .hosted-input { border-radius:6px; border-color:#C9C0B1; background:#fff;
+                  font:13.5px ui-monospace,Menlo,monospace; }
+</style>
+
+<script>
+  const box = document.getElementById('newCard');
+  document.querySelectorAll('input[name=payment_method]').forEach(r =>
+    r.addEventListener('change', () => {
+      const isNew = document.getElementById('pm_new').checked;
+      box.hidden = !isNew;
+      document.querySelectorAll('.pay-opt').forEach(o =>
+        o.classList.toggle('on', o.contains(document.querySelector('input[name=payment_method]:checked'))));
+    }));
+
+  document.getElementById('payForm').addEventListener('submit', e => {
+    const b = document.getElementById('payBtn');
+    b.disabled = true; b.textContent = 'Booking…';
+  });
+</script>
+
+{% endblock %}

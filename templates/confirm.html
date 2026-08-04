@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Booked — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="steps">
+  <span class="step done"><i>✓</i> Flight</span><span class="step-sep"></span>
+  <span class="step done"><i>✓</i> Passenger</span><span class="step-sep"></span>
+  <span class="step done"><i>✓</i> Payment</span><span class="step-sep"></span>
+  <span class="step on"><i>4</i> Confirmation</span>
+</div>
+
+<div class="page-head" style="text-align:center; margin-bottom:24px">
+  <div class="tick">✓</div>
+  <h1 style="margin-top:12px">You're booked</h1>
+  <p>Confirmation sent to {{ trip.email or user.email }}</p>
+</div>
+
+<div class="card" style="text-align:center; padding:24px; margin-bottom:16px">
+  <div class="lbl" style="margin-bottom:6px">Booking reference</div>
+  <div class="pnr">{{ trip.booking_reference }}</div>
+  <div class="mono muted" style="margin-top:8px">{{ trip.order_id }}</div>
+</div>
+
+<div class="card">
+  <h3 style="margin-bottom:16px">Itinerary</h3>
+  {% for leg in trip.legs %}
+  <div style="display:flex; gap:20px; align-items:center; padding:14px 0;
+              {% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
+    <div style="min-width:120px">
+      <div class="lbl" style="margin:0">{{ 'Return' if loop.index > 1 else 'Outbound' }}</div>
+      <div style="font-weight:600">{{ leg.date }}</div>
+    </div>
+    <div style="flex:1">
+      <div class="fl-times">
+        <span class="t">{{ leg.depart }}</span>
+        <span class="fl-line"></span>
+        <span class="t">{{ leg.arrive }}</span>
+      </div>
+      <div class="fl-meta">
+        {{ leg.origin }} → {{ leg.destination }} · {{ leg.duration }} ·
+        {% if leg.stops == 0 %}Non-stop{% else %}{{ leg.stops }} stop{{ 's' if leg.stops > 1 }}{% endif %}
+      </div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-weight:600">{{ trip.carrier }}</div>
+      <div class="mono muted">{{ leg.flight_numbers }}</div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div style="display:flex; justify-content:space-between; align-items:baseline;
+              padding-top:16px; margin-top:4px; border-top:1px solid var(--line);">
+    <div>
+      <div style="font-weight:600">{{ trip.passenger_name }}</div>
+      <div class="fl-meta">1 traveller</div>
+    </div>
+    <div style="text-align:right">
+      <div class="lbl" style="margin:0">Paid</div>
+      <div class="price">{{ trip.paid }}<span class="cur">{{ trip.currency }}</span></div>
+    </div>
+  </div>
+</div>
+
+{% if trip.monitoring %}
+<div class="watch">
+  <div class="watch-head">
+    <div class="watch-icon">👁</div>
+    <div>
+      <h2>We're watching this fare for you</h2>
+      <p>No action needed. If the price falls, we handle the rebooking.</p>
+    </div>
+  </div>
+
+  <div class="watch-grid">
+    <div class="watch-item">
+      <div class="watch-n">Until {{ policy.departure_buffer_hours }}h before departure</div>
+      <div class="watch-t">
+        We re-price your exact flight regularly and stop {{ policy.departure_buffer_hours }} hours
+        before take-off, so you're never rebooked at the last minute.
+      </div>
+    </div>
+    <div class="watch-item">
+      <div class="watch-n">Only above {{ policy.min_saving }} {{ trip.currency }}</div>
+      <div class="watch-t">
+        We rebook only when the airline's exchange price is a genuine refund
+        clearing {{ policy.min_saving }} {{ trip.currency }} after any change penalty.
+        Smaller drops are left alone.
+      </div>
+    </div>
+    <div class="watch-item">
+      <div class="watch-n">Refunded to the company card</div>
+      <div class="watch-t">
+        Savings go back to {{ card.brand }} ending {{ card.last4 }}. Your flight
+        number, seat and times stay exactly the same.
+      </div>
+    </div>
+  </div>
+
+  <div class="watch-foot">
+    You can turn monitoring off at any time from
+    <a href="{{ url_for('trip_detail', order_id=trip.order_id) }}">your trip</a>.
+  </div>
+</div>
+{% else %}
+<div class="card" style="margin-top:16px">
+  <div class="tag tag-mute" style="margin-bottom:8px">Not monitored</div>
+  <p style="margin:0" class="soft">
+    This fare doesn't permit changes after ticketing, so it can't be rebooked if
+    the price drops. Choosing a changeable fare next time enables monitoring.
+  </p>
+</div>
+{% endif %}
+
+<div style="display:flex; gap:12px; margin-top:22px; justify-content:center;">
+  <a href="{{ url_for('trip_detail', order_id=trip.order_id) }}" class="btn">View trip</a>
+  <a href="{{ url_for('index') }}" class="btn btn-ghost">Book another</a>
+</div>
+
+<style>
+  .tick {
+    width:52px; height:52px; border-radius:50%; margin:0 auto;
+    background:var(--sage); color:#fff; font-size:25px; display:grid; place-items:center;
+  }
+  .pnr {
+    font-family:'Caprasimo',Georgia,serif; font-size:38px; letter-spacing:.12em;
+    color:var(--terra-dark);
+  }
+  .watch {
+    margin-top:16px; border-radius:var(--r-lg); overflow:hidden;
+    background:linear-gradient(180deg,#FBF1E6 0%,#F7E8D8 100%);
+    border:1px solid #EBD5BC; box-shadow:var(--shadow-lg);
+  }
+  .watch-head { display:flex; gap:16px; align-items:center; padding:24px 26px 18px; }
+  .watch-icon {
+    width:46px; height:46px; border-radius:50%; flex:none; display:grid; place-items:center;
+    background:var(--terra); color:#fff; font-size:20px;
+  }
+  .watch-head h2 { color:var(--terra-dark); }
+  .watch-head p { margin:4px 0 0; color:#8A6A4E; font-size:14px; }
+  .watch-grid {
+    display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
+    background:#EBD5BC; border-top:1px solid #EBD5BC; border-bottom:1px solid #EBD5BC;
+  }
+  .watch-item { background:#FDF7EF; padding:18px 20px; }
+  .watch-n { font-weight:700; font-size:14px; color:var(--ink); margin-bottom:5px; }
+  .watch-t { font-size:13px; line-height:1.55; color:var(--ink-soft); }
+  .watch-foot { padding:14px 26px; font-size:13px; color:#8A6A4E; }
+  @media (max-width:820px){ .watch-grid { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Trip Difference{% endblock %}</title>
+<link rel="icon" href="{{ url_for('static', filename='logo.png') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --sand:      #F5EAD8;
+    --sand-deep: #EADCC4;
+    --surface:   #FFFCF6;
+    --surface-2: #FBF4E8;
+    --ink:       #2E241B;
+    --ink-soft:  #6B5B4A;
+    --ink-faint: #9A8975;
+    --line:      #E5D7BE;
+    --line-soft: #F0E5D2;
+    --terra:     #C67139;
+    --terra-dark:#A85A2A;
+    --terra-wash:#F9E9DC;
+    --sage:      #7C8B6F;
+    --sage-wash: #EDF0E8;
+    --danger:    #A63D2F;
+    --danger-wash:#F9E6E3;
+    --r-sm: 12px;
+    --r:    16px;
+    --r-lg: 22px;
+    --shadow:    0 1px 2px rgba(46,36,27,.04), 0 6px 18px rgba(46,36,27,.06);
+    --shadow-lg: 0 2px 4px rgba(46,36,27,.05), 0 16px 40px rgba(46,36,27,.10);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--sand);
+    color: var(--ink);
+    font: 15px/1.6 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    letter-spacing: -0.005em;
+  }
+
+  h1, h2, h3, .display {
+    font-family: 'Caprasimo', Georgia, 'Times New Roman', serif;
+    font-weight: 400;
+    letter-spacing: 0;
+    line-height: 1.15;
+    margin: 0;
+  }
+  h1 { font-size: 30px; }
+  h2 { font-size: 21px; }
+  h3 { font-size: 16px; }
+
+  a { color: var(--terra); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ---------- header ---------- */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .topbar-in {
+    max-width: 1120px; margin: 0 auto; padding: 11px 24px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand img { width: 34px; height: 34px; border-radius: 50%; }
+  .brand span {
+    font-family: 'Caprasimo', Georgia, serif; font-size: 18px; color: var(--ink);
+  }
+  .topnav { margin-left: 22px; display: flex; gap: 4px; }
+  .topnav a {
+    color: var(--ink-soft); font-weight: 500; font-size: 14px;
+    padding: 7px 13px; border-radius: 99px; text-decoration: none;
+  }
+  .topnav a:hover { background: var(--surface-2); color: var(--ink); text-decoration: none; }
+  .topnav a.on { background: var(--terra-wash); color: var(--terra-dark); font-weight: 600; }
+  .whoami { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 50%; background: var(--terra);
+    color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center;
+  }
+  .whoami .who { font-size: 13px; line-height: 1.25; }
+  .whoami .who b { display: block; font-weight: 600; }
+  .whoami .who span { color: var(--ink-faint); font-size: 12px; }
+
+  /* ---------- layout ---------- */
+  main { max-width: 1120px; margin: 0 auto; padding: 30px 24px 80px; }
+  main.narrow { max-width: 640px; }
+  main.mid { max-width: 820px; }
+  .page-head { margin-bottom: 20px; }
+  .page-head p { color: var(--ink-soft); margin: 6px 0 0; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r); box-shadow: var(--shadow); padding: 20px;
+  }
+  .card + .card { margin-top: 16px; }
+  .card-flat { background: var(--surface-2); border: 1px solid var(--line-soft);
+               border-radius: var(--r); padding: 16px; box-shadow: none; }
+
+  /* ---------- forms ---------- */
+  label, .lbl {
+    display: block; font-size: 11px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
+  }
+  input, select, textarea {
+    width: 100%; padding: 11px 13px; font: inherit; font-size: 14px;
+    color: var(--ink); background: #fff;
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    transition: border-color .12s, box-shadow .12s;
+  }
+  input::placeholder { color: #C4B49C; }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--terra);
+    box-shadow: 0 0 0 3px rgba(198,113,57,.15);
+  }
+  input:disabled, input[readonly] {
+    background: var(--surface-2); color: var(--ink-soft); cursor: not-allowed;
+  }
+  .field { margin-bottom: 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .hint { font-size: 12.5px; color: var(--ink-faint); margin-top: 5px; }
+
+  button, .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 11px 22px; font: inherit; font-size: 14px; font-weight: 600;
+    border: 1px solid transparent; border-radius: 99px; cursor: pointer;
+    background: var(--terra); color: #fff; text-decoration: none;
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  button:hover, .btn:hover { background: var(--terra-dark); text-decoration: none; }
+  .btn-ghost, button.ghost {
+    background: transparent; color: var(--ink); border-color: var(--line);
+  }
+  .btn-ghost:hover, button.ghost:hover { background: var(--surface-2); color: var(--ink); }
+  .btn-sage { background: var(--sage); }
+  .btn-sage:hover { background: #6B7A5F; }
+  .btn-danger { background: var(--danger); }
+  .btn-danger:hover { background: #8C3226; }
+  .btn-sm { padding: 7px 15px; font-size: 13px; }
+  .btn-block { width: 100%; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ---------- pills ---------- */
+  .tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 11px; border-radius: 99px; font-size: 11.5px; font-weight: 600;
+    letter-spacing: .02em; white-space: nowrap;
+  }
+  .tag-sage   { background: var(--sage-wash); color: #55684A; }
+  .tag-terra  { background: var(--terra-wash); color: var(--terra-dark); }
+  .tag-mute   { background: var(--surface-2); color: var(--ink-faint); border: 1px solid var(--line-soft); }
+  .tag-danger { background: var(--danger-wash); color: var(--danger); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  /* ---------- tables / rows ---------- */
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--ink-faint);
+    padding: 0 12px 9px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+
+  .mono { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .muted { color: var(--ink-faint); }
+  .soft { color: var(--ink-soft); }
+  .num { font-variant-numeric: tabular-nums; }
+  .price { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .cur { font-size: 12px; font-weight: 600; color: var(--ink-faint); margin-left: 2px; }
+  .neg { color: #4A7A4E; font-weight: 700; }
+  .pos { color: var(--danger); font-weight: 700; }
+
+  /* ---------- notices ---------- */
+  .notice {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 11px 14px; border-radius: var(--r-sm); font-size: 13.5px;
+    background: var(--surface-2); border: 1px solid var(--line-soft); color: var(--ink-soft);
+  }
+  .notice-terra { background: var(--terra-wash); border-color: #EFD6C0; color: #8A4A1F; }
+  .notice-err   { background: var(--danger-wash); border-color: #EFCEC8; color: var(--danger); }
+  .notice b { color: inherit; }
+
+  /* ---------- steps ---------- */
+  .steps { display: flex; align-items: center; gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-faint); }
+  .step i {
+    width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--sand-deep); color: var(--ink-soft); font-size: 11px; font-weight: 700;
+    font-style: normal;
+  }
+  .step.on { color: var(--ink); font-weight: 600; }
+  .step.on i { background: var(--terra); color: #fff; }
+  .step.done i { background: var(--sage); color: #fff; }
+  .step-sep { width: 22px; height: 1px; background: var(--line); }
+
+  /* ---------- flight row ---------- */
+  .fl { display: grid; grid-template-columns: 150px 1fr 120px 150px; gap: 18px;
+        align-items: center; padding: 16px; border-bottom: 1px solid var(--line-soft); }
+  .fl:last-child { border-bottom: 0; }
+  .fl-carrier b { display: block; font-size: 14px; }
+  .fl-times { display: flex; align-items: center; gap: 12px; }
+  .fl-times .t { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .fl-line { flex: 1; min-width: 40px; height: 1px; background: var(--line); position: relative; }
+  .fl-line::after {
+    content: ''; position: absolute; right: -1px; top: -2.5px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--line);
+  }
+  .fl-meta { font-size: 12.5px; color: var(--ink-faint); margin-top: 3px; }
+
+  @media (max-width: 880px) {
+    .fl { grid-template-columns: 1fr 1fr; gap: 12px; }
+    .fl-act { grid-column: 1 / -1; }
+    .grid3 { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 640px) {
+    .grid2, .grid3 { grid-template-columns: 1fr; }
+    .topnav { margin-left: 8px; }
+    .whoami .who { display: none; }
+  }
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="{{ url_for('index') }}">
+      <img src="{{ url_for('static', filename='logo.png') }}" alt="">
+      <span>Trip Difference</span>
+    </a>
+    {% if not hide_nav %}
+    <nav class="topnav">
+      <a href="{{ url_for('index') }}" class="{{ 'on' if nav == 'search' }}">Search</a>
+      <a href="{{ url_for('trips') }}" class="{{ 'on' if nav == 'trips' }}">My trips</a>
+      <a href="{{ url_for('orders') }}" class="{{ 'on' if nav == 'ops' }}">Ops</a>
+      <a href="{{ url_for('decisions') }}" class="{{ 'on' if nav == 'log' }}">Decision log</a>
+    </nav>
+    <div class="whoami">
+      <div class="who">
+        <b>{{ user.name }}</b>
+        <span>{{ user.company }}</span>
+      </div>
+      <div class="avatar">{{ user.initials }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<main class="{{ width|default('') }}">
+  {% if error %}<div class="notice notice-err" style="margin-bottom:18px">{{ error }}</div>{% endif %}
+  {% block body %}{% endblock %}
+</main>
+
+</body>
+</html>

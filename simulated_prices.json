@@ -1,0 +1,108 @@
+{
+  "_readme": [
+    "Edit any order below to force a scenario, then run a reshop cycle.",
+    "change_total is the ONLY field that decides anything \u2014 negative = refund.",
+    "market_price is deliberately independent so you can reproduce the trap:",
+    "  a cheaper market price with a positive change_total must NOT reshop.",
+    "Amounts are strings and parsed as Decimal."
+  ],
+  "orders": {
+    "ord_0000B91jvkxerPcuhJozNw": {
+      "carrier": "IB",
+      "flight_numbers": [
+        "3167"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "216.51",
+      "change_total": "-60.00",
+      "new_total": "321.51",
+      "penalty": "25.00"
+    },
+    "ord_0000B91k0FY74pyCit11ns": {
+      "carrier": "IB",
+      "flight_numbers": [
+        "3167"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "224.26",
+      "change_total": "125.00",
+      "new_total": "324.26",
+      "penalty": "25.00"
+    },
+    "ord_0000B91kAw9vVdZ9lrnZer": {
+      "carrier": "ZZ",
+      "flight_numbers": [
+        "2623"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "170.00",
+      "change_total": "-45.00",
+      "new_total": "317.18",
+      "penalty": "25.00"
+    },
+    "ord_0000B91kPmcRGH1MWiDKpI": {
+      "carrier": "ZZ",
+      "flight_numbers": [
+        "2623"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "226.63",
+      "change_total": "125.00",
+      "new_total": "326.63",
+      "penalty": "25.00"
+    },
+    "ord_0000B91mJY3fMJpRvfgc4G": {
+      "carrier": "BA",
+      "flight_numbers": [
+        "0117"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "215.94",
+      "change_total": "125.00",
+      "new_total": "315.94",
+      "penalty": "25.00"
+    },
+    "ord_0000B91mX9VTRBy5q2BDxo": {
+      "carrier": "BA",
+      "flight_numbers": [
+        "0117"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "403.35",
+      "change_total": "-150.00",
+      "new_total": "503.35",
+      "penalty": "25.00"
+    },
+    "ord_0000B91mvNisEZ9IsY08NC": {
+      "carrier": "LX",
+      "flight_numbers": [
+        "339",
+        "16"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "573.33",
+      "change_total": "-220.00",
+      "new_total": "673.33",
+      "penalty": "25.00"
+    },
+    "ord_0000B91oTQvKreGM2ScaO6": {
+      "carrier": "BA",
+      "flight_numbers": [
+        "0117"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "218.68",
+      "change_total": "125.00",
+      "new_total": "318.68",
+      "penalty": "25.00"
+    }
+  }
+}

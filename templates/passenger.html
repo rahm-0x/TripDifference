@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Passenger details — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="steps">
+  <span class="step done"><i>✓</i> Flight</span><span class="step-sep"></span>
+  <span class="step on"><i>2</i> Passenger</span><span class="step-sep"></span>
+  <span class="step"><i>3</i> Payment</span><span class="step-sep"></span>
+  <span class="step"><i>4</i> Confirmation</span>
+</div>
+
+<div class="book-grid">
+  <div>
+    <div class="page-head">
+      <h1>Who's travelling?</h1>
+      <p>Prefilled from your traveller profile. Names must match the passport or government ID used at the airport.</p>
+    </div>
+
+    <form method="post" action="{{ url_for('payment_step') }}">
+      <input type="hidden" name="offer_id" value="{{ offer.id }}">
+
+      <div class="card">
+        <h3 style="margin-bottom:16px">Traveller</h3>
+
+        <div class="grid3">
+          <div class="field">
+            <label for="title">Title</label>
+            <select id="title" name="title">
+              {% for t in ['mr','ms','mrs','miss','dr'] %}
+              <option value="{{ t }}" {{ 'selected' if profile.title == t }}>{{ t|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="given_name">First name</label>
+            <input id="given_name" name="given_name" value="{{ profile.given_name }}" required>
+          </div>
+          <div class="field">
+            <label for="family_name">Last name</label>
+            <input id="family_name" name="family_name" value="{{ profile.family_name }}" required>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="field">
+            <label for="born_on">Date of birth</label>
+            <input id="born_on" name="born_on" type="date" value="{{ profile.born_on }}" required>
+          </div>
+          <div class="field">
+            <label for="gender">Gender on ID</label>
+            <select id="gender" name="gender">
+              <option value="m" {{ 'selected' if profile.gender == 'm' }}>Male</option>
+              <option value="f" {{ 'selected' if profile.gender == 'f' }}>Female</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:16px">Contact</h3>
+        <div class="grid2">
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" value="{{ profile.email }}" required>
+            <div class="hint">Confirmation and any rebooking notices go here.</div>
+          </div>
+          <div class="field">
+            <label for="phone_number">Phone</label>
+            <input id="phone_number" name="phone_number" value="{{ profile.phone_number }}" required>
+            <div class="hint">Include the country code.</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; margin-top:20px; align-items:center;">
+        <a href="{{ url_for('index') }}" class="btn btn-ghost">Back to results</a>
+        <button type="submit">Continue to payment</button>
+      </div>
+    </form>
+  </div>
+
+  {% include "_summary.html" %}
+</div>
+
+<style>
+  .book-grid { display:grid; grid-template-columns: 1fr 330px; gap:26px; align-items:start; }
+  @media (max-width: 900px) { .book-grid { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}

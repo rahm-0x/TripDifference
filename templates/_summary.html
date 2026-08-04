@@ -1,0 +1,54 @@
+{# Shared trip summary rail, used on the passenger and payment steps. #}
+<aside>
+  <div class="card" style="position:sticky; top:84px;">
+    <h3 style="margin-bottom:14px">Your flight</h3>
+
+    {% for leg in offer.slices %}
+    <div style="padding-bottom:12px; {% if not loop.last %}margin-bottom:12px; border-bottom:1px solid var(--line-soft);{% endif %}">
+      <div class="lbl" style="margin-bottom:8px">
+        {{ 'Return' if loop.index > 1 else 'Outbound' }} · {{ leg.date }}
+      </div>
+      <div class="fl-times" style="margin-bottom:6px">
+        <span class="t">{{ leg.depart }}</span>
+        <span class="fl-line"></span>
+        <span class="t">{{ leg.arrive }}</span>
+      </div>
+      <div class="fl-meta">
+        {{ leg.origin }} → {{ leg.destination }} · {{ leg.duration }} ·
+        {% if leg.stops == 0 %}Non-stop{% else %}{{ leg.stops }} stop{{ 's' if leg.stops > 1 }}{% endif %}
+      </div>
+      <div class="fl-meta mono">{{ offer.carrier }} · {{ leg.flight_numbers }}</div>
+    </div>
+    {% endfor %}
+
+    {% if offer.fare_brand %}
+    <div class="fl-meta" style="margin-bottom:12px">Fare: {{ offer.fare_brand }}</div>
+    {% endif %}
+
+    <div style="display:flex; justify-content:space-between; align-items:baseline;
+                padding-top:14px; border-top:1px solid var(--line);">
+      <span class="lbl" style="margin:0">Total</span>
+      <span class="price">{{ offer.amount }}<span class="cur">{{ offer.currency }}</span></span>
+    </div>
+
+    <div style="margin-top:14px">
+      {% if offer.monitorable %}
+      <div class="card-flat" style="background:var(--sage-wash); border-color:#DDE4D6; padding:12px">
+        <div class="tag tag-sage" style="margin-bottom:6px"><span class="dot"></span>Monitored</div>
+        <div style="font-size:12.5px; color:#4A5A40; line-height:1.5">
+          We'll watch this fare after booking and rebook you if it drops by more
+          than {{ policy.min_saving }} {{ offer.currency }}.
+        </div>
+      </div>
+      {% else %}
+      <div class="card-flat" style="padding:12px">
+        <div class="tag tag-mute" style="margin-bottom:6px">Not monitored</div>
+        <div style="font-size:12.5px; color:var(--ink-soft); line-height:1.5">
+          This fare doesn't permit changes after ticketing, so it can't be
+          rebooked if the price drops.
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</aside>

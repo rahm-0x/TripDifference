@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}{{ trip.origin }} → {{ trip.destination }} — Trip Difference{% endblock %}
+{% block body %}
+
+<div style="margin-bottom:14px">
+  <a href="{{ url_for('trips') }}" class="muted" style="font-size:13.5px">← All trips</a>
+</div>
+
+<div class="page-head" style="display:flex; align-items:flex-start; gap:18px; flex-wrap:wrap">
+  <div>
+    <h1>{{ trip.origin }} → {{ trip.destination }}</h1>
+    <p>{{ trip.date_label }} · {{ trip.carrier }} · reference <b>{{ trip.booking_reference }}</b></p>
+  </div>
+  <div style="margin-left:auto; text-align:right">
+    <div class="lbl" style="margin:0">Paid</div>
+    <div class="price" style="font-size:24px">{{ trip.paid }}<span class="cur">{{ trip.currency }}</span></div>
+  </div>
+</div>
+
+{% if trip.refunded %}
+<div class="notice" style="background:var(--sage-wash); border-color:#DDE4D6; color:#4A5A40; margin-bottom:16px">
+  <span>↓</span>
+  <div><b>Rebooked at a lower fare — {{ trip.refunded }} {{ trip.currency }} refunded.</b>
+  Same flight and times; the refund went back to {{ card.brand }} ending {{ card.last4 }}.</div>
+</div>
+{% endif %}
+
+<div class="trip-grid">
+  <div>
+    <div class="card">
+      <h3 style="margin-bottom:6px">Itinerary</h3>
+      {% for leg in trip.legs %}
+      <div style="display:flex; gap:20px; align-items:center; padding:14px 0;
+                  {% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
+        <div style="min-width:110px">
+          <div class="lbl" style="margin:0">{{ 'Return' if loop.index > 1 else 'Outbound' }}</div>
+          <div style="font-weight:600">{{ leg.date }}</div>
+        </div>
+        <div style="flex:1">
+          <div class="fl-times">
+            <span class="t">{{ leg.depart }}</span>
+            <span class="fl-line"></span>
+            <span class="t">{{ leg.arrive }}</span>
+          </div>
+          <div class="fl-meta">
+            {{ leg.origin }} → {{ leg.destination }} · {{ leg.duration }} ·
+            {% if leg.stops == 0 %}Non-stop{% else %}{{ leg.stops }} stop{{ 's' if leg.stops > 1 }}{% endif %}
+          </div>
+        </div>
+        <div class="mono muted">{{ leg.flight_numbers }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:4px">
+        <h3>Price history</h3>
+        <span class="muted" style="font-size:12.5px">booked price vs. current market</span>
+      </div>
+
+      {% if chart %}
+      <svg viewBox="0 0 {{ chart.w }} {{ chart.h }}" class="chart" role="img"
+           aria-label="Price history: booked {{ trip.paid }}, latest {{ chart.last }}">
+        <line x1="{{ chart.pad }}" y1="{{ chart.paid_y }}" x2="{{ chart.w - chart.pad }}" y2="{{ chart.paid_y }}"
+              stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="{{ chart.pad }}" y="{{ chart.paid_y - 7 }}" class="chart-lbl">
+          booked {{ trip.paid }}</text>
+
+        <polyline points="{{ chart.points }}" fill="none" stroke="var(--terra)"
+                  stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        {% for p in chart.dots %}
+        <circle cx="{{ p.x }}" cy="{{ p.y }}" r="3" fill="var(--terra)"/>
+        {% endfor %}
+
+        <text x="{{ chart.pad }}" y="{{ chart.h - 6 }}" class="chart-lbl">{{ chart.first_ts }}</text>
+        <text x="{{ chart.w - chart.pad }}" y="{{ chart.h - 6 }}" class="chart-lbl" text-anchor="end">{{ chart.last_ts }}</text>
+      </svg>
+
+      <div style="display:flex; gap:22px; margin-top:12px; flex-wrap:wrap">
+        <div><div class="lbl" style="margin:0">Latest market</div>
+          <b class="num">{{ chart.last }} {{ trip.currency }}</b></div>
+        <div><div class="lbl" style="margin:0">Lowest seen</div>
+          <b class="num">{{ chart.low }} {{ trip.currency }}</b></div>
+        <div><div class="lbl" style="margin:0">Checks</div>
+          <b class="num">{{ chart.n }}</b></div>
+      </div>
+      <p class="hint" style="margin-top:10px">
+        Market price is what the same flight sells for now. It is not the exchange
+        price — we only rebook when the airline's own change quote is a refund.
+      </p>
+      {% else %}
+      <p class="muted" style="margin:10px 0 0">
+        No price checks recorded yet. The first check runs on the next monitoring cycle.
+      </p>
+      {% endif %}
+    </div>
+  </div>
+
+  <aside>
+    <div class="card" style="position:sticky; top:84px">
+      <h3 style="margin-bottom:14px">Fare monitoring</h3>
+
+      {% set el = trip.eligibility %}
+      {% if not trip.eligible %}
+        <div class="tag {{ 'tag-danger' if el.state == 'not_eligible' else 'tag-mute' }}"
+             style="margin-bottom:10px">{{ el.label }}</div>
+        <p class="soft" style="font-size:13.5px; margin:0 0 10px">{{ el.customer_copy }}</p>
+
+        <dl class="meta">
+          {% if el.penalty %}
+          <div><dt>Change fee</dt><dd>{{ el.penalty }} {{ el.penalty_currency }}</dd></div>
+          {% endif %}
+          {% if el.penalty_ratio %}
+          <div><dt>Share of fare</dt><dd>{{ el.penalty_ratio }}</dd></div>
+          {% endif %}
+          <div><dt>Ticket price</dt><dd>{{ trip.paid }} {{ trip.currency }}</dd></div>
+        </dl>
+
+        <div class="card-flat" style="margin-top:12px">
+          <div class="lbl" style="margin-bottom:5px">Why</div>
+          <div style="font-size:12.5px; line-height:1.5">{{ el.detail }}</div>
+        </div>
+        <p class="hint" style="margin-top:10px">
+          Not polled, so no search calls are spent on it.
+        </p>
+      {% else %}
+        <div class="watch-row">
+          <div>
+            <div style="font-weight:600">{{ 'On' if trip.monitoring else 'Off' }}</div>
+            <div class="fl-meta">
+              {% if trip.monitoring %}Checking until {{ policy.departure_buffer_hours }}h before departure
+              {% else %}Not currently checking{% endif %}
+            </div>
+          </div>
+          <form method="post" action="{{ url_for('toggle_monitor', order_id=trip.order_id) }}">
+            <input type="hidden" name="next" value="trip">
+            <button type="submit" class="switch {{ 'on' if trip.monitoring }}"
+                    aria-label="Toggle monitoring"><span></span></button>
+          </form>
+        </div>
+
+        <dl class="meta">
+          <div><dt>Last checked</dt><dd>{{ trip.last_checked or 'Never' }}</dd></div>
+          <div><dt>Savings floor</dt><dd>{{ policy.min_saving }} {{ trip.currency }}</dd></div>
+          <div><dt>Stops</dt><dd>{{ policy.departure_buffer_hours }}h before departure</dd></div>
+          <div><dt>Refunds to</dt><dd>{{ card.brand }} ···· {{ card.last4 }}</dd></div>
+        </dl>
+
+        {% if trip.last_decision %}
+        {% set d = trip.last_decision %}
+        <div class="card-flat" style="margin-top:14px">
+          <div class="lbl" style="margin-bottom:5px">Last check</div>
+          <div style="font-size:13px; line-height:1.5">{{ d.detail }}</div>
+
+          {% if d.recovered %}
+          <div class="split">
+            <div><span>Recovered</span><b>{{ d.recovered }} {{ trip.currency }}</b></div>
+            <div><span>Our fee (25%)</span><b>−{{ d.service_fee }} {{ trip.currency }}</b></div>
+            <div class="split-net"><span>Net to you</span><b>{{ d.net_to_customer }} {{ trip.currency }}</b></div>
+          </div>
+          {% endif %}
+
+          {% if d.execution and d.execution != 'not_applicable' %}
+          <div class="exec {{ 'exec-blocked' if d.execution in ('blocked_simulated','failed') }}">
+            <div class="lbl" style="margin-bottom:3px">Execution</div>
+            <div style="font-size:12.5px; line-height:1.5">{{ d.execution_detail }}</div>
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </aside>
+</div>
+
+<style>
+  .trip-grid { display:grid; grid-template-columns:1fr 320px; gap:24px; align-items:start; }
+  @media (max-width:900px){ .trip-grid { grid-template-columns:1fr; } }
+
+  .chart { width:100%; height:150px; display:block; overflow:visible; }
+  .chart-lbl { font-size:10px; fill:var(--ink-faint); font-family:'Inter',sans-serif; }
+
+  .watch-row {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding-bottom:14px; border-bottom:1px solid var(--line-soft);
+  }
+  .switch {
+    width:46px; height:27px; border-radius:99px; padding:0; background:var(--sand-deep);
+    border:1px solid var(--line); position:relative; transition:background .15s;
+  }
+  .switch:hover { background:var(--sand-deep); }
+  .switch span {
+    position:absolute; top:2px; left:2px; width:21px; height:21px; border-radius:50%;
+    background:#fff; box-shadow:0 1px 3px rgba(46,36,27,.25); transition:left .15s;
+  }
+  .switch.on { background:var(--sage); border-color:var(--sage); }
+  .switch.on:hover { background:#6B7A5F; }
+  .switch.on span { left:21px; }
+
+  .meta { margin:14px 0 0; }
+  .meta div { display:flex; justify-content:space-between; gap:12px; padding:6px 0;
+              font-size:13.5px; border-bottom:1px solid var(--line-soft); }
+  .meta div:last-child { border-bottom:0; }
+  .meta dt { color:var(--ink-faint); margin:0; }
+  .meta dd { margin:0; font-weight:600; text-align:right; }
+
+  .split { margin-top:10px; border-top:1px solid var(--line); padding-top:8px; }
+  .split div { display:flex; justify-content:space-between; gap:12px; font-size:12.5px; padding:2px 0; }
+  .split span { color:var(--ink-faint); }
+  .split-net { border-top:1px solid var(--line-soft); margin-top:4px; padding-top:5px !important; }
+  .split-net b { color:var(--sage); }
+
+  .exec {
+    margin-top:10px; padding:9px 11px; border-radius:10px;
+    background:var(--terra-wash); border:1px solid #EFD6C0; color:#8A4A1F;
+  }
+  .exec.exec-blocked { background:var(--surface-2); border-color:var(--line); color:var(--ink-soft); }
+  .exec .lbl { color:inherit; opacity:.7; }
+</style>
+
+{% endblock %}

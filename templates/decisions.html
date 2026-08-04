@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Decision log — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Decision log</h1>
+  <p>
+    Append-only JSONL from <span class="mono">decisions.log</span>, newest first.
+    Decisions, executions and eligibility verdicts are separate events — a
+    blocked exchange is never folded into the decision that preceded it.
+  </p>
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  <table>
+    <thead>
+      <tr>
+        <th>When</th><th>Kind</th><th>Order</th><th>Source</th>
+        <th>Market</th><th>Delta</th><th>Change total</th>
+        <th>Outcome</th><th>Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set kind = r.kind or 'decision' %}
+      <tr class="{{ 'row-exec' if kind == 'execution' }}{{ 'row-elig' if kind == 'eligibility' }}">
+        <td class="mono muted">{{ r.ts[:19].replace('T',' ') }}</td>
+        <td>
+          {% if kind == 'execution' %}<span class="tag tag-terra">execution</span>
+          {% elif kind == 'eligibility' %}<span class="tag tag-mute">eligibility</span>
+          {% else %}<span class="tag tag-mute">decision</span>{% endif %}
+        </td>
+        <td class="mono">{{ r.order_id[-8:] }}</td>
+        <td class="muted">{{ r.source or '—' }}</td>
+
+        {% if kind == 'decision' %}
+          <td class="num">{{ r.market_best or '—' }}</td>
+          <td class="num">{{ r.market_delta or '—' }}</td>
+          <td class="num {{ 'neg' if r.change_total and r.change_total.startswith('-') else 'pos' if r.change_total }}">
+            {{ r.change_total or '—' }}</td>
+          <td>
+            {% if r.outcome == 'reshop' %}<span class="tag tag-sage">reshop</span>
+            {% else %}<span class="tag tag-mute">skip</span>{% endif %}
+          </td>
+          <td style="font-size:13px">
+            <b>{{ r.reason }}</b>
+            {% if r.net_to_customer %}
+            <div class="muted mono" style="font-size:11.5px">
+              recovered {{ r.recovered }} · fee {{ r.service_fee }} · net {{ r.net_to_customer }}
+            </div>
+            {% endif %}
+          </td>
+
+        {% elif kind == 'execution' %}
+          <td colspan="3" class="muted" style="font-size:12.5px">
+            ↳ follows the <b>{{ r.decision_outcome }}</b> decision above
+            {% if r.net_to_customer %}
+              <span class="mono">· net {{ r.net_to_customer }} {{ r.currency }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="tag {{ 'tag-mute' if r.execution in ('blocked_simulated','failed') else 'tag-terra' }}">
+              {{ r.execution.replace('_',' ') }}</span>
+          </td>
+          <td style="font-size:13px">{{ r.detail }}</td>
+
+        {% else %}
+          <td colspan="3" class="muted" style="font-size:12.5px">
+            {% if r.penalty %}
+              penalty {{ r.penalty }} {{ r.penalty_currency }}
+              {% if r.penalty_ratio %}· {{ r.penalty_ratio }} of fare{% endif %}
+              · threshold {{ r.threshold }}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            <span class="tag {{ 'tag-sage' if r.state == 'monitoring' else 'tag-danger' if r.state == 'not_eligible' else 'tag-mute' }}">
+              {{ r.state.replace('_',' ') }}</span>
+          </td>
+          <td style="font-size:13px">
+            <b>{{ r.reason }}</b>
+            {% if r.needs_attention %}
+            <span class="tag tag-danger" style="margin-left:6px">needs review</span>
+            {% endif %}
+            <div class="muted" style="font-size:11.5px">{{ r.detail }}</div>
+          </td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr><td colspan="9" style="padding:40px; text-align:center" class="muted">
+        No decisions logged yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .row-exec td { background:#FCF6EF; }
+  .row-elig td { background:var(--surface-2); }
+</style>
+
+{% endblock %}

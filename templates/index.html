@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}Search flights — Trip Difference{% endblock %}
+{% block body %}
+
+<div style="max-width:620px; margin:0 auto 26px;">
+  <div class="page-head" style="text-align:center">
+    <h1>Book a trip</h1>
+    <p>Fares are monitored after booking. If the price drops, we rebook and refund the difference.</p>
+  </div>
+
+  <div class="card">
+    <form method="post" action="{{ url_for('search') }}" id="searchForm">
+      <div style="display:flex; gap:6px; margin-bottom:16px;">
+        <label class="trip-toggle">
+          <input type="radio" name="trip_type" value="one_way" {{ 'checked' if form.trip_type != 'round_trip' }}>
+          <span>One-way</span>
+        </label>
+        <label class="trip-toggle">
+          <input type="radio" name="trip_type" value="round_trip" {{ 'checked' if form.trip_type == 'round_trip' }}>
+          <span>Round-trip</span>
+        </label>
+      </div>
+
+      <div class="od">
+        <div class="field" style="margin:0">
+          <label for="origin">From</label>
+          <input id="origin" name="origin" maxlength="3" placeholder="LHR"
+                 value="{{ form.origin or 'LHR' }}" autocomplete="off" required>
+        </div>
+        <button type="button" class="swap" id="swapBtn" title="Swap" aria-label="Swap origin and destination">⇄</button>
+        <div class="field" style="margin:0">
+          <label for="destination">To</label>
+          <input id="destination" name="destination" maxlength="3" placeholder="JFK"
+                 value="{{ form.destination or 'JFK' }}" autocomplete="off" required>
+        </div>
+      </div>
+
+      <div class="grid2" style="margin-top:14px">
+        <div class="field" style="margin:0">
+          <label for="date">Depart</label>
+          <input id="date" name="date" type="date" value="{{ form.date or '2026-10-15' }}" required>
+        </div>
+        <div class="field" style="margin:0">
+          <label for="return_date">Return</label>
+          <input id="return_date" name="return_date" type="date" value="{{ form.return_date or '' }}">
+        </div>
+      </div>
+
+      <div class="field" style="margin:14px 0 0">
+        <label for="cabin">Cabin</label>
+        <select id="cabin" name="cabin">
+          {% for value, text in [('economy','Economy'), ('premium_economy','Premium economy'),
+                                 ('business','Business'), ('first','First')] %}
+          <option value="{{ value }}" {{ 'selected' if form.cabin == value }}>{{ text }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button type="submit" class="btn-block" style="margin-top:18px">Search flights</button>
+    </form>
+  </div>
+</div>
+
+{% if offers is not none %}
+<div class="page-head" style="display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap;">
+  <div>
+    <h2>{{ total }} flights</h2>
+    <p style="margin-top:4px">
+      {{ form.origin }} → {{ form.destination }} · {{ form.date }}
+      {% if form.return_date %} · returning {{ form.return_date }}{% endif %}
+      · {{ form.cabin.replace('_',' ') }}
+    </p>
+  </div>
+  <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+    <span class="lbl" style="margin:0">Sort</span>
+    <div class="sortbar">
+      <button type="button" class="sort on" data-sort="price">Price</button>
+      <button type="button" class="sort" data-sort="depart">Departure</button>
+      <button type="button" class="sort" data-sort="duration">Duration</button>
+    </div>
+  </div>
+</div>
+
+{% if unmonitorable %}
+<div class="notice notice-terra" style="margin-bottom:16px">
+  <span>⚠</span>
+  <div>
+    <b>{{ unmonitorable }} of these fares can't be monitored.</b>
+    Restricted fares — Basic Economy and similar — don't permit changes after
+    ticketing, so there is no way to rebook them if the price drops. They're
+    marked <span class="tag tag-mute" style="vertical-align:baseline">Not monitored</span> below.
+  </div>
+</div>
+{% endif %}
+
+<div class="card" style="padding:0" id="results">
+  {% for o in offers %}
+  <div class="fl" data-price="{{ o.amount }}" data-depart="{{ o.depart_sort }}" data-duration="{{ o.duration_min }}">
+    <div class="fl-carrier">
+      <b>{{ o.carrier }}</b>
+      <div class="mono muted">{{ o.flight_numbers }}</div>
+      {% if o.fare_brand %}<div class="fl-meta">{{ o.fare_brand }}</div>{% endif %}
+    </div>
+
+    <div>
+      <div class="fl-times">
+        <span class="t">{{ o.depart }}</span>
+        <span class="fl-line"></span>
+        <span class="t">{{ o.arrive }}</span>
+      </div>
+      <div class="fl-meta">
+        {{ o.origin }} → {{ o.destination }} · {{ o.duration }} ·
+        {% if o.stops == 0 %}Non-stop{% else %}{{ o.stops }} stop{{ 's' if o.stops > 1 }}{% endif %}
+        {% if o.next_day %} · <span style="color:var(--terra-dark)">+1 day</span>{% endif %}
+      </div>
+    </div>
+
+    <div>
+      {% if o.monitorable %}
+        <span class="tag tag-sage"><span class="dot"></span>Monitored</span>
+      {% else %}
+        <span class="tag tag-mute">Not monitored</span>
+      {% endif %}
+    </div>
+
+    <div class="fl-act" style="display:flex; align-items:center; justify-content:flex-end; gap:14px;">
+      <div style="text-align:right">
+        <div class="price">{{ o.amount }}<span class="cur">{{ o.currency }}</span></div>
+      </div>
+      <form method="post" action="{{ url_for('passenger_step') }}">
+        <input type="hidden" name="offer_id" value="{{ o.id }}">
+        <button type="submit" class="btn-sm">Select</button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <div style="padding:36px; text-align:center" class="muted">No flights found for that search.</div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<style>
+  .trip-toggle { flex:1; margin:0; text-transform:none; letter-spacing:0; }
+  .trip-toggle input { position:absolute; opacity:0; pointer-events:none; }
+  .trip-toggle span {
+    display:block; text-align:center; padding:9px 14px; font-size:13.5px; font-weight:600;
+    color:var(--ink-soft); background:var(--surface-2); border:1px solid var(--line-soft);
+    border-radius:99px; cursor:pointer; transition:all .12s;
+  }
+  .trip-toggle input:checked + span {
+    background:var(--terra-wash); border-color:#EFD6C0; color:var(--terra-dark);
+  }
+  .od { display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:end; }
+  .od input { text-transform:uppercase; font-weight:600; letter-spacing:.06em; }
+  .swap {
+    width:38px; height:38px; padding:0; margin-bottom:1px; border-radius:50%;
+    background:var(--surface-2); color:var(--ink-soft); border:1px solid var(--line);
+    font-size:15px; flex:none;
+  }
+  .swap:hover { background:var(--terra-wash); color:var(--terra-dark); border-color:#EFD6C0; }
+  .sortbar { display:flex; gap:4px; background:var(--surface-2); padding:3px;
+             border-radius:99px; border:1px solid var(--line-soft); }
+  .sort { padding:6px 14px; font-size:13px; font-weight:600; border-radius:99px;
+          background:transparent; color:var(--ink-soft); }
+  .sort:hover { background:transparent; color:var(--ink); }
+  .sort.on { background:var(--surface); color:var(--terra-dark); box-shadow:var(--shadow); }
+</style>
+
+<script>
+  document.getElementById('swapBtn')?.addEventListener('click', () => {
+    const a = document.getElementById('origin'), b = document.getElementById('destination');
+    [a.value, b.value] = [b.value, a.value];
+  });
+
+  // Return date only applies to round-trips.
+  const ret = document.getElementById('return_date');
+  function syncTrip() {
+    const round = document.querySelector('input[name=trip_type]:checked').value === 'round_trip';
+    ret.disabled = !round;
+    if (!round) ret.value = '';
+  }
+  document.querySelectorAll('input[name=trip_type]').forEach(r => r.addEventListener('change', syncTrip));
+  syncTrip();
+
+  // Client-side sort: avoids re-issuing an offer request just to reorder rows.
+  const box = document.getElementById('results');
+  document.querySelectorAll('.sort').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.sort').forEach(b => b.classList.toggle('on', b === btn));
+    const key = btn.dataset.sort;
+    [...box.querySelectorAll('.fl')]
+      .sort((x, y) => parseFloat(x.dataset[key]) - parseFloat(y.dataset[key]))
+      .forEach(el => box.appendChild(el));
+  }));
+</script>
+
+{% endblock %}

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trip Difference — flight search</title>
+<link rel="icon" href="/logo.png">
+<style>
+  :root {
+    --navy: #2C4A6E;
+    --navy-deep: #1F3A5C;
+    --blue: #A9CBE8;
+    --blue-soft: #E8F1F9;
+    --cream: #F6F1E4;
+    --green: #4E9A51;
+    --ink: #16283D;
+    --muted: #6B7C90;
+    --line: #DFE6EE;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: #FBFAF6;
+  }
+  header {
+    background: #fff;
+    border-bottom: 1px solid var(--line);
+    padding: 22px 20px 20px;
+    text-align: center;
+  }
+  .logo { width: 132px; height: 132px; display: block; margin: 0 auto 6px; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  main { max-width: 720px; margin: 0 auto; padding: 26px 20px 60px; }
+
+  form {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  label { display: block; font-size: 12px; font-weight: 600; letter-spacing: .04em;
+          text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+  input, select {
+    width: 100%; padding: 10px 12px; font-size: 15px; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; background: #fff;
+  }
+  input:focus, select:focus { outline: 2px solid var(--blue); border-color: var(--navy); }
+  button {
+    grid-column: 1 / -1;
+    padding: 12px; font-size: 15px; font-weight: 600; color: #fff;
+    background: var(--navy); border: 0; border-radius: 8px; cursor: pointer;
+  }
+  button:hover { background: var(--navy-deep); }
+  button:disabled { opacity: .6; cursor: default; }
+
+  #status { margin: 18px 0 0; color: var(--muted); font-size: 14px; }
+  #status.error { color: #B3261E; }
+
+  .offer {
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; margin-top: 12px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .offer.cheapest { border-color: var(--green); box-shadow: 0 0 0 3px rgba(78,154,81,.12); }
+  .carrier { font-weight: 600; }
+  .badge {
+    display: inline-block; margin-left: 8px; padding: 2px 7px; border-radius: 99px;
+    background: var(--green); color: #fff; font-size: 11px; font-weight: 700;
+    letter-spacing: .04em; text-transform: uppercase; vertical-align: 1px;
+  }
+  .legs { margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .leg { display: block; }
+  .price { font-size: 20px; font-weight: 700; white-space: nowrap; }
+  .cur { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 3px; }
+  .oid { margin-top: 6px; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: #9AA7B5; }
+
+  @media (max-width: 560px) {
+    form { grid-template-columns: 1fr; }
+    .offer { flex-direction: column; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <!-- Real logo if logo.png is present; brand-matched SVG stands in until then. -->
+  <img class="logo" src="/logo.png" alt="Trip Difference"
+       onerror="this.style.display='none'; document.getElementById('fallback').style.display='block';">
+
+  <svg id="fallback" class="logo" style="display:none" viewBox="0 0 200 200" role="img"
+       aria-label="Trip Difference — Smart Travel Savings">
+    <defs>
+      <path id="arcTop" d="M 30 100 A 70 70 0 0 1 170 100" fill="none"/>
+      <path id="arcBot" d="M 34 100 A 66 66 0 0 0 166 100" fill="none"/>
+    </defs>
+    <circle cx="100" cy="100" r="96" fill="#F6F1E4" stroke="#2C4A6E" stroke-width="5"/>
+    <circle cx="100" cy="100" r="62" fill="#A9CBE8" stroke="#2C4A6E" stroke-width="3"/>
+    <text font-size="20" font-weight="700" fill="#2C4A6E" letter-spacing="1.5">
+      <textPath href="#arcTop" startOffset="50%" text-anchor="middle">TRIP DIFFERENCE</textPath>
+    </text>
+    <text font-size="13" font-weight="700" fill="#2C4A6E" letter-spacing="1.2">
+      <textPath href="#arcBot" startOffset="50%" text-anchor="middle">SMART TRAVEL SAVINGS</textPath>
+    </text>
+    <g transform="translate(100 102)">
+      <rect x="-30" y="-14" width="60" height="30" rx="4" fill="#7FBF7F" stroke="#2C4A6E" stroke-width="2.5"/>
+      <circle cx="0" cy="1" r="8" fill="none" stroke="#2C4A6E" stroke-width="2.5"/>
+      <text x="0" y="6" font-size="13" font-weight="700" fill="#2C4A6E" text-anchor="middle">$</text>
+    </g>
+  </svg>
+
+  <p>Duffel test mode — spike UI</p>
+</header>
+
+<main>
+  <form id="f">
+    <div>
+      <label for="origin">From</label>
+      <input id="origin" value="LHR" maxlength="3" autocomplete="off" placeholder="LHR">
+    </div>
+    <div>
+      <label for="destination">To</label>
+      <input id="destination" value="JFK" maxlength="3" autocomplete="off" placeholder="JFK">
+    </div>
+    <div>
+      <label for="date">Depart</label>
+      <input id="date" type="date" value="2026-10-15">
+    </div>
+    <div>
+      <label for="cabin">Cabin</label>
+      <select id="cabin">
+        <option value="economy">Economy</option>
+        <option value="premium_economy">Premium economy</option>
+        <option value="business">Business</option>
+        <option value="first">First</option>
+      </select>
+    </div>
+    <button type="submit" id="go">Search flights</button>
+  </form>
+
+  <p id="status"></p>
+  <div id="results"></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const status = $('status'), results = $('results'), go = $('go');
+
+const time = iso => iso ? iso.slice(11, 16) : '';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+$('f').addEventListener('submit', async e => {
+  e.preventDefault();
+  results.innerHTML = '';
+  status.className = '';
+  status.textContent = 'Searching…';
+  go.disabled = true;
+
+  const q = new URLSearchParams({
+    origin: $('origin').value.trim(),
+    destination: $('destination').value.trim(),
+    date: $('date').value,
+    cabin: $('cabin').value,
+  });
+
+  try {
+    const res = await fetch('/api/search?' + q);
+    const data = await res.json();
+
+    if (data.error) {
+      status.className = 'error';
+      status.textContent = data.error;
+      return;
+    }
+
+    status.textContent = `${data.count} offers found — showing cheapest ${data.offers.length}`;
+
+    data.offers.forEach((o, i) => {
+      const legs = o.segments.map(s =>
+        `<span class="leg">${esc(s.flight)} · ${esc(s.origin)}→${esc(s.destination)} · ${time(s.departing_at)}–${time(s.arriving_at)}</span>`
+      ).join('');
+
+      const div = document.createElement('div');
+      div.className = 'offer' + (i === 0 ? ' cheapest' : '');
+      div.innerHTML =
+        `<div>
+           <div class="carrier">${esc(o.carrier)}${i === 0 ? '<span class="badge">Cheapest</span>' : ''}</div>
+           <div class="legs">${legs}${o.stops ? ` · ${o.stops} stop${o.stops > 1 ? 's' : ''}` : ' · non-stop'}</div>
+           <div class="oid">${esc(o.id)}</div>
+         </div>
+         <div class="price">${esc(o.amount)}<span class="cur">${esc(o.currency)}</span></div>`;
+      results.appendChild(div);
+    });
+  } catch (err) {
+    status.className = 'error';
+    status.textContent = 'Request failed: ' + err.message;
+  } finally {
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
