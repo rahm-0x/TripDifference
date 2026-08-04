@@ -269,6 +269,17 @@ def build_chart(order_id, paid):
 # auth screens (presentation only — nothing is gated)
 # ---------------------------------------------------------------------------
 
+@app.route("/info")
+def info():
+    """
+    Standalone explainer of the booking → monitor → exchange → settle flow.
+
+    Deliberately does not extend base.html — it carries its own type and colour
+    system, so it is served whole rather than themed to match the app.
+    """
+    return render_template("info.html")
+
+
 @app.route("/logo.png")
 def logo():
     """

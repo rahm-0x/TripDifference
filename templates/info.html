@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TripDifference — how the flow works</title>
+<link rel="icon" href="/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#E9EDE4;
+  --paper-2:#DFE5D8;
+  --paper-3:#D3DBCA;
+  --ink:#16201C;
+  --ink-2:#4C5C55;
+  --ink-3:#77857E;
+  --rule:#B4C0AC;
+  --carbon:#A63A28;
+  --stamp:#2B4C7E;
+  --max:1140px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:'IBM Plex Sans',system-ui,sans-serif;
+  font-size:16px;
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 28px}
+
+/* ---------- type ---------- */
+h1,h2,h3{font-family:'Archivo',sans-serif;letter-spacing:-.02em;line-height:1.05}
+h1{font-size:clamp(2.6rem,6.5vw,5rem);font-weight:800}
+h2{font-size:clamp(1.7rem,3.4vw,2.5rem);font-weight:700}
+h3{font-size:1.06rem;font-weight:700;letter-spacing:.01em}
+.mono{font-family:'IBM Plex Mono',monospace}
+.eyebrow{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:.7rem;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);
+}
+
+/* ---------- header ---------- */
+header{border-bottom:1px solid var(--rule);padding:20px 0}
+.hrow{display:flex;justify-content:space-between;align-items:baseline;gap:20px;flex-wrap:wrap}
+.brand{font-family:'Archivo',sans-serif;font-weight:800;font-size:1.02rem;letter-spacing:-.01em}
+.brand span{color:var(--carbon)}
+.hmeta{display:flex;align-items:baseline;gap:22px}
+.backlink{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:.7rem;font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;
+  color:var(--carbon);text-decoration:none;
+}
+.backlink:hover{text-decoration:underline}
+
+/* ---------- hero ---------- */
+.hero{padding:88px 0 64px}
+.hero h1{max-width:15ch}
+.hero h1 em{font-style:normal;color:var(--carbon)}
+.lede{
+  margin-top:26px;max-width:52ch;
+  font-size:1.12rem;color:var(--ink-2);
+}
+
+/* ---------- the loop panel (signature) ---------- */
+.loop-panel{
+  margin-top:52px;
+  background:var(--paper-2);
+  border:1px solid var(--rule);
+  display:grid;
+  grid-template-columns:1fr 300px;
+}
+.loop-main{padding:26px 28px;border-right:1px solid var(--rule)}
+.loop-side{padding:26px 24px;background:var(--paper-3)}
+.loop-head{
+  display:flex;justify-content:space-between;align-items:center;
+  gap:16px;margin-bottom:22px;
+}
+.pnr{font-family:'IBM Plex Mono',monospace;font-size:.82rem;color:var(--ink-2)}
+.pnr b{color:var(--ink);font-weight:600}
+.pulse{
+  display:inline-flex;align-items:center;gap:7px;
+  font-family:'IBM Plex Mono',monospace;font-size:.68rem;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--stamp);
+}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--stamp)}
+@media(prefers-reduced-motion:no-preference){
+  .dot{animation:blip 2s ease-in-out infinite}
+}
+@keyframes blip{0%,100%{opacity:1}50%{opacity:.18}}
+
+.readout{display:flex;align-items:flex-end;gap:34px;flex-wrap:wrap}
+.metric .k{
+  font-family:'IBM Plex Mono',monospace;font-size:.66rem;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);
+  display:block;margin-bottom:5px;
+}
+.metric .v{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:1.62rem;font-weight:500;letter-spacing:-.02em;
+}
+.metric .v.neg{color:var(--carbon);font-weight:600}
+.metric .v.mute{color:var(--ink-3)}
+
+.steps{margin-top:26px;display:flex;flex-direction:column;gap:1px}
+.step{
+  display:grid;grid-template-columns:26px 1fr auto;
+  align-items:center;gap:12px;
+  padding:9px 0;
+  font-size:.86rem;color:var(--ink-3);
+  border-top:1px solid var(--rule);
+  transition:color .25s;
+}
+.step .n{font-family:'IBM Plex Mono',monospace;font-size:.72rem}
+.step .st{font-family:'IBM Plex Mono',monospace;font-size:.7rem;letter-spacing:.09em;text-transform:uppercase}
+.step.on{color:var(--ink)}
+.step.on .st{color:var(--stamp)}
+.step.done{color:var(--ink-2)}
+.step.done .st{color:var(--ink-3)}
+
+.side-k{
+  font-family:'IBM Plex Mono',monospace;font-size:.66rem;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);
+  margin-bottom:12px;
+}
+.log{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:.72rem;line-height:1.85;color:var(--ink-2);
+  min-height:190px;
+}
+.log div{opacity:0;animation:fadein .3s forwards}
+@keyframes fadein{to{opacity:1}}
+.log .hit{color:var(--carbon);font-weight:600}
+
+/* ---------- perforation ---------- */
+.perf{
+  height:1px;background:none;border:0;
+  border-top:2px dashed var(--rule);
+  margin:0;position:relative;
+}
+.perf::before,.perf::after{
+  content:'';position:absolute;top:-7px;
+  width:13px;height:13px;border-radius:50%;
+  background:var(--paper);border:1px solid var(--rule);
+}
+.perf::before{left:-7px}
+.perf::after{right:-7px}
+
+/* ---------- phase bands ---------- */
+.band{padding:64px 0;position:relative}
+.band-grid{display:grid;grid-template-columns:132px 1fr;gap:42px}
+.actor{position:sticky;top:32px;align-self:start}
+.actor .who{
+  font-family:'Archivo',sans-serif;font-weight:700;
+  font-size:.78rem;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink);
+}
+.actor .when{
+  font-family:'IBM Plex Mono',monospace;font-size:.68rem;
+  color:var(--ink-3);margin-top:6px;line-height:1.5;
+}
+.actor .idx{
+  font-family:'IBM Plex Mono',monospace;font-size:.68rem;
+  color:var(--carbon);margin-bottom:10px;letter-spacing:.1em;
+}
+.band h2{max-width:20ch}
+.band .intro{margin-top:16px;max-width:56ch;color:var(--ink-2)}
+
+.cards{margin-top:32px;display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule)}
+.card{background:var(--paper);padding:20px 22px}
+.card h3{margin-bottom:8px}
+.card p{font-size:.9rem;color:var(--ink-2)}
+.card code{
+  font-family:'IBM Plex Mono',monospace;font-size:.82rem;
+  background:var(--paper-3);padding:1px 5px;
+}
+@media(min-width:760px){.cards.two{grid-template-columns:1fr 1fr}}
+
+/* gates */
+.gates{margin-top:32px;border:1px solid var(--rule)}
+.gate{
+  display:grid;grid-template-columns:auto 1fr auto;
+  gap:18px;align-items:start;
+  padding:16px 20px;
+  border-bottom:1px solid var(--rule);
+  background:var(--paper);
+}
+.gate:last-child{border-bottom:0}
+.gate .q{font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--ink-3);padding-top:3px;letter-spacing:.08em}
+.gate .body strong{font-weight:600;font-size:.95rem}
+.gate .body p{font-size:.86rem;color:var(--ink-2);margin-top:3px}
+.gate .out{
+  font-family:'IBM Plex Mono',monospace;font-size:.66rem;
+  letter-spacing:.1em;text-transform:uppercase;
+  padding-top:4px;white-space:nowrap;
+}
+.gate .out.stop{color:var(--ink-3)}
+.gate .out.go{color:var(--carbon)}
+
+/* flag */
+.flag{
+  margin-top:34px;padding:22px 24px;
+  border:1px solid var(--carbon);
+  background:var(--paper-2);
+}
+.flag .eyebrow{color:var(--carbon);margin-bottom:9px}
+.flag p{font-size:.92rem;color:var(--ink-2);max-width:62ch}
+.flag p+p{margin-top:10px}
+
+footer{border-top:1px solid var(--rule);padding:34px 0 56px;margin-top:40px}
+footer p{font-size:.82rem;color:var(--ink-3);max-width:60ch}
+
+@media(max-width:860px){
+  .loop-panel{grid-template-columns:1fr}
+  .loop-main{border-right:0;border-bottom:1px solid var(--rule)}
+  .band-grid{grid-template-columns:1fr;gap:22px}
+  .actor{position:static}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hrow">
+    <div class="brand">Trip<span>Difference</span></div>
+    <div class="hmeta">
+      <div class="eyebrow">System flow &nbsp;/&nbsp; v1 &nbsp;/&nbsp; flights</div>
+      <a class="backlink" href="/">&larr; Back to app</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section class="wrap hero">
+  <div class="eyebrow" style="margin-bottom:20px">How it works</div>
+  <h1>The part that makes money is the part <em>nobody watches</em>.</h1>
+  <p class="lede">
+    A traveller books once and moves on. For the next several weeks a loop asks the
+    airline the same question over and over, and when the answer changes it swaps the
+    ticket underneath them. Same flight. Same seat. Same departure time. Only the
+    money moves.
+  </p>
+
+  <div class="loop-panel">
+    <div class="loop-main">
+      <div class="loop-head">
+        <div class="pnr">PNR <b id="pnr">ZC7Q7A</b> &nbsp;·&nbsp; AA1284 &nbsp;·&nbsp; LAS→LAX &nbsp;·&nbsp; 15 Oct</div>
+        <div class="pulse"><span class="dot"></span><span id="pulse-label">Monitoring</span></div>
+      </div>
+
+      <div class="readout">
+        <div class="metric">
+          <span class="k">Paid</span>
+          <span class="v mono mute">$418.00</span>
+        </div>
+        <div class="metric">
+          <span class="k">Market now</span>
+          <span class="v mono" id="market">$418.00</span>
+        </div>
+        <div class="metric">
+          <span class="k">Change total</span>
+          <span class="v mono" id="delta">—</span>
+        </div>
+      </div>
+
+      <div class="steps" id="steps">
+        <div class="step" data-s="0"><span class="n">1</span><span>Poll the route on the same date and cabin</span><span class="st">idle</span></div>
+        <div class="step" data-s="1"><span class="n">2</span><span>Keep only the identical carrier and flight number</span><span class="st">idle</span></div>
+        <div class="step" data-s="2"><span class="n">3</span><span>Ask the airline to price the exchange</span><span class="st">idle</span></div>
+        <div class="step" data-s="3"><span class="n">4</span><span>Read what the change costs after penalties</span><span class="st">idle</span></div>
+        <div class="step" data-s="4"><span class="n">5</span><span>Exchange, or wait and poll again</span><span class="st">idle</span></div>
+      </div>
+    </div>
+
+    <div class="loop-side">
+      <div class="side-k">Decision log</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><hr class="perf"></div>
+
+<!-- 01 BOOK -->
+<section class="band">
+  <div class="wrap band-grid">
+    <div class="actor">
+      <div class="idx">01</div>
+      <div class="who">Traveller</div>
+      <div class="when">Once per trip<br>~4 minutes</div>
+    </div>
+    <div>
+      <h2>Book the flight here instead of with the airline</h2>
+      <p class="intro">
+        This is the only step a person performs, and it exists for one structural reason:
+        whoever issues the ticket is the only party who can later exchange it. Booking
+        through the platform is what makes everything after this possible.
+      </p>
+
+      <div class="cards two">
+        <div class="card">
+          <h3>Search and select</h3>
+          <p>Route, dates, cabin. Results show carrier, flight number, times and price — the
+          information someone booking a work trip actually reads.</p>
+        </div>
+        <div class="card">
+          <h3>Say what can't be watched</h3>
+          <p>Non-changeable fares can never be exchanged. Flag that at the point of choosing,
+          not after. A traveller who picks one should know it won't be monitored.</p>
+        </div>
+        <div class="card">
+          <h3>Passenger and payment</h3>
+          <p>Prefilled from the company's traveller profile. Card details go through hosted
+          fields so they never touch our servers.</p>
+        </div>
+        <div class="card">
+          <h3>Confirm, and start watching</h3>
+          <p>The order is created and we become the ticket's owner of record. The confirmation
+          screen is where monitoring gets explained, because it's the only screen guaranteed
+          to be read.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><hr class="perf"></div>
+
+<!-- 02 MONITOR -->
+<section class="band">
+  <div class="wrap band-grid">
+    <div class="actor">
+      <div class="idx">02</div>
+      <div class="who">System</div>
+      <div class="when">Repeats until<br>24h before<br>departure</div>
+    </div>
+    <div>
+      <h2>Poll, match, price, repeat</h2>
+      <p class="intro">
+        The loop runs on its own for weeks. How often it runs depends on how close the flight
+        is — fares two months out barely move, fares inside a week move constantly, and polling
+        both at the same rate is how the search costs eat the margin.
+      </p>
+
+      <div class="cards two">
+        <div class="card">
+          <h3>Poll on a sliding schedule</h3>
+          <p>Daily beyond 30 days out. Every six hours inside 30. Hourly inside 7. Then stop
+          entirely 24 hours before departure, when an exchange would be more disruption than
+          it's worth.</p>
+        </div>
+        <div class="card">
+          <h3>Match the exact flight</h3>
+          <p>Same carrier, same flight numbers, same order. A cheaper seat that reroutes someone
+          through a connection isn't a saving, it's a complaint.</p>
+        </div>
+        <div class="card">
+          <h3>Search once for many trips</h3>
+          <p>Fifty bookings on one route and date collapse into a single lookup. The cache is
+          for deciding what's worth pricing — it can't be reused to actually book.</p>
+        </div>
+        <div class="card">
+          <h3>Let the airline do the maths</h3>
+          <p>Comparing two ticket prices ignores fare rules and gets the answer wrong. Ask the
+          airline what the exchange costs and use <code>change_total_amount</code>. It already
+          nets out the penalty.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><hr class="perf"></div>
+
+<!-- 03 EXCHANGE -->
+<section class="band">
+  <div class="wrap band-grid">
+    <div class="actor">
+      <div class="idx">03</div>
+      <div class="who">System</div>
+      <div class="when">Under a minute<br>No human</div>
+    </div>
+    <div>
+      <h2>Five gates, then the swap</h2>
+      <p class="intro">
+        Every poll runs the same checks in the same order. Most polls stop at the first or
+        second gate and go back to waiting. Occasionally one clears all five.
+      </p>
+
+      <div class="gates">
+        <div class="gate">
+          <span class="q">01</span>
+          <span class="body"><strong>Is departure more than 24 hours away?</strong>
+          <p>Inside that window an exchange creates more risk than it recovers.</p></span>
+          <span class="out stop">else stop</span>
+        </div>
+        <div class="gate">
+          <span class="q">02</span>
+          <span class="body"><strong>Is the fare exchangeable at all?</strong>
+          <p>Non-changeable fares are filtered before any search runs, so they never cost a lookup.</p></span>
+          <span class="out stop">else skip</span>
+        </div>
+        <div class="gate">
+          <span class="q">03</span>
+          <span class="body"><strong>Is the ticket still inside its void window?</strong>
+          <p>Within 24 hours of issue it can be voided outright and rebooked clean, for nothing.
+          Cheaper than exchanging.</p></span>
+          <span class="out go">void instead</span>
+        </div>
+        <div class="gate">
+          <span class="q">04</span>
+          <span class="body"><strong>Does the exchange actually return money?</strong>
+          <p>The change total has to come back negative. A cheaper seat on the board doesn't
+          mean a cheaper exchange.</p></span>
+          <span class="out stop">else wait</span>
+        </div>
+        <div class="gate">
+          <span class="q">05</span>
+          <span class="body"><strong>Is it worth more than the floor?</strong>
+          <p>Below the threshold the transaction costs and the churn outweigh what comes back.</p></span>
+          <span class="out go">exchange</span>
+        </div>
+      </div>
+
+      <div class="cards two" style="margin-top:32px">
+        <div class="card">
+          <h3>One operation, not two</h3>
+          <p>The exchange is a single call. Cancelling and rebooking separately opens a window
+          where someone is double-booked or holding nothing at all.</p>
+        </div>
+        <div class="card">
+          <h3>Tell them, briefly</h3>
+          <p>New ticket, same flight. The notification exists so nobody panics at a new booking
+          reference — not because anything about their day changed.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><hr class="perf"></div>
+
+<!-- 04 SETTLE -->
+<section class="band">
+  <div class="wrap band-grid">
+    <div class="actor">
+      <div class="idx">04</div>
+      <div class="who">Company</div>
+      <div class="when">Monthly</div>
+    </div>
+    <div>
+      <h2>Show the work, then invoice</h2>
+      <p class="intro">
+        The travel manager never watches the loop. They see the result once a month, and the
+        result has to be legible enough to defend to whoever signs off on the spend.
+      </p>
+
+      <div class="cards two">
+        <div class="card">
+          <h3>Per trip, what changed</h3>
+          <p>What was paid, what it became, what came back. A price history for the monitoring
+          window makes the number checkable rather than asserted.</p>
+        </div>
+        <div class="card">
+          <h3>Per month, what it cost</h3>
+          <p>Total recovered, our share, net to the company. One line per exchange, traceable
+          to a booking reference.</p>
+        </div>
+      </div>
+
+      <div class="flag">
+        <div class="eyebrow">Unresolved — affects the whole model</div>
+        <p>
+          When an exchange returns money, it may come back as cash to the original card or as
+          an airline credit locked to that carrier and that passenger's name. A credit is worth
+          far less than cash, and a percentage fee charged against one is a much harder
+          conversation.
+        </p>
+        <p>
+          The sandbox returns a fixed value for every exchange, so this can't be settled before
+          live access. Until it is, the settlement design should assume either outcome is
+          possible.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Flights only. Same-carrier exchanges. Behaviour shown here reflects the documented API
+    and the sandbox spike — the economics remain unvalidated against live fares.</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var steps  = Array.prototype.slice.call(document.querySelectorAll('.step'));
+  var market = document.getElementById('market');
+  var delta  = document.getElementById('delta');
+  var log    = document.getElementById('log');
+  var label  = document.getElementById('pulse-label');
+
+  var PAID = 418.00;
+  var cycles = [
+    {price:418.00, change:null,   note:'no cheaper seat'},
+    {price:412.50, change:  18.00,note:'exchange costs money'},
+    {price:401.00, change:  4.25, note:'still positive'},
+    {price:346.00, change:-58.00, note:'HIT'}
+  ];
+  var ci = 0, si = 0;
+
+  function money(n){
+    return (n<0?'-$':'$') + Math.abs(n).toFixed(2);
+  }
+  function line(txt, hit){
+    var d = document.createElement('div');
+    if(hit) d.className='hit';
+    d.textContent = txt;
+    log.appendChild(d);
+    while(log.children.length>9) log.removeChild(log.firstChild);
+  }
+  function stamp(){
+    var t = new Date();
+    return String(t.getHours()).padStart(2,'0')+':'+
+           String(t.getMinutes()).padStart(2,'0')+':'+
+           String(t.getSeconds()).padStart(2,'0');
+  }
+
+  function render(){
+    steps.forEach(function(el,i){
+      el.classList.remove('on','done');
+      var st = el.querySelector('.st');
+      if(i<si){ el.classList.add('done'); st.textContent='ok'; }
+      else if(i===si){ el.classList.add('on'); st.textContent='running'; }
+      else { st.textContent='idle'; }
+    });
+  }
+
+  function tick(){
+    var c = cycles[ci];
+    render();
+
+    if(si===0){
+      market.textContent = money(c.price);
+      market.className = 'v mono' + (c.price<PAID ? '' : ' mute');
+      delta.textContent = '—';
+      delta.className = 'v mono mute';
+      line(stamp()+'  poll  LAS-LAX  15OCT');
+    }
+    if(si===1) line(stamp()+'  match AA1284  1 of 24');
+    if(si===2) line(stamp()+'  price exchange…');
+    if(si===3){
+      if(c.change===null){
+        delta.textContent='—';
+        line(stamp()+'  no cheaper seat');
+      } else {
+        delta.textContent = money(c.change);
+        delta.className = 'v mono' + (c.change<0 ? ' neg' : ' mute');
+        line(stamp()+'  change_total '+money(c.change));
+      }
+    }
+    if(si===4){
+      if(c.change!==null && c.change<0){
+        label.textContent='Exchanged';
+        line(stamp()+'  EXCHANGE  recovered '+money(Math.abs(c.change)), true);
+      } else {
+        line(stamp()+'  wait  ('+c.note+')');
+      }
+    }
+
+    si++;
+    if(si>steps.length){
+      si=0;
+      ci=(ci+1)%cycles.length;
+      if(ci===0){ label.textContent='Monitoring'; log.innerHTML=''; }
+    }
+  }
+
+  if(reduce){
+    ci=3; si=0;
+    for(var k=0;k<5;k++) tick();
+    steps.forEach(function(el){el.classList.add('done');el.querySelector('.st').textContent='ok';});
+  } else {
+    tick();
+    setInterval(tick, 1150);
+  }
+})();
+</script>
+</body>
+</html>
