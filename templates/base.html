@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Trip Difference{% endblock %}</title>
-<link rel="icon" href="{{ url_for('static', filename='logo.png') }}">
+<link rel="icon" href="/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -233,7 +233,7 @@
 <div class="topbar">
   <div class="topbar-in">
     <a class="brand" href="{{ url_for('index') }}">
-      <img src="{{ url_for('static', filename='logo.png') }}" alt="">
+      <img src="/logo.png" alt="">
       <span>Trip Difference</span>
     </a>
     {% if not hide_nav %}

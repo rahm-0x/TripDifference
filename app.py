@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from flask import (Flask, redirect, render_template, request, session, url_for)
+from flask import (Flask, redirect, render_template, request, send_from_directory,
+                   session, url_for)
 
 import duffel_http
 import eligibility
@@ -267,6 +268,15 @@ def build_chart(order_id, paid):
 # ---------------------------------------------------------------------------
 # auth screens (presentation only — nothing is gated)
 # ---------------------------------------------------------------------------
+
+@app.route("/logo.png")
+def logo():
+    """
+    Local-dev only. On Vercel, public/logo.png is served by the CDN before a
+    request ever reaches this function (docs: don't use Flask's static_folder).
+    """
+    return send_from_directory(HERE / "public", "logo.png")
+
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
