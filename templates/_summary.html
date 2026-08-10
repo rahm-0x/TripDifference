@@ -33,9 +33,9 @@
 
     <div style="margin-top:14px">
       {% if offer.monitorable %}
-      <div class="card-flat" style="background:var(--sage-wash); border-color:#DDE4D6; padding:12px">
+      <div class="card-flat" style="background:var(--sage-wash); border-color:rgba(95,191,127,.22); padding:12px">
         <div class="tag tag-sage" style="margin-bottom:6px"><span class="dot"></span>Monitored</div>
-        <div style="font-size:12.5px; color:#4A5A40; line-height:1.5">
+        <div style="font-size:12.5px; color:var(--green); line-height:1.5">
           We'll watch this fare after booking and rebook you if it drops by more
           than {{ policy.min_saving }} {{ offer.currency }}.
         </div>

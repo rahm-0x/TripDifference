@@ -24,7 +24,7 @@
       {% for r in rows %}
       {% set kind = r.kind or 'decision' %}
       <tr class="{{ 'row-exec' if kind == 'execution' }}{{ 'row-elig' if kind == 'eligibility' }}">
-        <td class="mono muted">{{ r.ts[:19].replace('T',' ') }}</td>
+        <td class="mono muted ts">{{ r.ts[:19].replace('T',' ') }}</td>
         <td>
           {% if kind == 'execution' %}<span class="tag tag-terra">execution</span>
           {% elif kind == 'eligibility' %}<span class="tag tag-mute">eligibility</span>
@@ -94,7 +94,9 @@
 </div>
 
 <style>
-  .row-exec td { background:#FCF6EF; }
+  /* The date+time is one atom — let the table scroll rather than wrap it. */
+  .ts { white-space:nowrap; }
+  .row-exec td { background:rgba(212,171,79,.05); }
   .row-elig td { background:var(--surface-2); }
 </style>
 

@@ -18,7 +18,7 @@
 </div>
 
 {% if trip.refunded %}
-<div class="notice" style="background:var(--sage-wash); border-color:#DDE4D6; color:#4A5A40; margin-bottom:16px">
+<div class="notice" style="background:var(--sage-wash); border-color:rgba(95,191,127,.22); color:var(--green); margin-bottom:16px">
   <span>↓</span>
   <div><b>Rebooked at a lower fare — {{ trip.refunded }} {{ trip.currency }} refunded.</b>
   Same flight and times; the refund went back to {{ card.brand }} ending {{ card.last4 }}.</div>
@@ -191,11 +191,11 @@
   .switch:hover { background:var(--sand-deep); }
   .switch span {
     position:absolute; top:2px; left:2px; width:21px; height:21px; border-radius:50%;
-    background:#fff; box-shadow:0 1px 3px rgba(46,36,27,.25); transition:left .15s;
+    background:var(--text); box-shadow:0 1px 3px rgba(0,0,0,.5); transition:left .15s;
   }
   .switch.on { background:var(--sage); border-color:var(--sage); }
-  .switch.on:hover { background:#6B7A5F; }
-  .switch.on span { left:21px; }
+  .switch.on:hover { background:#7BD199; }
+  .switch.on span { left:21px; background:#06210E; }
 
   .meta { margin:14px 0 0; }
   .meta div { display:flex; justify-content:space-between; gap:12px; padding:6px 0;
@@ -212,7 +212,7 @@
 
   .exec {
     margin-top:10px; padding:9px 11px; border-radius:10px;
-    background:var(--terra-wash); border:1px solid #EFD6C0; color:#8A4A1F;
+    background:var(--terra-wash); border:1px solid rgba(212,171,79,.22); color:var(--gold);
   }
   .exec.exec-blocked { background:var(--surface-2); border-color:var(--line); color:var(--ink-soft); }
   .exec .lbl { color:inherit; opacity:.7; }
