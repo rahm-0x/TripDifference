@@ -13,77 +13,78 @@
   <div>
     <div class="page-head">
       <h1>Who's travelling?</h1>
-      <p>Prefilled from your traveller profile. Names must match the passport or government ID used at the airport.</p>
+      <p>Names must match the passport or government ID used at the airport. Pick a saved traveller to fill a card in one go.</p>
     </div>
 
     <form method="post" action="{{ url_for('payment_step') }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <input type="hidden" name="offer_id" value="{{ offer.id }}">
 
-      <div class="card">
-        <h3 style="margin-bottom:16px">Traveller</h3>
-
-        <div class="grid3">
-          <div class="field">
-            <label for="title">Title</label>
-            <select id="title" name="title">
-              {% for t in ['mr','ms','mrs','miss','dr'] %}
-              <option value="{{ t }}" {{ 'selected' if profile.title == t }}>{{ t|capitalize }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="field">
-            <label for="given_name">First name</label>
-            <input id="given_name" name="given_name" value="{{ profile.given_name }}" required>
-          </div>
-          <div class="field">
-            <label for="family_name">Last name</label>
-            <input id="family_name" name="family_name" value="{{ profile.family_name }}" required>
-          </div>
-        </div>
-
-        {% if saved %}
-        <div class="pick">
-          <label for="savedPick">Use a saved traveller</label>
-          <select id="savedPick">
-            <option value="">Enter details manually</option>
+      {% for person in people %}
+      <div class="card pax" style="margin-bottom:14px">
+        <div class="pax-head">
+          <h3>Traveller {{ loop.index }}{% if people|length > 1 %} of {{ people|length }}{% endif %}</h3>
+          {% if saved %}
+          <select class="savedPick" data-i="{{ loop.index0 }}" aria-label="Use a saved traveller">
+            <option value="">Use a saved traveller…</option>
             {% for t in saved %}
             <option value="{{ loop.index0 }}">{{ t.given_name }} {{ t.family_name }}</option>
             {% endfor %}
           </select>
-          <p class="hint">Saved travellers are managed on the
-             <a href="{{ url_for('travelers') }}">Travellers</a> page.</p>
+          {% endif %}
         </div>
-        {% endif %}
+
+        <div class="grid3">
+          <div class="field">
+            <label>Title</label>
+            <select name="title" data-f="title">
+              <option value=""></option>
+              {% for t in ['mr','ms','mrs','miss','dr'] %}
+              <option value="{{ t }}" {{ 'selected' if person.title == t }}>{{ t|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label>First name</label>
+            <input name="given_name" data-f="given_name"
+                   value="{{ person.given_name or '' }}" required>
+          </div>
+          <div class="field">
+            <label>Last name</label>
+            <input name="family_name" data-f="family_name"
+                   value="{{ person.family_name or '' }}" required>
+          </div>
+        </div>
 
         <div class="grid2">
           <div class="field">
-            <label for="born_on">Date of birth</label>
-            <input id="born_on" name="born_on" type="date" value="{{ profile.born_on }}" required>
+            <label>Date of birth</label>
+            <input name="born_on" data-f="born_on" type="date"
+                   value="{{ person.born_on or '' }}" required>
           </div>
           <div class="field">
-            <label for="gender">Gender on ID</label>
-            <select id="gender" name="gender">
-              <option value="m" {{ 'selected' if profile.gender == 'm' }}>Male</option>
-              <option value="f" {{ 'selected' if profile.gender == 'f' }}>Female</option>
+            <label>Gender on ID</label>
+            <select name="gender" data-f="gender">
+              <option value="m" {{ 'selected' if person.gender == 'm' }}>Male</option>
+              <option value="f" {{ 'selected' if person.gender == 'f' }}>Female</option>
             </select>
           </div>
         </div>
-      </div>
 
-      <div class="card">
-        <h3 style="margin-bottom:16px">Contact</h3>
         <div class="grid2">
           <div class="field">
-            <label for="email">Email</label>
-            <input id="email" name="email" type="email" value="{{ profile.email }}" required>
-            <div class="hint">Confirmation and any rebooking notices go here.</div>
+            <label>Email</label>
+            <input name="email" data-f="email" type="email"
+                   value="{{ person.email or '' }}" required>
           </div>
           <div class="field">
-            <label for="phone_number">Phone</label>
-            <input id="phone_number" name="phone_number" value="{{ profile.phone_number }}" required>
-            <div class="hint">Include the country code.</div>
+            <label>Phone</label>
+            <input name="phone_number" data-f="phone_number"
+                   value="{{ person.phone_number or '' }}" required>
           </div>
+        </div>
+      </div>
+      {% endfor %}
         </div>
       </div>
 
@@ -98,9 +99,9 @@
 </div>
 
 <style>
-  .pick { margin-bottom:16px; padding:14px 16px; border:1px dashed var(--line);
-          border-radius:var(--r-sm); background:var(--surface-2); }
-  .pick .hint { margin-top:6px; }
+  .pax-head { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
+  .pax-head h3 { margin:0; }
+  .pax-head .savedPick { width:auto; margin-left:auto; max-width:230px; font-size:13px; padding:8px 11px; }
   .book-grid { display:grid; grid-template-columns: 1fr 330px; gap:26px; align-items:start; }
   @media (max-width: 900px) { .book-grid { grid-template-columns:1fr; } }
 </style>
@@ -109,17 +110,21 @@
   // Emitted as JSON rather than built into inline handlers, so a name
   // containing a quote cannot break out of the markup.
   const SAVED = {{ (saved or [])|tojson }};
-  const pick = document.getElementById('savedPick');
-  if (pick) {
-    pick.addEventListener('change', () => {
-      const t = SAVED[pick.value];
+  const FIELDS = ['title','given_name','family_name','born_on','gender','email','phone_number'];
+
+  // Each card has its own picker, so fields are found within that card —
+  // document.getElementById would always hit the first traveller.
+  document.querySelectorAll('.savedPick').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const t = SAVED[sel.value];
       if (!t) return;
-      for (const f of ['title','given_name','family_name','born_on','gender','email','phone_number']) {
-        const el = document.getElementById(f);
+      const card = sel.closest('.pax');
+      for (const f of FIELDS) {
+        const el = card.querySelector('[data-f="' + f + '"]');
         if (el) el.value = t[f] || '';
       }
     });
-  }
+  });
 </script>
 
 {% endblock %}

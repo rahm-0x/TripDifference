@@ -19,9 +19,11 @@
     <form method="post" action="{{ url_for('book') }}" id="payForm">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <input type="hidden" name="offer_id" value="{{ offer.id }}">
-      {% for k, v in passenger.items() %}
+      {# Repeated names, same order as the passenger cards, so getlist on the
+         other side still lines up with the offer's passenger ids. #}
+      {% for person in people %}{% for k, v in person.items() %}
       <input type="hidden" name="{{ k }}" value="{{ v }}">
-      {% endfor %}
+      {% endfor %}{% endfor %}
 
       <div class="card" style="padding:0; overflow:hidden;">
         <label class="pay-opt on" for="pm_card">

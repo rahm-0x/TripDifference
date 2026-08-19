@@ -190,6 +190,9 @@ def offer_view(offer):
         "stops": first.get("stops", 0), "next_day": first.get("next_day", False),
         "flight_numbers": first.get("flight_numbers", ""),
         "depart_sort": re.sub(r"\D", "", first.get("depart", "0")) or "0",
+        # the offer is priced for this many people; the passenger step renders
+        # one card each and the order must name every one of them
+        "passenger_count": len(offer.get("passengers", [])) or 1,
     }
 
 
@@ -419,6 +422,7 @@ def search():
         "return_date": request.args.get("return_date", "").strip(),
         "cabin": request.args.get("cabin", "economy"),
         "trip_type": request.args.get("trip_type", "one_way"),
+        "adults": _adults(request.args.get("adults")),
     }
 
     # Arriving from the sidebar with nothing filled in yet is not an error.
@@ -438,7 +442,8 @@ def search():
     try:
         # Fresh offer request every search — they are single use (FINDINGS.md §4).
         data = duffel_http.request("POST", "/air/offer_requests", body={
-            "data": {"slices": slices, "passengers": [{"type": "adult"}],
+            "data": {"slices": slices,
+                     "passengers": [{"type": "adult"}] * form["adults"],
                      "cabin_class": form["cabin"]}
         }, params={"return_offers": "true"}, label="ui_search")
     except (DuffelError, RuntimeError) as exc:
@@ -455,6 +460,30 @@ def search():
 # booking flow: passenger → payment → book → confirmation
 # ---------------------------------------------------------------------------
 
+MAX_ADULTS = 9
+
+
+def _adults(raw):
+    """1..MAX_ADULTS. Duffel prices per passenger, so this decides the fare."""
+    try:
+        return max(1, min(MAX_ADULTS, int(raw or 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def passengers_from_form(count=None):
+    """Every traveller on the booking, from repeated form fields.
+
+    Repeated names rather than given_name_0/given_name_1: getlist keeps
+    document order, so the cards line up with the offer's passenger ids
+    without any index bookkeeping.
+    """
+    lists = {f: request.form.getlist(f) for f in PASSENGER_FIELDS}
+    n = count or max((len(v) for v in lists.values()), default=1) or 1
+    return [{f: (lists[f][i] if i < len(lists[f]) else "").strip()
+             for f in PASSENGER_FIELDS} for i in range(n)]
+
+
 def fetch_offer_view(offer_id):
     return offer_view(duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer"))
 
@@ -464,8 +493,12 @@ def fetch_offer_view(offer_id):
 def passenger_step():
     offer_id = request.form["offer_id"]
     try:
-        return render_template("passenger.html", nav="search",
-                               offer=fetch_offer_view(offer_id),
+        offer = fetch_offer_view(offer_id)
+        prefill = auth.profile_of(auth.current_user())
+        # The booker is usually traveller one; the rest start empty.
+        people = [prefill] + [{} for _ in range(offer["passenger_count"] - 1)]
+        return render_template("passenger.html", nav="search", offer=offer,
+                               people=people,
                                # only the passenger fields reach the page —
                                # internal ids and timestamps have no business there
                                saved=[{k: t[k] for k in db.TRAVELER_FIELDS}
@@ -479,11 +512,10 @@ def passenger_step():
 @auth.login_required
 def payment_step():
     offer_id = request.form["offer_id"]
-    prefill = auth.profile_of(auth.current_user())
-    passenger = {k: request.form.get(k, prefill.get(k, "")) for k in PASSENGER_FIELDS}
+    people = passengers_from_form()
     try:
         return render_template("payment.html", nav="search",
-                               offer=fetch_offer_view(offer_id), passenger=passenger)
+                               offer=fetch_offer_view(offer_id), people=people)
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form={},
                                error=f"{exc} — offers expire; search again.")
@@ -493,15 +525,19 @@ def payment_step():
 @auth.login_required
 def book():
     offer_id = request.form["offer_id"]
-    prefill = auth.profile_of(auth.current_user())
-    passenger = {k: request.form.get(k) or prefill.get(k, "") for k in PASSENGER_FIELDS}
     try:
         offer = duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer")
+        seats = offer.get("passengers", []) or [{}]
+        people = passengers_from_form(len(seats))
         order = duffel_http.request("POST", "/air/orders", body={
             "data": {
                 "type": "instant",
                 "selected_offers": [offer_id],
-                "passengers": [{"id": p["id"], **passenger} for p in offer.get("passengers", [])],
+                # Each traveller is matched to one of the offer's passenger ids.
+                # Sending the same details for every seat, which is what the
+                # single-passenger version did, books several copies of one person.
+                "passengers": [{"id": seat["id"], **person}
+                               for seat, person in zip(seats, people)],
                 "payments": [{"type": "balance", "currency": offer["total_currency"],
                               "amount": offer["total_amount"]}],
             }

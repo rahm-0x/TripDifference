@@ -46,7 +46,17 @@
         </div>
       </div>
 
-      <div class="field" style="margin:14px 0 0">
+      <div class="grid2" style="margin:14px 0 0">
+      <div class="field">
+        <label for="adults">Travellers</label>
+        <select id="adults" name="adults">
+          {% for n in range(1, 10) %}
+          <option value="{{ n }}" {{ 'selected' if (form.adults or 1) == n }}>
+            {{ n }} adult{{ 's' if n > 1 }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
         <label for="cabin">Cabin</label>
         <select id="cabin" name="cabin">
           {% for value, text in [('economy','Economy'), ('premium_economy','Premium economy'),
@@ -54,6 +64,7 @@
           <option value="{{ value }}" {{ 'selected' if form.cabin == value }}>{{ text }}</option>
           {% endfor %}
         </select>
+      </div>
       </div>
 
       <button type="submit" class="btn-block" style="margin-top:18px">Search flights</button>
