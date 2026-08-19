@@ -42,6 +42,20 @@
           </div>
         </div>
 
+        {% if saved %}
+        <div class="pick">
+          <label for="savedPick">Use a saved traveller</label>
+          <select id="savedPick">
+            <option value="">Enter details manually</option>
+            {% for t in saved %}
+            <option value="{{ loop.index0 }}">{{ t.given_name }} {{ t.family_name }}</option>
+            {% endfor %}
+          </select>
+          <p class="hint">Saved travellers are managed on the
+             <a href="{{ url_for('travelers') }}">Travellers</a> page.</p>
+        </div>
+        {% endif %}
+
         <div class="grid2">
           <div class="field">
             <label for="born_on">Date of birth</label>
@@ -84,8 +98,28 @@
 </div>
 
 <style>
+  .pick { margin-bottom:16px; padding:14px 16px; border:1px dashed var(--line);
+          border-radius:var(--r-sm); background:var(--surface-2); }
+  .pick .hint { margin-top:6px; }
   .book-grid { display:grid; grid-template-columns: 1fr 330px; gap:26px; align-items:start; }
   @media (max-width: 900px) { .book-grid { grid-template-columns:1fr; } }
 </style>
+
+<script>
+  // Emitted as JSON rather than built into inline handlers, so a name
+  // containing a quote cannot break out of the markup.
+  const SAVED = {{ (saved or [])|tojson }};
+  const pick = document.getElementById('savedPick');
+  if (pick) {
+    pick.addEventListener('change', () => {
+      const t = SAVED[pick.value];
+      if (!t) return;
+      for (const f of ['title','given_name','family_name','born_on','gender','email','phone_number']) {
+        const el = document.getElementById(f);
+        if (el) el.value = t[f] || '';
+      }
+    });
+  }
+</script>
 
 {% endblock %}

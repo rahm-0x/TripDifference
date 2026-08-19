@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Travellers — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Travellers</h1>
+  <p>Passenger profiles you book for. Saved here, they prefill the booking flow —
+     these are not sign-in accounts.</p>
+</div>
+
+<div class="trav-grid">
+  <div>
+    {% if travelers %}
+      {% for t in travelers %}
+      <div class="trav">
+        <div class="avatar">{{ (t.given_name[0] ~ t.family_name[0])|upper }}</div>
+        <div class="trav-who">
+          <b>{{ t.title|capitalize }} {{ t.given_name }} {{ t.family_name }}</b>
+          <span>
+            {% if t.born_on %}born {{ t.born_on }}{% endif %}
+            {% if t.email %} · {{ t.email }}{% endif %}
+            {% if t.phone_number %} · {{ t.phone_number }}{% endif %}
+          </span>
+        </div>
+        <div class="trav-act">
+          <a href="{{ url_for('traveler_edit', traveler_id=t.id) }}"
+             class="btn btn-ghost btn-sm">Edit</a>
+          <form method="post" action="{{ url_for('traveler_remove', traveler_id=t.id) }}"
+                onsubmit="return confirm('Remove {{ t.given_name }} {{ t.family_name }}?')">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button type="submit" class="btn-ghost btn-sm" style="color:var(--danger)">Remove</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="card" style="text-align:center; padding:44px 24px">
+        <p class="muted" style="margin:0">No travellers saved yet. Add one on the right.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <aside>
+    <div class="card" style="position:sticky; top:84px">
+      <h3 style="margin-bottom:14px">{{ 'Edit traveller' if editing else 'Add a traveller' }}</h3>
+      <form method="post" action="{{ url_for('traveler_edit', traveler_id=editing) if editing
+                                     else url_for('traveler_new') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="grid2">
+          <div class="field">
+            <label for="given_name">First name</label>
+            <input id="given_name" name="given_name" value="{{ form.given_name or '' }}" required>
+          </div>
+          <div class="field">
+            <label for="family_name">Last name</label>
+            <input id="family_name" name="family_name" value="{{ form.family_name or '' }}" required>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label for="title">Title</label>
+            <select id="title" name="title">
+              {% for o in ['', 'mr', 'ms', 'mrs', 'miss', 'dr'] %}
+              <option value="{{ o }}" {{ 'selected' if form.title == o }}>
+                {{ o|capitalize or '—' }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="gender">Gender</label>
+            <select id="gender" name="gender">
+              {% for v, lbl in [('', '—'), ('m', 'Male'), ('f', 'Female')] %}
+              <option value="{{ v }}" {{ 'selected' if form.gender == v }}>{{ lbl }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="born_on">Date of birth</label>
+          <input id="born_on" name="born_on" type="date" value="{{ form.born_on or '' }}">
+          <p class="hint">Airlines require this to ticket.</p>
+        </div>
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" value="{{ form.email or '' }}">
+        </div>
+        <div class="field">
+          <label for="phone_number">Phone</label>
+          <input id="phone_number" name="phone_number" value="{{ form.phone_number or '' }}"
+                 placeholder="+44...">
+        </div>
+        <button type="submit" class="btn-block">
+          {{ 'Save changes' if editing else 'Add traveller' }}</button>
+        {% if editing %}
+        <a href="{{ url_for('travelers') }}" class="btn btn-ghost btn-block"
+           style="margin-top:8px">Cancel</a>
+        {% endif %}
+      </form>
+    </div>
+  </aside>
+</div>
+
+<style>
+  .trav-grid { display:grid; grid-template-columns:1fr 340px; gap:24px; align-items:start; }
+  .trav {
+    display:flex; align-items:center; gap:14px; padding:16px 18px; margin-bottom:12px;
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card);
+    transition:border-color .18s;
+  }
+  .trav:hover { border-color:#3A3020; }
+  .trav-who { min-width:0; }
+  .trav-who b { display:block; font-size:15px; }
+  .trav-who span { display:block; font-size:12.5px; color:var(--muted-2); margin-top:2px; }
+  .trav-act { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  .trav-act form { margin:0; }
+  @media (max-width:900px){ .trav-grid { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}

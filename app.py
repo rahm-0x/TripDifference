@@ -399,7 +399,7 @@ def index():
     # "/" is the marketing page. Signed in, it renders logged-out chrome and
     # reads as a dropped session, so send those visitors into the app instead.
     if auth.current_user():
-        return redirect(url_for("search"))
+        return redirect(url_for("overview"))
     return render_template("landing.html", deals=PLACEHOLDER_DEALS)
 
 
@@ -464,7 +464,12 @@ def fetch_offer_view(offer_id):
 def passenger_step():
     offer_id = request.form["offer_id"]
     try:
-        return render_template("passenger.html", nav="search", offer=fetch_offer_view(offer_id))
+        return render_template("passenger.html", nav="search",
+                               offer=fetch_offer_view(offer_id),
+                               # only the passenger fields reach the page —
+                               # internal ids and timestamps have no business there
+                               saved=[{k: t[k] for k in db.TRAVELER_FIELDS}
+                                      for t in db.travelers(_account())])
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form={},
                                error=f"{exc} — offers expire; search again.")
@@ -552,6 +557,66 @@ def trip_booked(order_id):
 # ---------------------------------------------------------------------------
 # employee views
 # ---------------------------------------------------------------------------
+
+@app.route("/overview")
+@auth.login_required
+def overview():
+    """Account numbers, all of them derived from db.account_summary so this
+    page can never disagree with the pages it summarises."""
+    return render_template("overview.html", nav="overview",
+                           s=db.account_summary(_account()))
+
+
+# ---------------------------------------------------------------------------
+# travellers — passenger profiles, not logins
+# ---------------------------------------------------------------------------
+
+@app.route("/travelers")
+@auth.login_required
+def travelers():
+    return render_template("travelers.html", nav="travelers",
+                           travelers=db.travelers(_account()), form={}, editing=None)
+
+
+@app.route("/travelers/new", methods=["POST"])
+@auth.login_required
+def traveler_new():
+    form = {f: request.form.get(f, "").strip() for f in db.TRAVELER_FIELDS}
+    if not (form["given_name"] and form["family_name"]):
+        return render_template("travelers.html", nav="travelers",
+                               travelers=db.travelers(_account()), form=form,
+                               editing=None,
+                               error="First and last name are required."), 400
+    db.traveler_save(form, _account())
+    return redirect(url_for("travelers"))
+
+
+@app.route("/travelers/<traveler_id>/edit", methods=["GET", "POST"])
+@auth.login_required
+def traveler_edit(traveler_id):
+    existing = db.traveler(traveler_id, _account())
+    if not existing:
+        return redirect(url_for("travelers"))
+    if request.method == "POST":
+        form = {f: request.form.get(f, "").strip() for f in db.TRAVELER_FIELDS}
+        if not (form["given_name"] and form["family_name"]):
+            return render_template("travelers.html", nav="travelers",
+                                   travelers=db.travelers(_account()), form=form,
+                                   editing=traveler_id,
+                                   error="First and last name are required."), 400
+        db.traveler_save(form, _account(), traveler_id)
+        return redirect(url_for("travelers"))
+    return render_template("travelers.html", nav="travelers",
+                           travelers=db.travelers(_account()),
+                           form=existing, editing=traveler_id)
+
+
+@app.route("/travelers/<traveler_id>/delete", methods=["POST"])
+@auth.login_required
+def traveler_remove(traveler_id):
+    db.traveler_delete(traveler_id, _account())
+    return redirect(url_for("travelers"))
+
 
 @app.route("/trips")
 @auth.login_required

@@ -353,3 +353,83 @@ def recent_failures(email, ip, window_minutes):
 
 def clear_failures(email):
     q("DELETE FROM auth_failures WHERE email = %s", (email or "",))
+
+
+# ---------------------------------------------------------------------------
+# travellers (saved passenger profiles)
+# ---------------------------------------------------------------------------
+
+TRAVELER_FIELDS = ("title", "given_name", "family_name", "born_on", "gender",
+                   "email", "phone_number")
+
+
+def _traveler(row):
+    if row is None:
+        return None
+    t = dict(row)
+    t["born_on"] = t["born_on"].isoformat() if t.get("born_on") else ""
+    t["id"] = str(t["id"])        # so the picker can serialise these to JSON
+    return t
+
+
+def travelers(account_id):
+    rows = q("""SELECT * FROM travelers WHERE account_id = %s
+                ORDER BY family_name, given_name""", (account_id,), fetch="all")
+    return [_traveler(r) for r in rows]
+
+
+def traveler(traveler_id, account_id):
+    return _traveler(q("SELECT * FROM travelers WHERE id = %s AND account_id = %s",
+                       (traveler_id, account_id), fetch="one"))
+
+
+def traveler_save(data, account_id, traveler_id=None):
+    vals = [data.get(f) or None if f == "born_on" else (data.get(f) or "")
+            for f in TRAVELER_FIELDS]
+    if traveler_id:
+        sets = ", ".join(f"{f} = %s" for f in TRAVELER_FIELDS)
+        return _traveler(q(f"""UPDATE travelers SET {sets}, updated_at = now()
+                               WHERE id = %s AND account_id = %s RETURNING *""",
+                           (*vals, traveler_id, account_id), fetch="one"))
+    cols = ", ".join(TRAVELER_FIELDS)
+    holders = ", ".join(["%s"] * len(TRAVELER_FIELDS))
+    return _traveler(q(f"""INSERT INTO travelers (account_id, {cols})
+                           VALUES (%s, {holders}) RETURNING *""",
+                       (account_id, *vals), fetch="one"))
+
+
+def traveler_delete(traveler_id, account_id):
+    q("DELETE FROM travelers WHERE id = %s AND account_id = %s",
+      (traveler_id, account_id))
+
+
+# ---------------------------------------------------------------------------
+# account summary
+# ---------------------------------------------------------------------------
+
+def account_summary(account_id):
+    """The numbers Overview shows.
+
+    Computed here, once, so Overview and the pages it summarises cannot drift
+    apart — a dashboard claiming 184 travellers over a roster of 8 is the
+    failure mode this exists to prevent.
+    """
+    row = q("""SELECT
+                 count(*)                                        AS bookings,
+                 count(*) FILTER (WHERE monitoring)               AS monitoring,
+                 count(*) FILTER (WHERE departure_date >= current_date)
+                                                                  AS upcoming,
+                 count(*) FILTER (WHERE refunded IS NOT NULL)     AS rebooked,
+                 COALESCE(sum(paid), 0)                           AS spend,
+                 COALESCE(sum(refunded), 0)                       AS recovered,
+                 max(currency) FILTER (WHERE currency <> '')      AS currency
+               FROM orders WHERE account_id = %s""", (account_id,), fetch="one")
+    out = dict(row)
+    out["currency"] = out["currency"] or "USD"
+    out["travelers"] = q("SELECT count(*) AS n FROM travelers WHERE account_id = %s",
+                         (account_id,), fetch="one")["n"]
+    out["decisions"] = q("""SELECT count(*) AS n FROM audit_events
+                            WHERE order_id IN (SELECT order_id FROM orders
+                                               WHERE account_id = %s)""",
+                         (account_id,), fetch="one")["n"]
+    return out
