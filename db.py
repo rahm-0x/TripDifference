@@ -327,3 +327,29 @@ def end_session(token):
     if token:
         q("UPDATE sessions SET revoked_at = now() WHERE token_hash = %s",
           (_hash_token(token),))
+
+
+# ---------------------------------------------------------------------------
+# login throttling
+# ---------------------------------------------------------------------------
+
+def record_failure(email, ip):
+    q("INSERT INTO auth_failures (email, ip) VALUES (%s, %s::inet)",
+      (email or "", ip or None))
+
+
+def recent_failures(email, ip, window_minutes):
+    """Worst of the two counts. Throttling only by email lets one attacker
+    spray many accounts from one host; only by IP lets a botnet grind one
+    account."""
+    row = q("""SELECT
+                 count(*) FILTER (WHERE email = %s) AS by_email,
+                 count(*) FILTER (WHERE ip = %s::inet) AS by_ip
+               FROM auth_failures
+               WHERE ts > now() - make_interval(mins => %s)""",
+            (email or "", ip or None, window_minutes), fetch="one")
+    return max(row["by_email"], row["by_ip"])
+
+
+def clear_failures(email):
+    q("DELETE FROM auth_failures WHERE email = %s", (email or "",))

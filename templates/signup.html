@@ -10,6 +10,7 @@
 
   <div class="card">
     <form method="post" action="{{ url_for('signup') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div class="grid2">
         <div class="field">
           <label for="given_name">First name</label>

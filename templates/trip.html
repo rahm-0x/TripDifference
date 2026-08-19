@@ -133,6 +133,7 @@
             </div>
           </div>
           <form method="post" action="{{ url_for('toggle_monitor', order_id=trip.order_id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
             <input type="hidden" name="next" value="trip">
             <button type="submit" class="switch {{ 'on' if trip.monitoring }}"
                     aria-label="Toggle monitoring"><span></span></button>

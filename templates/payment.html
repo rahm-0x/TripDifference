@@ -17,6 +17,7 @@
     </div>
 
     <form method="post" action="{{ url_for('book') }}" id="payForm">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <input type="hidden" name="offer_id" value="{{ offer.id }}">
       {% for k, v in passenger.items() %}
       <input type="hidden" name="{{ k }}" value="{{ v }}">

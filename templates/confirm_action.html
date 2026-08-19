@@ -41,6 +41,7 @@
 
     <form method="post" action="{{ url_for('execute', order_id=order.order_id, action=action) }}"
           style="margin-top:18px">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div class="field">
         <label for="confirm_text">Type CONFIRM to proceed</label>
         <input id="confirm_text" name="confirm_text" autocomplete="off"

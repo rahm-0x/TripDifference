@@ -17,6 +17,7 @@
     </div>
 
     <form method="post" action="{{ url_for('payment_step') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <input type="hidden" name="offer_id" value="{{ offer.id }}">
 
       <div class="card">

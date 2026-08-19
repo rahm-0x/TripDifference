@@ -10,6 +10,7 @@
 
   <div class="card">
     <form method="post" action="{{ url_for('search') }}" id="searchForm">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div style="display:flex; gap:6px; margin-bottom:16px;">
         <label class="trip-toggle">
           <input type="radio" name="trip_type" value="one_way" {{ 'checked' if form.trip_type != 'round_trip' }}>
@@ -128,6 +129,7 @@
         <div class="price">{{ o.amount }}<span class="cur">{{ o.currency }}</span></div>
       </div>
       <form method="post" action="{{ url_for('passenger_step') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <input type="hidden" name="offer_id" value="{{ o.id }}">
         <button type="submit" class="btn-sm">Select</button>
       </form>

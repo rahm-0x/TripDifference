@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Something went wrong — Trip Difference{% endblock %}
+{% block body %}
+<div style="max-width:440px; margin:60px auto 0; text-align:center">
+  <div class="page-head">
+    <h1>Something went wrong</h1>
+    <p>{{ error }}</p>
+  </div>
+  <a href="{{ url_for('index') }}" class="btn">Back to search</a>
+</div>
+{% endblock %}

@@ -54,6 +54,15 @@ if not _secret:
                            "with a publicly known key")
     _secret = "trip-difference-local-rig"
 app.secret_key = _secret
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    # Lax still sends the cookie on top-level GET navigation, so the
+    # "sign in then land where you were going" flow keeps working, while
+    # cross-site POSTs arrive without it.
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=paths.ON_VERCEL,
+    PERMANENT_SESSION_LIFETIME=db.SESSION_TTL,
+)
 
 DEFAULT_POLICY = ReshopPolicy(min_saving=Decimal("20.00"), departure_buffer_hours=24)
 
@@ -76,11 +85,26 @@ PLACEHOLDER_DEALS = [
 ]
 
 
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.before_request
+def _csrf_guard():
+    """Every state-changing request, without exception. A per-form hidden field
+    is something you forget on the one form that matters."""
+    if request.method in UNSAFE_METHODS and not auth.csrf_ok():
+        return render_template("error.html",
+                               hide_nav=True,
+                               error="That form expired or came from somewhere "
+                                     "else. Go back and try again."), 403
+
+
 @app.context_processor
 def inject_globals():
     user = auth.current_user()
     return {"user": auth.view_model(user), "card": CARD,
-            "policy": DEFAULT_POLICY, "profile": auth.profile_of(user)}
+            "policy": DEFAULT_POLICY, "profile": auth.profile_of(user),
+            "csrf_token": auth.csrf_token()}
 
 
 # ---------------------------------------------------------------------------
@@ -311,13 +335,24 @@ def _safe_next(target):
 def login():
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
+        ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+              or request.remote_addr)
+
+        if auth.throttled(email, ip):
+            return render_template(
+                "login.html", hide_nav=True, prefill_email=email,
+                error="Too many failed attempts. Wait a few minutes and "
+                      "try again."), 429
+
         user = db.user_by_email(email)
         if not user or not auth.check_password(user["password_hash"],
                                                request.form.get("password", "")):
+            db.record_failure(email, ip)
             # One message for both cases — telling an attacker which half was
             # wrong turns the form into an account enumerator.
             return render_template("login.html", hide_nav=True, prefill_email=email,
                                    error="That email and password don't match."), 401
+        db.clear_failures(email)
         auth.sign_in(user["id"])
         return redirect(_safe_next(request.args.get("next")))
     return render_template("login.html", hide_nav=True, prefill_email="")

@@ -47,6 +47,7 @@
       <div class="price">{{ o.paid }}<span class="cur">{{ o.currency }}</span></div>
     </div>
     <form method="post" action="{{ url_for('toggle_monitor', order_id=o.order_id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <button type="submit" class="btn-ghost btn-sm">
         {% if o.monitoring %}<span class="tag tag-sage"><span class="dot"></span>Monitoring</span>
         {% else %}<span class="tag tag-mute">Paused</span>{% endif %}
@@ -112,6 +113,7 @@
 
   <div class="ops-act">
     <form method="post" action="{{ url_for('simulate', order_id=o.order_id) }}" class="sim">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div>
         <label for="mp{{ loop.index }}">sim market</label>
         <input id="mp{{ loop.index }}" name="market_price" class="mono"
@@ -126,6 +128,7 @@
     </form>
 
     <form method="post" action="{{ url_for('cycle', order_id=o.order_id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <input type="hidden" name="source" value="duffel">
       <button type="submit" class="btn-ghost btn-sm">Run live cycle</button>
     </form>

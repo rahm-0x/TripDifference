@@ -10,6 +10,7 @@
 
   <div class="card">
     <form method="post" action="{{ url_for('login') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div class="field">
         <label for="email">Work email</label>
         <input id="email" name="email" type="email" placeholder="you@company.com"
@@ -27,14 +28,6 @@
       <button type="submit" class="btn-block" style="margin-top:6px">Sign in</button>
     </form>
 
-    <div class="sep"><span>or</span></div>
-
-    <form method="post" action="{{ url_for('login') }}">
-      <input type="hidden" name="sso" value="1">
-      <button type="submit" class="btn-ghost btn-block">
-        <span class="sso-mark">◆</span> Continue with company SSO
-      </button>
-    </form>
   </div>
 
   <p class="foot">
@@ -45,9 +38,6 @@
 
 <style>
   .auth { max-width:400px; margin:40px auto 0; }
-  .sep { display:flex; align-items:center; gap:12px; margin:20px 0; color:var(--ink-faint); font-size:12px; }
-  .sep::before, .sep::after { content:''; flex:1; height:1px; background:var(--line); }
-  .sso-mark { color:var(--terra); font-size:12px; }
   .foot { text-align:center; margin-top:18px; font-size:13.5px; color:var(--ink-soft); }
 </style>
 
