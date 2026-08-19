@@ -396,19 +396,35 @@ def logout():
 
 @app.route("/", methods=["GET"])
 def index():
+    # "/" is the marketing page. Signed in, it renders logged-out chrome and
+    # reads as a dropped session, so send those visitors into the app instead.
+    if auth.current_user():
+        return redirect(url_for("search"))
     return render_template("landing.html", deals=PLACEHOLDER_DEALS)
 
 
-@app.route("/search", methods=["POST"])
+@app.route("/search", methods=["GET"])
 def search():
+    """The app's search page.
+
+    GET with query parameters on purpose. As a POST the results page could not
+    be returned to — the browser had nothing to replay and showed
+    ERR_CACHE_MISS on back/forward — and a search could not be linked or
+    bookmarked. Nothing here mutates state, so GET is also the honest verb.
+    """
     form = {
-        "origin": request.form.get("origin", "").strip().upper(),
-        "destination": request.form.get("destination", "").strip().upper(),
-        "date": request.form.get("date", "").strip(),
-        "return_date": request.form.get("return_date", "").strip(),
-        "cabin": request.form.get("cabin", "economy"),
-        "trip_type": request.form.get("trip_type", "one_way"),
+        "origin": request.args.get("origin", "").strip().upper(),
+        "destination": request.args.get("destination", "").strip().upper(),
+        "date": request.args.get("date", "").strip(),
+        "return_date": request.args.get("return_date", "").strip(),
+        "cabin": request.args.get("cabin", "economy"),
+        "trip_type": request.args.get("trip_type", "one_way"),
     }
+
+    # Arriving from the sidebar with nothing filled in yet is not an error.
+    if not any((form["origin"], form["destination"], form["date"])):
+        return render_template("results.html", nav="search", offers=None, form=form)
+
     if not (form["origin"] and form["destination"] and form["date"]):
         return render_template("results.html", nav="search", offers=None, form=form,
                                error="Origin, destination and departure date are required.")

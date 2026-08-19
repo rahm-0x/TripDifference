@@ -302,6 +302,8 @@
   .plain { display: flex; flex-direction: column; min-height: 100vh; }
   .plain-bar { border-bottom: 1px solid var(--line-soft); }
   .plain-bar .topbar-in { max-width: 1160px; margin: 0 auto; }
+  .signin { font-size: .9rem; font-weight: 500; color: var(--muted); }
+  .signin:hover { color: var(--text); }
 
   @media (max-width: 980px) {
     .shell { flex-direction: column; }
@@ -343,14 +345,14 @@
 
 {# One shell, two modes: `hide_nav` (auth screens) drops the sidebar and the
    top-bar controls, leaving just the wordmark over a centred column. #}
-<div class="{{ 'plain' if hide_nav else 'shell' }}">
+<div class="{{ 'plain' if (hide_nav or not user) else 'shell' }}">
 
-  {% if not hide_nav %}
+  {% if user and not hide_nav %}
   <aside class="side">
     <div class="side-head">{{ brandmark() }}</div>
 
     <nav class="topnav">
-      <a href="{{ url_for('index') }}" class="{{ 'on' if nav == 'search' }}">
+      <a href="{{ url_for('search') }}" class="{{ 'on' if nav == 'search' }}">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
         Search
       </a>
@@ -389,8 +391,14 @@
   <div class="col">
     <div class="topbar{{ ' plain-bar' if hide_nav }}">
       <div class="topbar-in">
-        {% if hide_nav %}
+        {% if hide_nav or not user %}
           {{ brandmark() }}
+          {% if not hide_nav and not user %}
+          <div class="bar-right">
+            <a class="signin" href="{{ url_for('login') }}">Sign in</a>
+            <a class="btn btn-gold btn-sm" href="{{ url_for('signup') }}">Get started</a>
+          </div>
+          {% endif %}
         {% else %}
           <span class="crumb">{% block crumb %}{% endblock %}</span>
           <div class="bar-right">

@@ -9,8 +9,7 @@
   </div>
 
   <div class="card">
-    <form method="post" action="{{ url_for('search') }}" id="searchForm">
-      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <form method="get" action="{{ url_for('search') }}" id="searchForm">
       <div style="display:flex; gap:6px; margin-bottom:16px;">
         <label class="trip-toggle">
           <input type="radio" name="trip_type" value="one_way" {{ 'checked' if form.trip_type != 'round_trip' }}>
