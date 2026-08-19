@@ -526,3 +526,73 @@ def spend_by_carrier(account_id, top=5):
                  "spend": sum(r["spend"] for r in tail),
                  "bookings": sum(r["bookings"] for r in tail)})
     return head
+
+
+# ---------------------------------------------------------------------------
+# wallet ledger
+# ---------------------------------------------------------------------------
+
+def wallet_transactions(account_id, limit=100):
+    """Every real movement of money on this account, newest first.
+
+    Two sources, deliberately:
+
+      charges     one per booking, from `orders`
+      recoveries  one per *executed* exchange, from the audit trail, split into
+                  the amount recovered and our share of it
+
+    Only execution = 'executed' counts. A simulated or blocked exchange is a
+    decision the engine reached, not money that moved, and putting one in a
+    ledger would be a lie about the balance.
+    """
+    charges = q("""SELECT created_at AS ts, 'charge' AS kind, order_id,
+                          booking_reference, route, paid AS amount, currency
+                     FROM orders
+                    WHERE account_id = %s AND paid IS NOT NULL""",
+                (account_id,), fetch="all")
+
+    execs = q("""SELECT a.ts, a.order_id, o.booking_reference, o.route,
+                        a.payload->>'recovered'   AS recovered,
+                        a.payload->>'service_fee' AS service_fee,
+                        COALESCE(NULLIF(a.currency, ''), o.currency) AS currency
+                   FROM audit_events a
+                   JOIN orders o ON o.order_id = a.order_id
+                  WHERE o.account_id = %s
+                    AND a.kind = 'execution'
+                    AND a.execution = 'executed'
+                    AND a.payload->>'recovered' IS NOT NULL""",
+              (account_id,), fetch="all")
+
+    rows = []
+    for c in charges:
+        rows.append({"ts": c["ts"], "kind": "charge",
+                     "label": "Flight booked", "order_id": c["order_id"],
+                     "reference": c["booking_reference"], "route": c["route"],
+                     "amount": -Decimal(c["amount"]), "currency": c["currency"]})
+    for e in execs:
+        recovered = Decimal(e["recovered"])
+        fee = Decimal(e["service_fee"] or 0)
+        rows.append({"ts": e["ts"], "kind": "recovery",
+                     "label": "Fare drop recovered", "order_id": e["order_id"],
+                     "reference": e["booking_reference"], "route": e["route"],
+                     "amount": recovered, "currency": e["currency"]})
+        if fee:
+            rows.append({"ts": e["ts"], "kind": "fee",
+                         "label": "Service fee (25% of recovery)",
+                         "order_id": e["order_id"],
+                         "reference": e["booking_reference"], "route": e["route"],
+                         "amount": -fee, "currency": e["currency"]})
+
+    rows.sort(key=lambda r: r["ts"], reverse=True)
+    return rows[:limit]
+
+
+def wallet_totals(rows):
+    """Charged, recovered and fees — derived from the same rows the table
+    shows, so the summary can never disagree with the list under it."""
+    charged = sum(-r["amount"] for r in rows if r["kind"] == "charge")
+    recovered = sum(r["amount"] for r in rows if r["kind"] == "recovery")
+    fees = sum(-r["amount"] for r in rows if r["kind"] == "fee")
+    return {"charged": charged, "recovered": recovered, "fees": fees,
+            "net_back": recovered - fees,
+            "currency": rows[0]["currency"] if rows else "USD"}

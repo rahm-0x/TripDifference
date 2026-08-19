@@ -401,6 +401,11 @@
         Travellers
       </a>
 
+      <a href="{{ url_for('wallet') }}" class="{{ 'on' if nav == 'wallet' }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M21 7H5a1 1 0 0 1 0-2h15a1 1 0 0 0 0-2H5a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zm-4 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
+        Wallet
+      </a>
+
       <div class="nav-sec">Operations</div>
       <a href="{{ url_for('orders') }}" class="{{ 'on' if nav == 'ops' }}">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h4v8H3v-8zm7-9h4v17h-4V4zm7 5h4v12h-4V9z"/></svg>

@@ -808,6 +808,19 @@ def overview():
                            c_spend=SERIES_SPEND, c_saved=SERIES_SAVED)
 
 
+@app.route("/wallet")
+@auth.login_required
+def wallet():
+    """A ledger, not a stored balance.
+
+    Recovered fares go back to the card that paid, so there is no float being
+    held here — the page shows what moved and where it went, and says so.
+    """
+    rows = db.wallet_transactions(_account())
+    return render_template("wallet.html", nav="wallet", rows=rows,
+                           totals=db.wallet_totals(rows), card=CARD)
+
+
 # ---------------------------------------------------------------------------
 # travellers — passenger profiles, not logins
 # ---------------------------------------------------------------------------

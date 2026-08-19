@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Wallet — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Wallet</h1>
+  <p>Every movement of money on this account, newest first.</p>
+</div>
+
+<div class="notice" style="margin-bottom:18px">
+  <span>ℹ</span>
+  <div>
+    We don't hold a balance. Recovered fares go straight back to
+    {{ card.brand }} ending {{ card.last4 }} — the card that paid — so this is a
+    record of what moved, not a pot you can spend from.
+  </div>
+</div>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="lbl">Charged</div>
+    <div class="v">{{ totals.charged }}<span class="cur">{{ totals.currency }}</span></div>
+    <div class="sub">across all bookings</div>
+  </div>
+  <div class="tile">
+    <div class="lbl">Recovered</div>
+    <div class="v {{ 'good' if totals.recovered > 0 }}">{{ totals.recovered }}<span class="cur">{{ totals.currency }}</span></div>
+    <div class="sub">from fare drops</div>
+  </div>
+  <div class="tile">
+    <div class="lbl">Service fees</div>
+    <div class="v">{{ totals.fees }}<span class="cur">{{ totals.currency }}</span></div>
+    <div class="sub">25% of what we recover</div>
+  </div>
+  <div class="tile">
+    <div class="lbl">Net back to you</div>
+    <div class="v {{ 'good' if totals.net_back > 0 }}">{{ totals.net_back }}<span class="cur">{{ totals.currency }}</span></div>
+    <div class="sub">recovered less fees</div>
+  </div>
+</div>
+
+<h2 style="margin:28px 0 12px">Transactions</h2>
+
+{% if rows %}
+<div class="card" style="padding:0; overflow-x:auto">
+  <table class="ledger">
+    <thead>
+      <tr><th>Date</th><th>Description</th><th>Trip</th><th>Reference</th>
+          <th class="r">Amount</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="muted mono nw">{{ r.ts.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>
+          <span class="dot-k dot-{{ r.kind }}"></span>{{ r.label }}
+        </td>
+        <td class="muted">{{ r.route }}</td>
+        <td class="mono">{{ r.reference }}</td>
+        <td class="r num {{ 'neg' if r.amount > 0 else '' }}">
+          {{ '+' if r.amount > 0 }}{{ r.amount }}
+          <span class="cur">{{ r.currency }}</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="hint" style="margin-top:12px">
+  Only exchanges that actually completed appear here. A price drop the engine
+  decided on but did not execute is in the
+  <a href="{{ url_for('decisions') }}">decision log</a>, not in this ledger.
+</p>
+{% else %}
+<div class="card" style="text-align:center; padding:48px 24px">
+  <p class="muted" style="margin:0 0 16px">No transactions yet.</p>
+  <a href="{{ url_for('search') }}" class="btn">Search flights</a>
+</div>
+{% endif %}
+
+<style>
+  .tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+  .tile { background:var(--surface); border:1px solid var(--line);
+          border-radius:var(--r-card); padding:18px 20px; }
+  .tile .v { font-size:26px; font-weight:800; letter-spacing:-.035em; margin-top:6px;
+             font-variant-numeric:tabular-nums; }
+  .tile .v.good { color:var(--green); }
+  .tile .cur { font-size:12px; font-weight:600; color:var(--muted-2); margin-left:4px; }
+  .tile .sub { font-size:12.5px; color:var(--muted-2); margin-top:5px; }
+
+  .ledger th, .ledger td { padding:13px 16px; }
+  .ledger .r { text-align:right; }
+  .ledger .nw { white-space:nowrap; }
+  /* a shape as well as a colour, so the kind is not carried by hue alone */
+  .dot-k { display:inline-block; width:7px; height:7px; margin-right:9px;
+           vertical-align:middle; }
+  .dot-charge   { background:var(--muted-2); border-radius:2px; }
+  .dot-recovery { background:var(--green); border-radius:999px; }
+  .dot-fee      { background:var(--gold-dim); border-radius:999px; }
+  @media (max-width:980px){ .tiles { grid-template-columns:1fr 1fr; } }
+  @media (max-width:560px){ .tiles { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}
