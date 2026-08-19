@@ -1,0 +1,53 @@
+{# One booked trip. Shared by My trips and Overview so the two cannot drift. #}
+<div class="trip">
+  <div class="trip-main">
+    <div class="trip-route">
+      <div class="trip-od">{{ t.origin }} → {{ t.destination }}</div>
+      <div class="fl-meta">
+        {{ t.date_label }} · {{ t.carrier }} · <span class="mono">{{ t.itinerary }}</span>
+      </div>
+    </div>
+
+    <div class="trip-ref">
+      <div class="lbl" style="margin:0">Reference</div>
+      <div style="font-weight:700; letter-spacing:.06em">{{ t.booking_reference }}</div>
+    </div>
+
+    <div class="trip-price">
+      <div class="lbl" style="margin:0">{{ 'Paid' if not t.refunded else 'Now' }}</div>
+      <div class="price">{{ t.paid }}<span class="cur">{{ t.currency }}</span></div>
+      {% if t.refunded %}
+      <div class="was">was {{ t.original_paid }}</div>
+      {% endif %}
+    </div>
+
+    <div class="trip-status">
+      {% if t.refunded %}
+        <span class="tag tag-terra">Rebooked</span>
+      {% elif t.monitoring %}
+        <span class="tag tag-sage"><span class="dot"></span>Monitoring</span>
+      {% elif t.eligibility %}
+        <span class="tag {{ 'tag-danger' if t.eligibility.state == 'not_eligible' else 'tag-mute' }}"
+              title="{{ t.eligibility.detail }}">{{ t.eligibility.label }}</span>
+      {% else %}
+        <span class="tag tag-mute">Paused</span>
+      {% endif %}
+    </div>
+
+    <div class="trip-act">
+      <a href="{{ url_for('trip_detail', order_id=t.order_id) }}" class="btn btn-ghost btn-sm">View trip</a>
+    </div>
+  </div>
+
+  {% if t.refunded %}
+  <div class="drop">
+    <span class="drop-icon">↓</span>
+    <div>
+      <b>Price dropped — we rebooked you and refunded {{ t.refunded }} {{ t.currency }}.</b>
+      <span class="drop-sub">
+        Same flight{{ 's' if t.legs|length > 1 }}, same times. Refunded to {{ card.brand }} ending {{ card.last4 }}.
+      </span>
+    </div>
+  </div>
+  {% endif %}
+</div>

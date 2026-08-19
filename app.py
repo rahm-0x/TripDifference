@@ -689,8 +689,16 @@ def trip_booked(order_id):
 def overview():
     """Account numbers, all of them derived from db.account_summary so this
     page can never disagree with the pages it summarises."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    trips_ = [trip_view(r) for r in load_orders()]
+    upcoming = sorted((t for t in trips_ if (t["depart_iso"][:10] or "9999") >= today),
+                      key=lambda t: t["depart_iso"])
+    past = sorted((t for t in trips_ if (t["depart_iso"][:10] or "9999") < today),
+                  key=lambda t: t["depart_iso"], reverse=True)
+    # Same cards as My trips, capped — this is a summary, not the full list.
     return render_template("overview.html", nav="overview",
-                           s=db.account_summary(_account()))
+                           s=db.account_summary(_account()),
+                           upcoming=upcoming[:4], recent=past[:3])
 
 
 # ---------------------------------------------------------------------------
