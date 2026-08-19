@@ -360,6 +360,28 @@ def activity_chart(rows, w=720, h=150):
             "has_data": any(r["checks"] for r in rows)}
 
 
+def carrier_chart(rows, w=720, row_h=30):
+    """Horizontal bars, ranked. Not a donut: this is a comparison, and a pie of
+    close values is unreadable — with a single carrier it would be one 100%
+    slice, which is a stat tile, not a chart."""
+    total = sum(float(r["spend"]) for r in rows) or 1.0
+    biggest = max([float(r["spend"]) for r in rows] + [1.0])
+    label_w, pad_r = 150, 96
+    track = w - label_w - pad_r
+    bars = []
+    for i, r in enumerate(rows):
+        v = float(r["spend"])
+        bars.append({
+            "y": i * row_h, "h": row_h - 10,
+            "w": round(track * v / biggest, 1),
+            "carrier": r["carrier"], "value": f"{v:,.2f}",
+            "share": f"{v / total * 100:.0f}%",
+            "bookings": r["bookings"],
+        })
+    return {"bars": bars, "w": w, "h": max(len(rows) * row_h, row_h),
+            "label_w": label_w, "total": f"{total:,.2f}"}
+
+
 def build_chart(order_id, paid):
     """Tiny inline-SVG line chart. Coordinates computed here, drawn in the template."""
     pts = price_history(order_id)
@@ -773,6 +795,7 @@ def overview():
     acct = _account()
     months = db.monthly_series(acct)
     weeks = db.weekly_activity(acct)
+    carriers = db.spend_by_carrier(acct)
     return render_template("overview.html", nav="overview",
                            s=db.account_summary(acct),
                            upcoming=upcoming[:4], recent=past[:3],
@@ -780,6 +803,8 @@ def overview():
                            spend_chart=spend_chart(months),
                            activity=activity_chart(weeks),
                            bookings=db.recent_bookings(acct),
+                           carriers=carriers,
+                           carrier_chart=carrier_chart(carriers) if carriers else None,
                            c_spend=SERIES_SPEND, c_saved=SERIES_SAVED)
 
 

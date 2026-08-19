@@ -504,3 +504,25 @@ def recent_bookings(account_id, limit=5):
             "monitoring": r["monitoring"],
         })
     return out
+
+
+def spend_by_carrier(account_id, top=5):
+    """Spend per airline, biggest first, with the tail folded into "Other".
+
+    Folded rather than cycled: past a handful of slots the categories stop
+    being tellable apart, and this is one measure across categories anyway.
+    """
+    rows = q("""SELECT COALESCE(NULLIF(carrier, ''), 'Unknown') AS carrier,
+                       sum(paid)  AS spend,
+                       count(*)   AS bookings
+                  FROM orders
+                 WHERE account_id = %s AND paid IS NOT NULL
+                 GROUP BY 1 ORDER BY 2 DESC""", (account_id,), fetch="all")
+    rows = [dict(r) for r in rows]
+    if len(rows) <= top:
+        return rows
+    head, tail = rows[:top], rows[top:]
+    head.append({"carrier": "Other",
+                 "spend": sum(r["spend"] for r in tail),
+                 "bookings": sum(r["bookings"] for r in tail)})
+    return head

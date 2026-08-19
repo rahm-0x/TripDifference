@@ -126,6 +126,52 @@
     <p class="muted empty">No fare checks yet. Monitoring starts once a trip is booked.</p>
     {% endif %}
   </div>
+
+  <!-- ---------- spend by carrier ---------- -->
+  <div class="card chart-card">
+    <div class="chart-head">
+      <h3>Spend by carrier</h3>
+      {% if carriers %}<span class="muted" style="font-size:12.5px">{{ carrier_chart.total }} {{ s.currency }} total</span>{% endif %}
+    </div>
+
+    {% if not carriers %}
+      <p class="muted empty">No spend recorded yet.</p>
+    {% elif carriers|length == 1 %}
+      {# One carrier is a number, not a chart — a single 100% bar says nothing. #}
+      <div class="solo">
+        <div class="lbl">All spend with</div>
+        <div class="solo-n">{{ carriers[0].carrier }}</div>
+        <div class="solo-v">{{ carriers[0].spend }}<span class="cur">{{ s.currency }}</span>
+          <span class="muted">· {{ carriers[0].bookings }} booking{{ 's' if carriers[0].bookings != 1 }}</span>
+        </div>
+      </div>
+    {% else %}
+    <svg class="plot" viewBox="0 0 {{ carrier_chart.w }} {{ carrier_chart.h }}"
+         role="img" aria-label="Spend by airline, largest first">
+      {% for b in carrier_chart.bars %}
+      <text x="0" y="{{ b.y + b.h - 5 }}" class="ax lbl-l">{{ b.carrier }}</text>
+      <rect x="{{ carrier_chart.label_w }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
+            rx="4" fill="{{ c_spend }}"
+            data-tip="{{ b.carrier }} · {{ b.value }} {{ s.currency }} · {{ b.bookings }} booking{{ 's' if b.bookings != 1 }} · {{ b.share }}"/>
+      <text x="{{ carrier_chart.label_w + b.w + 10 }}" y="{{ b.y + b.h - 5 }}"
+            class="ax val">{{ b.value }}</text>
+      {% endfor %}
+    </svg>
+
+    <details class="tv">
+      <summary>Show as a table</summary>
+      <table>
+        <thead><tr><th>Carrier</th><th>Spend</th><th>Bookings</th><th>Share</th></tr></thead>
+        <tbody>
+          {% for b in carrier_chart.bars %}
+          <tr><td>{{ b.carrier }}</td><td class="num">{{ b.value }} {{ s.currency }}</td>
+              <td class="num">{{ b.bookings }}</td><td class="num">{{ b.share }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+  </div>
 </div>
 
 <!-- ---------- recent bookings ---------- -->
@@ -187,6 +233,16 @@
   .tile .sub { font-size:12.5px; color:var(--muted-2); margin-top:5px; }
 
   .charts { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
+  /* the money-over-time chart is the headline; it gets the full row */
+  .charts > .chart-card:first-child { grid-column:1 / -1; }
+  .ax.lbl-l { fill:var(--muted); font-size:11.5px; }
+  .ax.val { fill:var(--text); font-weight:600; font-size:11.5px;
+            font-variant-numeric:tabular-nums; }
+  .solo { padding:14px 0 6px; }
+  .solo-n { font-size:17px; font-weight:700; letter-spacing:-.02em; margin-top:4px; }
+  .solo-v { font-size:24px; font-weight:800; letter-spacing:-.035em; margin-top:8px;
+            font-variant-numeric:tabular-nums; }
+  .solo-v .muted { font-size:13px; font-weight:500; letter-spacing:0; }
   .chart-card { padding:18px 20px; }
   .chart-head { display:flex; align-items:baseline; justify-content:space-between;
                 gap:12px; margin-bottom:12px; }
