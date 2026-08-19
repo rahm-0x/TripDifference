@@ -39,6 +39,16 @@
     </div>
   </div>
 
+  {% if t.simulated and not t.refunded %}
+  <div class="drop drop-sim">
+    <span class="drop-icon">≈</span>
+    <div>
+      <b>Simulated: a {{ t.sim_refunded }} {{ t.currency }} drop would rebook this trip.</b>
+      <span class="drop-sub">Nothing has been booked or refunded — this is a what-if from the ops console.</span>
+    </div>
+  </div>
+  {% endif %}
+
   {% if t.refunded %}
   <div class="drop">
     <span class="drop-icon">↓</span>

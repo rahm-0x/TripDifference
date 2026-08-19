@@ -141,8 +141,8 @@ def audit_rows(limit=300, order_id=None):
 _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "departure_date", "paid", "original_paid", "refunded",
                "currency", "monitoring", "executed", "raw", "last_decision",
-               "sim_scenario")
-_MONEY = {"paid", "original_paid", "refunded"}
+               "sim_scenario", "simulated", "sim_paid", "sim_refunded")
+_MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
 # DEFAULT never fires — the coercion has to happen here instead.
@@ -202,7 +202,7 @@ def upsert_order(record, account_id):
                 v = Jsonb(v) if v is not None else None
             elif k in _TEXT_NOT_NULL:
                 v = v or ""
-            elif k == "monitoring":
+            elif k in ("monitoring", "simulated"):
                 v = bool(v)
             vals[k] = v
 
@@ -421,6 +421,8 @@ def account_summary(account_id):
                  count(*) FILTER (WHERE departure_date >= current_date)
                                                                   AS upcoming,
                  count(*) FILTER (WHERE refunded IS NOT NULL)     AS rebooked,
+                 count(*) FILTER (WHERE simulated)                 AS simulated,
+                 COALESCE(sum(sim_refunded) FILTER (WHERE simulated), 0) AS sim_recovered,
                  COALESCE(sum(paid), 0)                           AS spend,
                  COALESCE(sum(refunded), 0)                       AS recovered,
                  max(currency) FILTER (WHERE currency <> '')      AS currency
@@ -552,7 +554,11 @@ def wallet_transactions(account_id, limit=100):
                     WHERE account_id = %s AND paid IS NOT NULL""",
                 (account_id,), fetch="all")
 
+    # Simulated recoveries are included so the flow can be demonstrated, but
+    # they arrive flagged and every view that shows them says so. They are
+    # never added into a real total.
     execs = q("""SELECT a.ts, a.order_id, o.booking_reference, o.route,
+                        a.execution,
                         a.payload->>'recovered'   AS recovered,
                         a.payload->>'service_fee' AS service_fee,
                         COALESCE(NULLIF(a.currency, ''), o.currency) AS currency
@@ -560,25 +566,26 @@ def wallet_transactions(account_id, limit=100):
                    JOIN orders o ON o.order_id = a.order_id
                   WHERE o.account_id = %s
                     AND a.kind = 'execution'
-                    AND a.execution = 'executed'
+                    AND a.execution IN ('executed', 'blocked_simulated')
                     AND a.payload->>'recovered' IS NOT NULL""",
               (account_id,), fetch="all")
 
     rows = []
     for c in charges:
-        rows.append({"ts": c["ts"], "kind": "charge",
+        rows.append({"ts": c["ts"], "kind": "charge", "simulated": False,
                      "label": "Flight booked", "order_id": c["order_id"],
                      "reference": c["booking_reference"], "route": c["route"],
                      "amount": -Decimal(c["amount"]), "currency": c["currency"]})
     for e in execs:
         recovered = Decimal(e["recovered"])
         fee = Decimal(e["service_fee"] or 0)
-        rows.append({"ts": e["ts"], "kind": "recovery",
+        sim = e["execution"] != "executed"
+        rows.append({"ts": e["ts"], "kind": "recovery", "simulated": sim,
                      "label": "Fare drop recovered", "order_id": e["order_id"],
                      "reference": e["booking_reference"], "route": e["route"],
                      "amount": recovered, "currency": e["currency"]})
         if fee:
-            rows.append({"ts": e["ts"], "kind": "fee",
+            rows.append({"ts": e["ts"], "kind": "fee", "simulated": sim,
                          "label": "Service fee (25% of recovery)",
                          "order_id": e["order_id"],
                          "reference": e["booking_reference"], "route": e["route"],
@@ -591,9 +598,15 @@ def wallet_transactions(account_id, limit=100):
 def wallet_totals(rows):
     """Charged, recovered and fees — derived from the same rows the table
     shows, so the summary can never disagree with the list under it."""
-    charged = sum(-r["amount"] for r in rows if r["kind"] == "charge")
-    recovered = sum(r["amount"] for r in rows if r["kind"] == "recovery")
-    fees = sum(-r["amount"] for r in rows if r["kind"] == "fee")
+    real = [r for r in rows if not r["simulated"]]
+    sim = [r for r in rows if r["simulated"]]
+    charged = sum(-r["amount"] for r in real if r["kind"] == "charge")
+    recovered = sum(r["amount"] for r in real if r["kind"] == "recovery")
+    fees = sum(-r["amount"] for r in real if r["kind"] == "fee")
     return {"charged": charged, "recovered": recovered, "fees": fees,
             "net_back": recovered - fees,
+            # kept apart on purpose — a simulated recovery is not money
+            "sim_recovered": sum(r["amount"] for r in sim if r["kind"] == "recovery"),
+            "sim_fees": sum(-r["amount"] for r in sim if r["kind"] == "fee"),
+            "has_simulated": bool(sim),
             "currency": rows[0]["currency"] if rows else "USD"}

@@ -260,6 +260,10 @@ def trip_view(record):
         "changeable": bool(snap.changeable) if snap else False,
         "refunded": record.get("refunded"),
         "original_paid": record.get("original_paid"),
+        # A simulated rebooking shows alongside the real figures, never as one.
+        "simulated": bool(record.get("simulated")),
+        "sim_refunded": record.get("sim_refunded"),
+        "sim_paid": record.get("sim_paid"),
         "last_checked": (d.get("ts") or "")[:19].replace("T", " ") or None,
         "last_decision": d or None,
         "email": pax.get("email"),
@@ -1019,8 +1023,42 @@ def simulate(order_id):
     # between instances, nothing to go missing between two requests.
     sim = SimulatedPriceSource(data={"orders": {order_id: scenario}})
     upsert_order({"order_id": order_id, "sim_scenario": scenario})
-    _run_cycle(order_id, sim)
+    d = _run_cycle(order_id, sim)
+
+    # Write the outcome through so the rest of the app can be demonstrated —
+    # into sim_* columns, never over `paid` or `refunded`. Clearing a
+    # simulation therefore restores the truth exactly, not approximately.
+    if d and d.should_reshop and d.recovered is not None:
+        paid = Decimal(record.get("paid") or 0)
+        upsert_order({"order_id": order_id, "simulated": True,
+                      "sim_refunded": str(d.recovered),
+                      "sim_paid": str(paid - d.recovered)})
+    else:
+        # A run that no longer reshops must not leave the last one standing.
+        upsert_order({"order_id": order_id, "simulated": False,
+                      "sim_refunded": None, "sim_paid": None})
     return redirect(url_for("orders"))
+
+
+@app.route("/orders/<order_id>/reset-sim", methods=["POST"])
+@auth.login_required
+def reset_sim(order_id):
+    if find_order(order_id):
+        upsert_order({"order_id": order_id, "simulated": False,
+                      "sim_refunded": None, "sim_paid": None})
+    return redirect(request.form.get("back") or url_for("orders"))
+
+
+@app.route("/orders/reset-sim", methods=["POST"])
+@auth.login_required
+def reset_sim_all():
+    """Clear every simulated result on the account in one go — the real
+    columns were never touched, so this is a complete undo."""
+    for r in load_orders():
+        if r.get("simulated"):
+            upsert_order({"order_id": r["order_id"], "simulated": False,
+                          "sim_refunded": None, "sim_paid": None})
+    return redirect(request.form.get("back") or url_for("orders"))
 
 
 @app.route("/orders/<order_id>/cycle", methods=["POST"])

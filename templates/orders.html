@@ -105,6 +105,23 @@
   {% endif %}
   {% endif %}
 
+  {% if o.simulated %}
+  <div class="notice notice-terra" style="margin-top:12px">
+    <span>≈</span>
+    <div style="display:flex; align-items:center; gap:12px; width:100%">
+      <div>
+        <b>Simulated rebooking applied</b> — {{ o.sim_refunded }} {{ o.currency }} recovered,
+        showing as simulated on the trip, wallet and overview. No money moved.
+      </div>
+      <form method="post" action="{{ url_for('reset_sim', order_id=o.order_id) }}"
+            style="margin-left:auto">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn-ghost btn-sm">Reset</button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
   {% if o.executed %}
   <div class="notice" style="margin-top:12px; background:var(--sage-wash); border-color:rgba(95,191,127,.22); color:var(--green)">
     <span>✓</span><div class="mono">{{ o.executed }}</div>

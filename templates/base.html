@@ -322,6 +322,10 @@
     display:grid; place-items:center; font-size:13px; font-weight:800; flex:none;
   }
   .drop-sub { display:block; color:var(--muted); margin-top:2px; }
+  /* a what-if, not a refund — different colour and a different icon */
+  .drop.drop-sim { background:var(--terra-wash); border-top-color:rgba(212,171,79,.22);
+                   color:var(--gold); }
+  .drop.drop-sim .drop-icon { background:var(--gold); color:#0A0700; }
 
   @media (max-width:940px){
     .trip-main { grid-template-columns:1fr 1fr; }

@@ -39,6 +39,21 @@
   </div>
 </div>
 
+{% if totals.has_simulated %}
+<div class="notice notice-terra" style="margin-bottom:18px">
+  <span>⚠</span>
+  <div>
+    <b>{{ totals.sim_recovered }} {{ totals.currency }} of simulated recovery</b>
+    is shown below and is <b>not</b> counted in the totals above — no money moved.
+    <form method="post" action="{{ url_for('reset_sim_all') }}" style="display:inline">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="back" value="{{ url_for('wallet') }}">
+      <button type="submit" class="btn-ghost btn-sm" style="margin-left:8px">Clear simulated</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 <h2 style="margin:28px 0 12px">Transactions</h2>
 
 {% if rows %}
@@ -54,10 +69,12 @@
         <td class="muted mono nw">{{ r.ts.strftime('%Y-%m-%d %H:%M') }}</td>
         <td>
           <span class="dot-k dot-{{ r.kind }}"></span>{{ r.label }}
+          {% if r.simulated %}<span class="tag tag-mute sim-tag">simulated</span>{% endif %}
         </td>
         <td class="muted">{{ r.route }}</td>
         <td class="mono">{{ r.reference }}</td>
-        <td class="r num {{ 'neg' if r.amount > 0 else '' }}">
+        <td class="r num {{ 'neg' if r.amount > 0 and not r.simulated else '' }}
+                   {{ 'sim-amt' if r.simulated }}">
           {{ '+' if r.amount > 0 }}{{ r.amount }}
           <span class="cur">{{ r.currency }}</span>
         </td>
@@ -97,6 +114,8 @@
   .dot-charge   { background:var(--muted-2); border-radius:2px; }
   .dot-recovery { background:var(--green); border-radius:999px; }
   .dot-fee      { background:var(--gold-dim); border-radius:999px; }
+  .sim-tag { margin-left:9px; font-size:10.5px; padding:2px 8px; }
+  .sim-amt { opacity:.55; font-style:italic; }
   @media (max-width:980px){ .tiles { grid-template-columns:1fr 1fr; } }
   @media (max-width:560px){ .tiles { grid-template-columns:1fr; } }
 </style>
