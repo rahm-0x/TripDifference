@@ -141,7 +141,8 @@ def audit_rows(limit=300, order_id=None):
 _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "departure_date", "paid", "original_paid", "refunded",
                "currency", "monitoring", "executed", "raw", "last_decision",
-               "sim_scenario", "simulated", "sim_paid", "sim_refunded")
+               "sim_scenario", "simulated", "sim_paid", "sim_refunded",
+               "offer_id")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
@@ -619,3 +620,11 @@ def wallet_totals(rows):
             "sim_fees": sum(-r["amount"] for r in sim if r["kind"] == "fee"),
             "has_simulated": bool(sim),
             "currency": rows[0]["currency"] if rows else "USD"}
+
+
+def order_for_offer(account_id, offer_id):
+    """The order a given offer already produced, if any."""
+    return _to_record(q("""SELECT * FROM orders
+                            WHERE account_id = %s AND offer_id = %s
+                            ORDER BY created_at LIMIT 1""",
+                        (account_id, offer_id), fetch="one"))

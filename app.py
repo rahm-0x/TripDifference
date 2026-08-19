@@ -733,12 +733,19 @@ def book():
             }
         }, label="ui_book")
     except (DuffelError, RuntimeError) as exc:
-        hint = ""
         if isinstance(exc, DuffelError) and "offer_request_already_booked" in (exc.codes or []):
-            hint = (" — an offer request is single use; this search has already been "
-                    "booked from. Search again for fresh offers.")
+            # Almost always a double-submitted Pay button. The first attempt
+            # succeeded, so show that booking rather than an error implying the
+            # customer was not booked at all.
+            existing = db.order_for_offer(_account(), offer_id)
+            if existing:
+                return redirect(url_for("trip_booked", order_id=existing["order_id"]))
+            return render_template("results.html", nav="search", offers=None, form={},
+                                   error="That search has already been booked from — "
+                                         "offers are single use. Search again for fresh "
+                                         "prices.")
         return render_template("results.html", nav="search", offers=None, form={},
-                               error=str(exc) + hint)
+                               error=str(exc))
 
     snap = OrderSnapshot.from_duffel(order)
 
@@ -748,6 +755,7 @@ def book():
 
     upsert_order({
         "order_id": order["id"],
+        "offer_id": offer_id,
         "booking_reference": order.get("booking_reference", ""),
         "paid": order["total_amount"], "currency": order["total_currency"],
         "route": str(snap.route), "itinerary": str(snap.itinerary),
