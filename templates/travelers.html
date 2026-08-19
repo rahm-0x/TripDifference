@@ -87,8 +87,9 @@
         </div>
         <div class="field">
           <label for="phone_number">Phone</label>
-          <input id="phone_number" name="phone_number" value="{{ form.phone_number or '' }}"
-                 placeholder="+44...">
+          <input id="phone_number" name="phone_number" type="tel"
+                 value="{{ form.phone_number or '' }}" placeholder="+15551234567">
+          <p class="hint">Include the country code — airlines reject numbers without one.</p>
         </div>
         <button type="submit" class="btn-block">
           {{ 'Save changes' if editing else 'Add traveller' }}</button>

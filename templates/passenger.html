@@ -80,8 +80,9 @@
           </div>
           <div class="field">
             <label>Phone</label>
-            <input name="phone_number" data-f="phone_number"
-                   value="{{ person.phone_number or '' }}" required>
+            <input name="phone_number" data-f="phone_number" type="tel"
+                   value="{{ person.phone_number or '' }}"
+                   placeholder="+15551234567" required>
           </div>
         </div>
       </div>

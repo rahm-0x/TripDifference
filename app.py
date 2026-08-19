@@ -480,8 +480,51 @@ def passengers_from_form(count=None):
     """
     lists = {f: request.form.getlist(f) for f in PASSENGER_FIELDS}
     n = count or max((len(v) for v in lists.values()), default=1) or 1
-    return [{f: (lists[f][i] if i < len(lists[f]) else "").strip()
-             for f in PASSENGER_FIELDS} for i in range(n)]
+    people = [{f: (lists[f][i] if i < len(lists[f]) else "").strip()
+               for f in PASSENGER_FIELDS} for i in range(n)]
+    for person in people:
+        person["phone_number"] = normalise_phone(person["phone_number"])
+    return people
+
+
+# Duffel wants phone numbers in E.164 — a leading + then country code. It
+# rejects anything else, and the message it returns names the field but not the
+# person, which is what made "7025211089" look like a date-of-birth problem.
+_E164 = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+def normalise_phone(raw):
+    """Keep digits and one leading +. Formatting people actually type —
+    '+44 20 8016 0509', '(702) 521-1089' — should not be an error."""
+    s = re.sub(r"[^\d+]", "", raw or "")
+    if s.startswith("+"):
+        return "+" + re.sub(r"\D", "", s[1:])
+    return s
+
+
+def phone_problem(raw):
+    if not raw:
+        return "phone"
+    if not _E164.match(raw):
+        return "phone (include the country code, e.g. +15551234567)"
+    return None
+
+
+def dob_problem(raw):
+    """An `adult` passenger must actually be one, or Duffel refuses the order."""
+    if not raw:
+        return "date of birth"
+    try:
+        born = datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        return "date of birth (use the date picker)"
+    today = datetime.now(timezone.utc).date()
+    years = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    if years < 18:
+        return "date of birth (adult fares need 18 or over)"
+    if years > 120:
+        return "date of birth (check the year)"
+    return None
 
 
 # Duffel requires every one of these on every passenger, and answers a missing
@@ -495,9 +538,15 @@ _FIELD_LABEL = {"title": "title", "given_name": "first name",
 def passenger_problems(people):
     out = []
     for i, person in enumerate(people, 1):
-        missing = [_FIELD_LABEL[f] for f in PASSENGER_FIELDS if not person.get(f)]
-        if missing:
-            out.append(f"Traveller {i} is missing: {', '.join(missing)}")
+        bad = [_FIELD_LABEL[f] for f in PASSENGER_FIELDS
+               if f not in ("phone_number", "born_on") and not person.get(f)]
+        for check, value in ((phone_problem, person.get("phone_number")),
+                             (dob_problem, person.get("born_on"))):
+            problem = check(value)
+            if problem:
+                bad.append(problem)
+        if bad:
+            out.append(f"Traveller {i}: check {', '.join(bad)}")
     return out
 
 
@@ -638,6 +687,23 @@ def overview():
 # travellers — passenger profiles, not logins
 # ---------------------------------------------------------------------------
 
+def _traveler_problem(form):
+    """Saved profiles go straight into a booking, so hold them to the same
+    rules Duffel will apply — catching it here beats catching it after payment."""
+    form["phone_number"] = normalise_phone(form.get("phone_number"))
+    if not (form["given_name"] and form["family_name"]):
+        return "First and last name are required."
+    if form.get("phone_number"):
+        problem = phone_problem(form["phone_number"])
+        if problem:
+            return f"Check the {problem}."
+    if form.get("born_on"):
+        problem = dob_problem(form["born_on"])
+        if problem:
+            return f"Check the {problem}."
+    return None
+
+
 @app.route("/travelers")
 @auth.login_required
 def travelers():
@@ -649,11 +715,11 @@ def travelers():
 @auth.login_required
 def traveler_new():
     form = {f: request.form.get(f, "").strip() for f in db.TRAVELER_FIELDS}
-    if not (form["given_name"] and form["family_name"]):
+    problem = _traveler_problem(form)
+    if problem:
         return render_template("travelers.html", nav="travelers",
                                travelers=db.travelers(_account()), form=form,
-                               editing=None,
-                               error="First and last name are required."), 400
+                               editing=None, error=problem), 400
     db.traveler_save(form, _account())
     return redirect(url_for("travelers"))
 
@@ -666,11 +732,11 @@ def traveler_edit(traveler_id):
         return redirect(url_for("travelers"))
     if request.method == "POST":
         form = {f: request.form.get(f, "").strip() for f in db.TRAVELER_FIELDS}
-        if not (form["given_name"] and form["family_name"]):
+        problem = _traveler_problem(form)
+        if problem:
             return render_template("travelers.html", nav="travelers",
                                    travelers=db.travelers(_account()), form=form,
-                                   editing=traveler_id,
-                                   error="First and last name are required."), 400
+                                   editing=traveler_id, error=problem), 400
         db.traveler_save(form, _account(), traveler_id)
         return redirect(url_for("travelers"))
     return render_template("travelers.html", nav="travelers",
