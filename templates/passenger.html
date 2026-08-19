@@ -37,8 +37,8 @@
         <div class="grid3">
           <div class="field">
             <label>Title</label>
-            <select name="title" data-f="title">
-              <option value=""></option>
+            <select name="title" data-f="title" required>
+              <option value="" disabled {{ 'selected' if not person.title }}>Select…</option>
               {% for t in ['mr','ms','mrs','miss','dr'] %}
               <option value="{{ t }}" {{ 'selected' if person.title == t }}>{{ t|capitalize }}</option>
               {% endfor %}
@@ -64,7 +64,8 @@
           </div>
           <div class="field">
             <label>Gender on ID</label>
-            <select name="gender" data-f="gender">
+            <select name="gender" data-f="gender" required>
+              <option value="" disabled {{ 'selected' if not person.gender }}>Select…</option>
               <option value="m" {{ 'selected' if person.gender == 'm' }}>Male</option>
               <option value="f" {{ 'selected' if person.gender == 'f' }}>Female</option>
             </select>

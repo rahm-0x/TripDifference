@@ -59,17 +59,18 @@
         <div class="grid2">
           <div class="field">
             <label for="title">Title</label>
-            <select id="title" name="title">
-              {% for o in ['', 'mr', 'ms', 'mrs', 'miss', 'dr'] %}
-              <option value="{{ o }}" {{ 'selected' if form.title == o }}>
-                {{ o|capitalize or '—' }}</option>
+            <select id="title" name="title" required>
+              <option value="" disabled {{ 'selected' if not form.title }}>Select…</option>
+              {% for o in ['mr', 'ms', 'mrs', 'miss', 'dr'] %}
+              <option value="{{ o }}" {{ 'selected' if form.title == o }}>{{ o|capitalize }}</option>
               {% endfor %}
             </select>
           </div>
           <div class="field">
             <label for="gender">Gender</label>
-            <select id="gender" name="gender">
-              {% for v, lbl in [('', '—'), ('m', 'Male'), ('f', 'Female')] %}
+            <select id="gender" name="gender" required>
+              <option value="" disabled {{ 'selected' if not form.gender }}>Select…</option>
+              {% for v, lbl in [('m', 'Male'), ('f', 'Female')] %}
               <option value="{{ v }}" {{ 'selected' if form.gender == v }}>{{ lbl }}</option>
               {% endfor %}
             </select>
@@ -78,7 +79,7 @@
         <div class="field">
           <label for="born_on">Date of birth</label>
           <input id="born_on" name="born_on" type="date" value="{{ form.born_on or '' }}">
-          <p class="hint">Airlines require this to ticket.</p>
+          <p class="hint">Airlines require this, a title and a gender to ticket.</p>
         </div>
         <div class="field">
           <label for="email">Email</label>

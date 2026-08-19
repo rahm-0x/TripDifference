@@ -484,6 +484,23 @@ def passengers_from_form(count=None):
              for f in PASSENGER_FIELDS} for i in range(n)]
 
 
+# Duffel requires every one of these on every passenger, and answers a missing
+# one with an HTTP 422 that names the field but not the person. Check here so
+# the traveller is named and nobody reaches a payment screen they cannot use.
+_FIELD_LABEL = {"title": "title", "given_name": "first name",
+                "family_name": "last name", "born_on": "date of birth",
+                "gender": "gender", "email": "email", "phone_number": "phone"}
+
+
+def passenger_problems(people):
+    out = []
+    for i, person in enumerate(people, 1):
+        missing = [_FIELD_LABEL[f] for f in PASSENGER_FIELDS if not person.get(f)]
+        if missing:
+            out.append(f"Traveller {i} is missing: {', '.join(missing)}")
+    return out
+
+
 def fetch_offer_view(offer_id):
     return offer_view(duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer"))
 
@@ -513,6 +530,13 @@ def passenger_step():
 def payment_step():
     offer_id = request.form["offer_id"]
     people = passengers_from_form()
+    problems = passenger_problems(people)
+    if problems:
+        return render_template("passenger.html", nav="search",
+                               offer=fetch_offer_view(offer_id), people=people,
+                               saved=[{k: t[k] for k in db.TRAVELER_FIELDS}
+                                      for t in db.travelers(_account())],
+                               error=" · ".join(problems)), 400
     try:
         return render_template("payment.html", nav="search",
                                offer=fetch_offer_view(offer_id), people=people)
@@ -529,6 +553,13 @@ def book():
         offer = duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer")
         seats = offer.get("passengers", []) or [{}]
         people = passengers_from_form(len(seats))
+        problems = passenger_problems(people)
+        if problems:
+            return render_template("passenger.html", nav="search",
+                                   offer=offer_view(offer), people=people,
+                                   saved=[{k: t[k] for k in db.TRAVELER_FIELDS}
+                                          for t in db.travelers(_account())],
+                                   error=" · ".join(problems)), 400
         order = duffel_http.request("POST", "/air/orders", body={
             "data": {
                 "type": "instant",
