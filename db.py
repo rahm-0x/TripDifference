@@ -140,9 +140,10 @@ def audit_rows(limit=300, order_id=None):
 
 _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "departure_date", "paid", "original_paid", "refunded",
-               "currency", "monitoring", "executed", "raw", "last_decision")
+               "currency", "monitoring", "executed", "raw", "last_decision",
+               "sim_scenario")
 _MONEY = {"paid", "original_paid", "refunded"}
-_JSON = {"raw", "last_decision"}
+_JSON = {"raw", "last_decision", "sim_scenario"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
 # DEFAULT never fires — the coercion has to happen here instead.
 _TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currency"}

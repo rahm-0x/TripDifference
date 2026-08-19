@@ -115,16 +115,25 @@
     <form method="post" action="{{ url_for('simulate', order_id=o.order_id) }}" class="sim">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div>
-        <label for="mp{{ loop.index }}">sim market</label>
+        <label for="mp{{ loop.index }}">market now</label>
         <input id="mp{{ loop.index }}" name="market_price" class="mono"
                value="{{ o.sim_market or o.paid }}">
       </div>
       <div>
-        <label for="ct{{ loop.index }}">sim change total</label>
+        <label for="ct{{ loop.index }}">airline change total</label>
         <input id="ct{{ loop.index }}" name="change_total" class="mono"
                value="{{ o.sim_change_total or '125.00' }}">
+        <div class="sim-hint">negative = refund</div>
       </div>
       <button type="submit" class="btn-sm">Simulate &amp; run</button>
+      <div class="quick">
+        {% for drop in ['-50.00', '-200.00'] %}
+        <button type="submit" name="change_total" value="{{ drop }}"
+                class="btn-ghost btn-sm" title="Price drops by {{ drop|replace('-','') }}">
+          drop {{ drop|replace('-','') }}
+        </button>
+        {% endfor %}
+      </div>
     </form>
 
     <form method="post" action="{{ url_for('cycle', order_id=o.order_id) }}">
@@ -160,6 +169,9 @@
     border:1px dashed var(--line); border-radius:var(--r-sm); background:var(--surface-2);
   }
   .sim input { width:104px; }
+  .sim-hint { font-size:10px; color:var(--muted-2); margin-top:4px; letter-spacing:.04em; }
+  .quick { display:flex; gap:6px; }
+  .quick button { padding:7px 11px; font-size:12px; }
   .fee { margin-top:10px; border-top:1px solid var(--line); padding-top:8px; max-width:320px; }
   .fee div { display:flex; justify-content:space-between; gap:12px; font-size:12.5px; padding:2px 0; }
   .fee span { color:var(--ink-faint); }

@@ -754,16 +754,17 @@ def book():
     })
 
     # Seed the simulated scenario from reality, so simulation starts at the
-    # sandbox constant (+125.00) rather than an accidental fake drop.
-    SimulatedPriceSource().set_scenario(
-        order["id"],
-        carrier=snap.itinerary.carrier_iata,
-        flight_numbers=list(snap.itinerary.flight_numbers),
-        currency=order["total_currency"], route=str(snap.route),
-        market_price=order["total_amount"], change_total="125.00",
-        new_total=str(Decimal(order["total_amount"]) + Decimal("100.00")),
-        penalty="25.00",
-    )
+    # sandbox constant (+125.00) rather than an accidental fake drop. Stored on
+    # the order rather than in a file: /tmp does not survive on Vercel, and a
+    # scenario the engine cannot find matches nothing.
+    upsert_order({"order_id": order["id"], "sim_scenario": {
+        "carrier": snap.itinerary.carrier_iata,
+        "flight_numbers": list(snap.itinerary.flight_numbers),
+        "currency": order["total_currency"], "route": str(snap.route),
+        "market_price": order["total_amount"], "change_total": "125.00",
+        "new_total": str(Decimal(order["total_amount"]) + Decimal("100.00")),
+        "penalty": "25.00",
+    }})
     return redirect(url_for("trip_booked", order_id=order["id"]))
 
 
@@ -927,9 +928,10 @@ def trip_detail(order_id):
 @auth.login_required
 def orders():
     records = load_orders()
-    sim = SimulatedPriceSource()
     for r in records:
-        sc = sim.scenario(r["order_id"]) or {}
+        # Straight off the order, so the inputs show the scenario the next run
+        # will actually use rather than whatever a local file happens to hold.
+        sc = r.get("sim_scenario") or {}
         r["sim_market"] = sc.get("market_price")
         r["sim_change_total"] = sc.get("change_total")
     return render_template("orders.html", nav="ops", orders=records,
@@ -978,10 +980,26 @@ def _run_cycle(order_id, source):
 @app.route("/orders/<order_id>/simulate", methods=["POST"])
 @auth.login_required
 def simulate(order_id):
-    if not find_order(order_id):
+    record = find_order(order_id)
+    if not record:
         return redirect(url_for("orders"))
-    sim = SimulatedPriceSource()
-    fields = {}
+
+    scenario = dict(record.get("sim_scenario") or {})
+    if not scenario:
+        # An order booked before scenarios were stored, or one whose seed was
+        # lost with an old instance. Rebuild it from the order itself so the
+        # engine still has a matching carrier and flight number to work with.
+        snap = snapshot_of(record)
+        scenario = {
+            "carrier": snap.itinerary.carrier_iata,
+            "flight_numbers": list(snap.itinerary.flight_numbers),
+            "currency": record.get("currency") or "USD",
+            "route": str(snap.route),
+            "market_price": record.get("paid"),
+            "change_total": "125.00",
+            "penalty": "25.00",
+        }
+
     for key in ("market_price", "change_total", "new_total", "penalty"):
         value = request.form.get(key, "").strip()
         if value:
@@ -989,9 +1007,12 @@ def simulate(order_id):
                 Decimal(value)
             except Exception:
                 return redirect(url_for("orders"))
-            fields[key] = value
-    if fields:
-        sim.set_scenario(order_id, **fields)
+            scenario[key] = value
+
+    # Feed the engine this order's scenario directly — no file, nothing shared
+    # between instances, nothing to go missing between two requests.
+    sim = SimulatedPriceSource(data={"orders": {order_id: scenario}})
+    upsert_order({"order_id": order_id, "sim_scenario": scenario})
     _run_cycle(order_id, sim)
     return redirect(url_for("orders"))
 
