@@ -27,7 +27,7 @@
     <div class="sub">{{ s.monitoring }} being monitored</div>
   </div>
   <div class="tile">
-    <div class="lbl">Travellers</div>
+    <div class="lbl">Travelers</div>
     <div class="v">{{ s.travelers }}</div>
     <div class="sub">saved passenger profile{{ 's' if s.travelers != 1 }}</div>
   </div>
@@ -187,14 +187,14 @@
 <div class="card" style="padding:0; overflow-x:auto">
   <table class="bk">
     <thead>
-      <tr><th>Reference</th><th>Traveller</th><th>Route</th><th>Departs</th>
+      <tr><th>Reference</th><th>Traveler</th><th>Route</th><th>Departs</th>
           <th class="r">Paid</th><th class="r">Saved</th><th>Status</th><th></th></tr>
     </thead>
     <tbody>
       {% for b in bookings %}
       <tr>
         <td class="mono" style="font-weight:700; letter-spacing:.06em">{{ b.reference }}</td>
-        <td>{{ b.traveller }}{% if b.party > 1 %}
+        <td>{{ b.traveler }}{% if b.party > 1 %}
             <span class="muted">+{{ b.party - 1 }}</span>{% endif %}</td>
         <td>{{ b.route }} <span class="muted">{{ b.carrier }}</span></td>
         <td class="muted">{{ b.departure_date }}</td>

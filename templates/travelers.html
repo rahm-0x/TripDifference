@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Travellers — Trip Difference{% endblock %}
+{% block title %}Travelers — Trip Difference{% endblock %}
 {% block body %}
 
 <div class="page-head">
-  <h1>Travellers</h1>
+  <h1>Travelers</h1>
   <p>Passenger profiles you book for. Saved here, they prefill the booking flow —
      these are not sign-in accounts.</p>
 </div>
@@ -35,14 +35,14 @@
       {% endfor %}
     {% else %}
       <div class="card" style="text-align:center; padding:44px 24px">
-        <p class="muted" style="margin:0">No travellers saved yet. Add one on the right.</p>
+        <p class="muted" style="margin:0">No travelers saved yet. Add one on the right.</p>
       </div>
     {% endif %}
   </div>
 
   <aside>
     <div class="card" style="position:sticky; top:84px">
-      <h3 style="margin-bottom:14px">{{ 'Edit traveller' if editing else 'Add a traveller' }}</h3>
+      <h3 style="margin-bottom:14px">{{ 'Edit traveler' if editing else 'Add a traveler' }}</h3>
       <form method="post" action="{{ url_for('traveler_edit', traveler_id=editing) if editing
                                      else url_for('traveler_new') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
@@ -92,7 +92,7 @@
           <p class="hint">Include the country code — airlines reject numbers without one.</p>
         </div>
         <button type="submit" class="btn-block">
-          {{ 'Save changes' if editing else 'Add traveller' }}</button>
+          {{ 'Save changes' if editing else 'Add traveler' }}</button>
         {% if editing %}
         <a href="{{ url_for('travelers') }}" class="btn btn-ghost btn-block"
            style="margin-top:8px">Cancel</a>

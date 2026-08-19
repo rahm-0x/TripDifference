@@ -12,8 +12,8 @@
 <div class="book-grid">
   <div>
     <div class="page-head">
-      <h1>Who's travelling?</h1>
-      <p>Names must match the passport or government ID used at the airport. Pick a saved traveller to fill a card in one go.</p>
+      <h1>Who's traveling?</h1>
+      <p>Names must match the passport or government ID used at the airport. Pick a saved traveler to fill a card in one go.</p>
     </div>
 
     <form method="post" action="{{ url_for('payment_step') }}">
@@ -23,10 +23,10 @@
       {% for person in people %}
       <div class="card pax" style="margin-bottom:14px">
         <div class="pax-head">
-          <h3>Traveller {{ loop.index }}{% if people|length > 1 %} of {{ people|length }}{% endif %}</h3>
+          <h3>Traveler {{ loop.index }}{% if people|length > 1 %} of {{ people|length }}{% endif %}</h3>
           {% if saved %}
-          <select class="savedPick" data-i="{{ loop.index0 }}" aria-label="Use a saved traveller">
-            <option value="">Use a saved traveller…</option>
+          <select class="savedPick" data-i="{{ loop.index0 }}" aria-label="Use a saved traveler">
+            <option value="">Use a saved traveler…</option>
             {% for t in saved %}
             <option value="{{ loop.index0 }}">{{ t.given_name }} {{ t.family_name }}</option>
             {% endfor %}
@@ -113,7 +113,7 @@
   const FIELDS = ['title','given_name','family_name','born_on','gender','email','phone_number'];
 
   // Each card has its own picker, so fields are found within that card —
-  // document.getElementById would always hit the first traveller.
+  // document.getElementById would always hit the first traveler.
   document.querySelectorAll('.savedPick').forEach(sel => {
     sel.addEventListener('change', () => {
       const t = SAVED[sel.value];

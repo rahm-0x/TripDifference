@@ -123,15 +123,37 @@ def audit_append(payload):
 
 
 def audit_rows(limit=300, order_id=None):
-    """Newest first, in the shape templates/decisions.html already renders."""
+    """Newest first, in the shape templates/decisions.html already renders.
+
+    The promoted columns win over the payload. The payload is whatever the
+    writer chose to record and a row can predate a field or omit it entirely;
+    ts, kind and order_id are always present on the row itself, and the log
+    must not fail to render because one entry is shaped differently.
+    """
+    cols = """id, ts, kind, order_id, source, outcome, reason, execution,
+              market_best, market_delta, change_total, currency, detail, payload"""
     if order_id:
-        rows = q("""SELECT payload FROM audit_events WHERE order_id = %s
-                    ORDER BY ts DESC, id DESC LIMIT %s""",
+        rows = q(f"""SELECT {cols} FROM audit_events WHERE order_id = %s
+                     ORDER BY ts DESC, id DESC LIMIT %s""",
                  (order_id, limit), fetch="all")
     else:
-        rows = q("""SELECT payload FROM audit_events
-                    ORDER BY ts DESC, id DESC LIMIT %s""", (limit,), fetch="all")
-    return [r["payload"] for r in rows]
+        rows = q(f"""SELECT {cols} FROM audit_events
+                     ORDER BY ts DESC, id DESC LIMIT %s""", (limit,), fetch="all")
+
+    out = []
+    for r in rows:
+        payload = dict(r["payload"] or {})
+        payload["ts"] = r["ts"].isoformat()
+        payload["kind"] = r["kind"]
+        payload["order_id"] = r["order_id"]
+        for k in ("source", "outcome", "reason", "execution", "detail"):
+            if not payload.get(k) and r[k]:
+                payload[k] = r[k]
+        for k in ("market_best", "market_delta", "change_total"):
+            if not payload.get(k) and r[k] is not None:
+                payload[k] = str(r[k])
+        out.append(payload)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +380,7 @@ def clear_failures(email):
 
 
 # ---------------------------------------------------------------------------
-# travellers (saved passenger profiles)
+# travelers (saved passenger profiles)
 # ---------------------------------------------------------------------------
 
 TRAVELER_FIELDS = ("title", "given_name", "family_name", "born_on", "gender",
@@ -413,7 +435,7 @@ def account_summary(account_id):
     """The numbers Overview shows.
 
     Computed here, once, so Overview and the pages it summarises cannot drift
-    apart — a dashboard claiming 184 travellers over a roster of 8 is the
+    apart — a dashboard claiming 184 travelers over a roster of 8 is the
     failure mode this exists to prevent.
     """
     row = q("""SELECT
@@ -500,7 +522,7 @@ def recent_bookings(account_id, limit=5):
             "route": r["route"],
             "carrier": r["carrier"],
             "departure_date": r["departure_date"].isoformat() if r["departure_date"] else "",
-            "traveller": f"{lead.get('given_name','')} {lead.get('family_name','')}".strip() or "—",
+            "traveler": f"{lead.get('given_name','')} {lead.get('family_name','')}".strip() or "—",
             "party": len(pax),
             "paid": str(r["paid"]) if r["paid"] is not None else "—",
             "saved": str(r["refunded"]) if r["refunded"] is not None else None,

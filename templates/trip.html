@@ -55,7 +55,7 @@
     {% if trip.passengers %}
     <div class="card">
       <h3 style="margin-bottom:14px">
-        {{ trip.passengers|length }} traveller{{ 's' if trip.passengers|length != 1 }}
+        {{ trip.passengers|length }} traveler{{ 's' if trip.passengers|length != 1 }}
       </h3>
       {% for p in trip.passengers %}
       <div class="pax-row">

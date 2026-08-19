@@ -57,7 +57,7 @@
       <div style="font-weight:600">{{ trip.passenger_name }}</div>
       {% endfor %}
       <div class="fl-meta">
-        {{ trip.passengers|length or 1 }} traveller{{ 's' if (trip.passengers|length or 1) != 1 }}
+        {{ trip.passengers|length or 1 }} traveler{{ 's' if (trip.passengers|length or 1) != 1 }}
       </div>
     </div>
     <div style="text-align:right">

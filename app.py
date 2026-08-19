@@ -268,7 +268,7 @@ def trip_view(record):
         "last_decision": d or None,
         "email": pax.get("email"),
         "passenger_name": f"{pax.get('given_name','')} {pax.get('family_name','')}".strip(),
-        # Every person on the booking. `pax` above is only the lead traveller,
+        # Every person on the booking. `pax` above is only the lead traveler,
         # which is why a group booking used to render as one name.
         "passengers": [{
             "name": " ".join(x for x in ((p.get("title") or "").capitalize(),
@@ -582,7 +582,7 @@ def _adults(raw):
 
 
 def passengers_from_form(count=None):
-    """Every traveller on the booking, from repeated form fields.
+    """Every traveler on the booking, from repeated form fields.
 
     Repeated names rather than given_name_0/given_name_1: getlist keeps
     document order, so the cards line up with the offer's passenger ids
@@ -639,7 +639,7 @@ def dob_problem(raw):
 
 # Duffel requires every one of these on every passenger, and answers a missing
 # one with an HTTP 422 that names the field but not the person. Check here so
-# the traveller is named and nobody reaches a payment screen they cannot use.
+# the traveler is named and nobody reaches a payment screen they cannot use.
 _FIELD_LABEL = {"title": "title", "given_name": "first name",
                 "family_name": "last name", "born_on": "date of birth",
                 "gender": "gender", "email": "email", "phone_number": "phone"}
@@ -656,7 +656,7 @@ def passenger_problems(people):
             if problem:
                 bad.append(problem)
         if bad:
-            out.append(f"Traveller {i}: check {', '.join(bad)}")
+            out.append(f"Traveler {i}: check {', '.join(bad)}")
     return out
 
 
@@ -671,7 +671,7 @@ def passenger_step():
     try:
         offer = fetch_offer_view(offer_id)
         prefill = auth.profile_of(auth.current_user())
-        # The booker is usually traveller one; the rest start empty.
+        # The booker is usually traveler one; the rest start empty.
         people = [prefill] + [{} for _ in range(offer["passenger_count"] - 1)]
         return render_template("passenger.html", nav="search", offer=offer,
                                people=people,
@@ -723,7 +723,7 @@ def book():
             "data": {
                 "type": "instant",
                 "selected_offers": [offer_id],
-                # Each traveller is matched to one of the offer's passenger ids.
+                # Each traveler is matched to one of the offer's passenger ids.
                 # Sending the same details for every seat, which is what the
                 # single-passenger version did, books several copies of one person.
                 "passengers": [{"id": seat["id"], **person}
@@ -835,7 +835,7 @@ def wallet():
 
 
 # ---------------------------------------------------------------------------
-# travellers — passenger profiles, not logins
+# travelers — passenger profiles, not logins
 # ---------------------------------------------------------------------------
 
 def _traveler_problem(form):
