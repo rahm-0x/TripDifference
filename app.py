@@ -1000,8 +1000,14 @@ def simulate(order_id):
             "penalty": "25.00",
         }
 
+    # A one-click drop button and the text input are in the same form, so both
+    # arrive. The button is the deliberate act, so it wins.
+    quick = request.form.get("quick_change_total", "").strip()
+
     for key in ("market_price", "change_total", "new_total", "penalty"):
         value = request.form.get(key, "").strip()
+        if key == "change_total" and quick:
+            value = quick
         if value:
             try:
                 Decimal(value)

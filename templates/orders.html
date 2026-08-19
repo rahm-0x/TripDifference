@@ -128,7 +128,7 @@
       <button type="submit" class="btn-sm">Simulate &amp; run</button>
       <div class="quick">
         {% for drop in ['-50.00', '-200.00'] %}
-        <button type="submit" name="change_total" value="{{ drop }}"
+        <button type="submit" name="quick_change_total" value="{{ drop }}"
                 class="btn-ghost btn-sm" title="Price drops by {{ drop|replace('-','') }}">
           drop {{ drop|replace('-','') }}
         </button>
