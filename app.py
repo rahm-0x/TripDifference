@@ -298,7 +298,7 @@ SERIES_SPEND = "#3987e5"
 SERIES_SAVED = "#C98500"
 
 CHART_W, CHART_H = 720, 190
-PAD_L, PAD_R, PAD_T, PAD_B = 46, 14, 14, 26
+PAD_L, PAD_R, PAD_T, PAD_B = 48, 14, 14, 34
 
 
 def _nice_top(value):

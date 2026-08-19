@@ -45,8 +45,8 @@
     <svg class="plot" viewBox="0 0 {{ spend_chart.w }} {{ spend_chart.h }}"
          role="img" aria-label="Monthly spend and recovered savings, last six months">
       {% for g in spend_chart.grid %}
-      <line x1="46" x2="{{ spend_chart.w - 14 }}" y1="{{ g.y }}" y2="{{ g.y }}" class="grid"/>
-      <text x="38" y="{{ g.y + 4 }}" class="ax" text-anchor="end">{{ g.label }}</text>
+      <line x1="48" x2="{{ spend_chart.w - 14 }}" y1="{{ g.y }}" y2="{{ g.y }}" class="grid"/>
+      <text x="40" y="{{ g.y + 4 }}" class="ax" text-anchor="end">{{ g.label }}</text>
       {% endfor %}
 
       {% for key, colour in [('spend', c_spend), ('saved', c_saved)] %}
@@ -65,7 +65,7 @@
             class="ax end" text-anchor="end">{{ spend_chart.spend[-1].value }}</text>
 
       {% for p in spend_chart.spend %}
-      <text x="{{ p.x }}" y="{{ spend_chart.h - 8 }}" class="ax" text-anchor="middle">{{ p.label }}</text>
+      <text x="{{ p.x }}" y="{{ spend_chart.h - 6 }}" class="ax" text-anchor="middle">{{ p.label }}</text>
       {% endfor %}
     </svg>
 
