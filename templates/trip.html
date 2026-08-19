@@ -52,6 +52,27 @@
       {% endfor %}
     </div>
 
+    {% if trip.passengers %}
+    <div class="card">
+      <h3 style="margin-bottom:14px">
+        {{ trip.passengers|length }} traveller{{ 's' if trip.passengers|length != 1 }}
+      </h3>
+      {% for p in trip.passengers %}
+      <div class="pax-row">
+        <div class="avatar">{{ p.name.split()[-2:] | map('first') | join | upper }}</div>
+        <div>
+          <b>{{ p.name }}</b>
+          <span>
+            {% if p.born_on %}born {{ p.born_on }}{% endif %}
+            {% if p.email %} · {{ p.email }}{% endif %}
+            {% if p.phone_number %} · {{ p.phone_number }}{% endif %}
+          </span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="card">
       <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:4px">
         <h3>Price history</h3>
@@ -175,6 +196,11 @@
 </div>
 
 <style>
+  .pax-row { display:flex; align-items:center; gap:13px; padding:10px 0;
+             border-bottom:1px solid var(--line-soft); }
+  .pax-row:last-child { border-bottom:0; padding-bottom:0; }
+  .pax-row b { display:block; font-size:14.5px; }
+  .pax-row span { display:block; font-size:12.5px; color:var(--muted-2); margin-top:2px; }
   .trip-grid { display:grid; grid-template-columns:1fr 320px; gap:24px; align-items:start; }
   @media (max-width:900px){ .trip-grid { grid-template-columns:1fr; } }
 

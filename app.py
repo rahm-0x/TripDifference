@@ -264,6 +264,16 @@ def trip_view(record):
         "last_decision": d or None,
         "email": pax.get("email"),
         "passenger_name": f"{pax.get('given_name','')} {pax.get('family_name','')}".strip(),
+        # Every person on the booking. `pax` above is only the lead traveller,
+        # which is why a group booking used to render as one name.
+        "passengers": [{
+            "name": " ".join(x for x in ((p.get("title") or "").capitalize(),
+                                         p.get("given_name", ""),
+                                         p.get("family_name", "")) if x).strip(),
+            "born_on": p.get("born_on") or "",
+            "email": p.get("email") or "",
+            "phone_number": p.get("phone_number") or "",
+        } for p in (raw.get("passengers") or [])],
     }
 
 

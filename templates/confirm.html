@@ -51,8 +51,14 @@
   <div style="display:flex; justify-content:space-between; align-items:baseline;
               padding-top:16px; margin-top:4px; border-top:1px solid var(--line);">
     <div>
+      {% for p in trip.passengers %}
+      <div style="font-weight:600">{{ p.name }}</div>
+      {% else %}
       <div style="font-weight:600">{{ trip.passenger_name }}</div>
-      <div class="fl-meta">1 traveller</div>
+      {% endfor %}
+      <div class="fl-meta">
+        {{ trip.passengers|length or 1 }} traveller{{ 's' if (trip.passengers|length or 1) != 1 }}
+      </div>
     </div>
     <div style="text-align:right">
       <div class="lbl" style="margin:0">Paid</div>
