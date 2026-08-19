@@ -557,17 +557,26 @@ def wallet_transactions(account_id, limit=100):
     # Simulated recoveries are included so the flow can be demonstrated, but
     # they arrive flagged and every view that shows them says so. They are
     # never added into a real total.
-    execs = q("""SELECT a.ts, a.order_id, o.booking_reference, o.route,
-                        a.execution,
-                        a.payload->>'recovered'   AS recovered,
-                        a.payload->>'service_fee' AS service_fee,
-                        COALESCE(NULLIF(a.currency, ''), o.currency) AS currency
-                   FROM audit_events a
-                   JOIN orders o ON o.order_id = a.order_id
-                  WHERE o.account_id = %s
-                    AND a.kind = 'execution'
-                    AND a.execution IN ('executed', 'blocked_simulated')
-                    AND a.payload->>'recovered' IS NOT NULL""",
+    # Executed rows are history and always show. Simulated ones reflect current
+    # state instead: only while the order is still flagged, and only the most
+    # recent run — the audit trail keeps every attempt, but a ledger showing
+    # five superseded what-ifs, and still showing them after a reset, is noise.
+    execs = q("""SELECT * FROM (
+                   SELECT DISTINCT ON (a.order_id, a.execution)
+                          a.ts, a.order_id, o.booking_reference, o.route,
+                          a.execution,
+                          a.payload->>'recovered'   AS recovered,
+                          a.payload->>'service_fee' AS service_fee,
+                          COALESCE(NULLIF(a.currency, ''), o.currency) AS currency
+                     FROM audit_events a
+                     JOIN orders o ON o.order_id = a.order_id
+                    WHERE o.account_id = %s
+                      AND a.kind = 'execution'
+                      AND a.payload->>'recovered' IS NOT NULL
+                      AND (a.execution = 'executed'
+                           OR (a.execution = 'blocked_simulated' AND o.simulated))
+                    ORDER BY a.order_id, a.execution, a.ts DESC) x
+                 ORDER BY x.ts DESC""",
               (account_id,), fetch="all")
 
     rows = []
