@@ -21,37 +21,45 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from flask import (Flask, redirect, render_template, request, send_from_directory,
-                   session, url_for)
+from flask import (Flask, redirect, render_template, request,
+                   send_from_directory, url_for)
 
+import auth
+import db
 import duffel_http
 import eligibility
 import paths
 from duffel_http import DuffelError
-from engine import (DECISION_LOG, OrderSnapshot, Outcome, ReshopPolicy,
+from engine import (OrderSnapshot, Outcome, ReshopPolicy,
                     evaluate, log_decision, log_eligibility)
 from prices import (DuffelPriceSource, Route, SimulatedPriceSource,
                     get_price_source)
 
 HERE = Path(__file__).parent
-ORDERS_FILE = paths.data_path("orders.json")
 PORT = 8000
 
+# Divert the audit trail from decisions.log into Postgres. engine.py keeps its
+# file behaviour when handed an explicit path, which is what the tests use.
+import engine as _engine
+_engine.SINK = db.audit_append
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "trip-difference-local-rig")
+# Session cookies are signed with this. A known fallback in production would
+# let anyone forge a session, so outside local development its absence is fatal
+# rather than quietly insecure.
+_secret = os.environ.get("SECRET_KEY")
+if not _secret:
+    if paths.ON_VERCEL:
+        raise RuntimeError("SECRET_KEY must be set — refusing to sign sessions "
+                           "with a publicly known key")
+    _secret = "trip-difference-local-rig"
+app.secret_key = _secret
 
 DEFAULT_POLICY = ReshopPolicy(min_saving=Decimal("20.00"), departure_buffer_hours=24)
 
 # Stand-ins for data a real deployment would hold. Kept in one place so it is
 # obvious what is fixture and what comes from Duffel.
-USER = {"name": "Amelia Earhart", "email": "amelia@example.com",
-        "company": "Northwind Ltd", "initials": "AE"}
 CARD = {"brand": "Visa", "last4": "4242", "holder": "Northwind Ltd", "expiry": "09/29"}
-INVITE = {"name": "Amelia Earhart", "email": "amelia@example.com",
-          "company": "Northwind Ltd", "initials": "AE"}
-PROFILE = {"title": "mr", "given_name": "Amelia", "family_name": "Earhart",
-           "born_on": "1987-07-24", "gender": "f",
-           "email": "amelia@example.com", "phone_number": "+442080160509"}
 PASSENGER_FIELDS = ("title", "given_name", "family_name", "born_on", "gender",
                     "email", "phone_number")
 
@@ -70,8 +78,9 @@ PLACEHOLDER_DEALS = [
 
 @app.context_processor
 def inject_globals():
-    return {"user": USER, "card": CARD, "policy": DEFAULT_POLICY,
-            "profile": PROFILE, "invite": INVITE}
+    user = auth.current_user()
+    return {"user": auth.view_model(user), "card": CARD,
+            "policy": DEFAULT_POLICY, "profile": auth.profile_of(user)}
 
 
 # ---------------------------------------------------------------------------
@@ -164,27 +173,22 @@ def offer_view(offer):
 # order store
 # ---------------------------------------------------------------------------
 
+def _account():
+    """Every order and view is scoped to the signed-in user's account."""
+    user = auth.current_user()
+    return user["account_id"] if user else None
+
+
 def load_orders():
-    return json.loads(ORDERS_FILE.read_text()) if ORDERS_FILE.exists() else []
-
-
-def save_orders(orders):
-    ORDERS_FILE.write_text(json.dumps(orders, indent=2))
+    return db.load_orders(_account())
 
 
 def find_order(order_id):
-    return next((o for o in load_orders() if o["order_id"] == order_id), None)
+    return db.find_order(order_id, _account())
 
 
 def upsert_order(record):
-    orders = load_orders()
-    for i, o in enumerate(orders):
-        if o["order_id"] == record["order_id"]:
-            orders[i] = {**o, **record}
-            break
-    else:
-        orders.append(record)
-    save_orders(orders)
+    return db.upsert_order(record, _account())
 
 
 def snapshot_of(record):
@@ -238,14 +242,9 @@ def trip_view(record):
 
 def price_history(order_id):
     """Market prices logged for this order, oldest first. Real data or nothing."""
-    if not DECISION_LOG.exists():
-        return []
     out = []
-    for line in DECISION_LOG.read_text().strip().split("\n"):
-        if not line:
-            continue
-        r = json.loads(line)
-        if r.get("order_id") == order_id and r.get("market_best"):
+    for r in reversed(db.audit_rows(limit=500, order_id=order_id)):
+        if r.get("market_best"):
             out.append((r["ts"], Decimal(r["market_best"])))
     return out
 
@@ -301,22 +300,59 @@ def logo():
     return send_from_directory(HERE / "public", "logo.png")
 
 
+def _safe_next(target):
+    """Only ever redirect within this site."""
+    if target and target.startswith("/") and not target.startswith("//"):
+        return target
+    return url_for("trips")
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        session["signed_in"] = True
-        return redirect(url_for("index"))
-    return render_template("login.html", hide_nav=True, prefill_email=USER["email"])
+        email = request.form.get("email", "").strip().lower()
+        user = db.user_by_email(email)
+        if not user or not auth.check_password(user["password_hash"],
+                                               request.form.get("password", "")):
+            # One message for both cases — telling an attacker which half was
+            # wrong turns the form into an account enumerator.
+            return render_template("login.html", hide_nav=True, prefill_email=email,
+                                   error="That email and password don't match."), 401
+        auth.sign_in(user["id"])
+        return redirect(_safe_next(request.args.get("next")))
+    return render_template("login.html", hide_nav=True, prefill_email="")
 
 
-@app.route("/activate", methods=["GET", "POST"])
-def activate():
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
     if request.method == "POST":
-        if request.form.get("password") != request.form.get("confirm"):
-            return render_template("activate.html", hide_nav=True,
-                                   error="Those passwords don't match.")
-        return redirect(url_for("login"))
-    return render_template("activate.html", hide_nav=True)
+        form = {k: request.form.get(k, "").strip() for k in
+                ("given_name", "family_name", "company", "email")}
+        form["email"] = form["email"].lower()
+        password = request.form.get("password", "")
+
+        def again(msg):
+            return render_template("signup.html", hide_nav=True, form=form, error=msg), 400
+
+        problem = auth.password_problem(password, request.form.get("confirm", ""))
+        if problem:
+            return again(problem)
+        if not all(form.values()):
+            return again("Every field is required.")
+        if db.email_taken(form["email"]):
+            return again("An account already exists for that email.")
+
+        user = db.create_account(form["company"], form["email"],
+                                 auth.hash_password(password), form)
+        auth.sign_in(user["id"])
+        return redirect(url_for("index"))
+    return render_template("signup.html", hide_nav=True, form={})
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    auth.sign_out()
+    return redirect(url_for("index"))
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +409,7 @@ def fetch_offer_view(offer_id):
 
 
 @app.route("/book/passenger", methods=["POST"])
+@auth.login_required
 def passenger_step():
     offer_id = request.form["offer_id"]
     try:
@@ -383,9 +420,11 @@ def passenger_step():
 
 
 @app.route("/book/payment", methods=["POST"])
+@auth.login_required
 def payment_step():
     offer_id = request.form["offer_id"]
-    passenger = {k: request.form.get(k, PROFILE[k]) for k in PASSENGER_FIELDS}
+    prefill = auth.profile_of(auth.current_user())
+    passenger = {k: request.form.get(k, prefill.get(k, "")) for k in PASSENGER_FIELDS}
     try:
         return render_template("payment.html", nav="search",
                                offer=fetch_offer_view(offer_id), passenger=passenger)
@@ -395,9 +434,11 @@ def payment_step():
 
 
 @app.route("/book", methods=["POST"])
+@auth.login_required
 def book():
     offer_id = request.form["offer_id"]
-    passenger = {k: request.form.get(k) or PROFILE[k] for k in PASSENGER_FIELDS}
+    prefill = auth.profile_of(auth.current_user())
+    passenger = {k: request.form.get(k) or prefill.get(k, "") for k in PASSENGER_FIELDS}
     try:
         offer = duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer")
         order = duffel_http.request("POST", "/air/orders", body={
@@ -449,6 +490,7 @@ def book():
 
 
 @app.route("/trips/<order_id>/booked")
+@auth.login_required
 def trip_booked(order_id):
     record = find_order(order_id)
     if not record:
@@ -461,6 +503,7 @@ def trip_booked(order_id):
 # ---------------------------------------------------------------------------
 
 @app.route("/trips")
+@auth.login_required
 def trips():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     upcoming, past, saved, count = [], [], Decimal("0"), 0
@@ -479,6 +522,7 @@ def trips():
 
 
 @app.route("/trips/<order_id>")
+@auth.login_required
 def trip_detail(order_id):
     record = find_order(order_id)
     if not record:
@@ -493,6 +537,7 @@ def trip_detail(order_id):
 # ---------------------------------------------------------------------------
 
 @app.route("/orders")
+@auth.login_required
 def orders():
     records = load_orders()
     sim = SimulatedPriceSource()
@@ -505,6 +550,7 @@ def orders():
 
 
 @app.route("/orders/<order_id>/monitor", methods=["POST"])
+@auth.login_required
 def toggle_monitor(order_id):
     record = find_order(order_id)
     if record:
@@ -543,6 +589,7 @@ def _run_cycle(order_id, source):
 
 
 @app.route("/orders/<order_id>/simulate", methods=["POST"])
+@auth.login_required
 def simulate(order_id):
     if not find_order(order_id):
         return redirect(url_for("orders"))
@@ -563,6 +610,7 @@ def simulate(order_id):
 
 
 @app.route("/orders/<order_id>/cycle", methods=["POST"])
+@auth.login_required
 def cycle(order_id):
     source = get_price_source(request.form.get("source") or "duffel")
     try:
@@ -583,6 +631,7 @@ def cycle(order_id):
 # ---------------------------------------------------------------------------
 
 @app.route("/orders/<order_id>/confirm/<action>", methods=["GET"])
+@auth.login_required
 def confirm_action(order_id, action):
     """Step 1 of 2. Nothing has happened at this point."""
     record = find_order(order_id)
@@ -592,6 +641,7 @@ def confirm_action(order_id, action):
 
 
 @app.route("/orders/<order_id>/execute/<action>", methods=["POST"])
+@auth.login_required
 def execute(order_id, action):
     """Step 2 of 2. Requires the typed confirmation from the previous page."""
     record = find_order(order_id)
@@ -610,14 +660,29 @@ def execute(order_id, action):
         return refuse("Last decision came from the simulated source. "
                       "Run a live cycle before executing anything real.")
 
+    offer_id = last.get("change_offer_id") or ""
+    if action == "exchange" and not offer_id:
+        return refuse("no change offer on the last decision — run a live cycle first")
+
+    # Reserve the right to call Duffel exactly once for this (order, action,
+    # offer). A double submit loses the INSERT race and stops here rather than
+    # exchanging the same ticket twice.
+    try:
+        attempt = db.claim_execution(order_id, action, offer_id)
+    except db.AlreadyAttempted as dup:
+        prior = dup.attempt
+        if prior["status"] == "succeeded":
+            return redirect(url_for("trip_detail", order_id=order_id))
+        return refuse(f"This {action} was already submitted "
+                      f"({prior['status']}). Check the order before retrying.")
+
     extra = {}
+    duffel_change_id = None
     try:
         if action == "exchange":
-            offer_id = last.get("change_offer_id")
-            if not offer_id:
-                raise RuntimeError("no change offer on the last decision — run a live cycle first")
             change = duffel_http.request("POST", "/air/order_changes", body={
                 "data": {"selected_order_change_offer": offer_id}}, label="ui_change_create")
+            duffel_change_id = change["id"]
             delta = Decimal(change["change_total_amount"])
             # Docs: no payment object needed when change_total <= 0.
             body = {"data": {}}
@@ -640,8 +705,18 @@ def execute(order_id, action):
             note = (f"cancelled at {result.get('confirmed_at')}, "
                     f"refunded {result.get('refund_amount')} {result.get('refund_currency')}")
     except (DuffelError, RuntimeError) as exc:
+        # The order-change *create* call is safe to retry; a failed confirm is
+        # not, because the exchange may have landed anyway. Only release the
+        # claim when nothing could have been confirmed.
+        if duffel_change_id is None:
+            db.release_execution(attempt["id"])
+        else:
+            db.finish_execution(attempt["id"], "failed", note=str(exc),
+                                duffel_change_id=duffel_change_id)
         return refuse(str(exc))
 
+    db.finish_execution(attempt["id"], "succeeded", note=note,
+                        duffel_change_id=duffel_change_id, result=result)
     fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
     upsert_order({"order_id": order_id, "raw": fresh, "monitoring": False,
                   "executed": note, "paid": fresh["total_amount"], **extra})
@@ -649,11 +724,9 @@ def execute(order_id, action):
 
 
 @app.route("/decisions")
+@auth.login_required
 def decisions():
-    rows = []
-    if DECISION_LOG.exists():
-        rows = [json.loads(l) for l in DECISION_LOG.read_text().strip().split("\n") if l]
-    return render_template("decisions.html", nav="log", rows=list(reversed(rows))[:200])
+    return render_template("decisions.html", nav="log", rows=db.audit_rows(limit=200))
 
 
 if __name__ == "__main__":

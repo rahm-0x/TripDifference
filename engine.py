@@ -259,7 +259,16 @@ class Decision:
         return out
 
 
+# The app installs a durable sink here (see db.audit_append). Left as None the
+# module keeps its original file behaviour, which is what the tests exercise —
+# they pass an explicit `path=`, and an explicit path always wins.
+SINK = None
+
+
 def _append(path, payload):
+    if SINK is not None and path == DECISION_LOG:
+        SINK(payload)
+        return
     with open(path, "a") as fh:
         fh.write(json.dumps(payload, sort_keys=True) + "\n")
 

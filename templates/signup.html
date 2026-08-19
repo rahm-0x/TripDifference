@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Create your account — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="auth">
+  <div class="page-head" style="text-align:center">
+    <h1>Create your account</h1>
+    <p>Book travel and track fare refunds for your team.</p>
+  </div>
+
+  <div class="card">
+    <form method="post" action="{{ url_for('signup') }}">
+      <div class="grid2">
+        <div class="field">
+          <label for="given_name">First name</label>
+          <input id="given_name" name="given_name" value="{{ form.given_name or '' }}"
+                 required autofocus>
+        </div>
+        <div class="field">
+          <label for="family_name">Last name</label>
+          <input id="family_name" name="family_name" value="{{ form.family_name or '' }}" required>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="company">Company</label>
+        <input id="company" name="company" value="{{ form.company or '' }}"
+               placeholder="Northwind Ltd" required>
+        <p class="hint">Your trips and savings are scoped to this company.</p>
+      </div>
+
+      <div class="field">
+        <label for="email">Work email</label>
+        <input id="email" name="email" type="email" value="{{ form.email or '' }}"
+               placeholder="you@company.com" required>
+      </div>
+
+      <div class="field">
+        <label for="password">Create a password</label>
+        <input id="password" name="password" type="password" minlength="10"
+               placeholder="At least 10 characters" required>
+      </div>
+
+      <div class="field">
+        <label for="confirm">Confirm password</label>
+        <input id="confirm" name="confirm" type="password" minlength="10"
+               placeholder="Re-enter it" required>
+      </div>
+
+      <button type="submit" class="btn-block" style="margin-top:6px">Create account</button>
+    </form>
+  </div>
+
+  <p class="foot">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
+</div>
+
+<style>
+  .auth { max-width:440px; margin:40px auto 0; }
+  .foot { text-align:center; margin-top:18px; font-size:13.5px; color:var(--muted); }
+</style>
+
+{% endblock %}

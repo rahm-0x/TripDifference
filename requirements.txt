@@ -2,3 +2,5 @@ flask>=3.0
 requests>=2.32
 python-dotenv>=1.0
 click>=8.1
+psycopg[binary,pool]>=3.2
+argon2-cffi>=23.1
