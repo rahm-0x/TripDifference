@@ -286,6 +286,80 @@ def price_history(order_id):
     return out
 
 
+# --- dashboard chart geometry -------------------------------------------
+# Computed here rather than in the template so the SVG stays declarative, and
+# in the browser-free tests the numbers can be asserted directly.
+#
+# Series colours are the validated categorical pair, not the brand accents:
+# TripDifference gold against its green fails colour-vision separation
+# (protan dE 5.4, normal 14.3 — below the 15 floor). Blue/amber clears it at
+# 27.4 / 30.7. Run scripts/validate_palette.js before changing either.
+SERIES_SPEND = "#3987e5"
+SERIES_SAVED = "#C98500"
+
+CHART_W, CHART_H = 720, 190
+PAD_L, PAD_R, PAD_T, PAD_B = 46, 14, 14, 26
+
+
+def _nice_top(value):
+    """A round axis maximum, so gridlines land on readable numbers."""
+    if value <= 0:
+        return 100
+    import math
+    mag = 10 ** int(math.floor(math.log10(value)))
+    for step in (1, 2, 2.5, 5, 10):
+        if value <= mag * step:
+            return int(mag * step)
+    return int(mag * 10)
+
+
+def spend_chart(rows):
+    """Two money series on ONE axis — both are the same currency, so a second
+    scale would invent a relationship that is not in the data."""
+    top = _nice_top(max([float(r["spend"]) for r in rows]
+                        + [float(r["recovered"]) for r in rows] + [0]))
+    inner_w = CHART_W - PAD_L - PAD_R
+    inner_h = CHART_H - PAD_T - PAD_B
+    n = max(len(rows) - 1, 1)
+
+    def pts(key):
+        out = []
+        for i, r in enumerate(rows):
+            x = PAD_L + inner_w * i / n
+            y = PAD_T + inner_h * (1 - float(r[key]) / top)
+            out.append({"x": round(x, 1), "y": round(y, 1),
+                        "label": r["label"], "value": f"{float(r[key]):,.2f}"})
+        return out
+
+    grid = [{"y": round(PAD_T + inner_h * (1 - f), 1),
+             "label": f"{int(top * f):,}"} for f in (0, .25, .5, .75, 1)]
+    return {"spend": pts("spend"), "saved": pts("recovered"), "grid": grid,
+            "top": top, "w": CHART_W, "h": CHART_H,
+            "has_data": any(float(r["spend"]) or float(r["recovered"]) for r in rows)}
+
+
+def activity_chart(rows, w=720, h=150):
+    """One series, so one colour for every bar — a value ramp here would
+    double-encode height as hue."""
+    top = max([r["checks"] for r in rows] + [1])
+    pad_l, pad_b, pad_t = 34, 24, 10
+    inner_w, inner_h = w - pad_l - 10, h - pad_b - pad_t
+    # 2px of surface between neighbours rather than a stroke around each bar
+    slot = inner_w / max(len(rows), 1)
+    bw = max(slot - 8, 6)
+    bars = []
+    for i, r in enumerate(rows):
+        bh = inner_h * (r["checks"] / top)
+        bars.append({"x": round(pad_l + slot * i + (slot - bw) / 2, 1),
+                     "y": round(pad_t + inner_h - bh, 1),
+                     "w": round(bw, 1), "h": round(max(bh, 0), 1),
+                     "label": r["label"], "checks": r["checks"],
+                     "reshops": r["reshops"]})
+    return {"bars": bars, "top": top, "w": w, "h": h,
+            "baseline": round(pad_t + inner_h, 1),
+            "has_data": any(r["checks"] for r in rows)}
+
+
 def build_chart(order_id, paid):
     """Tiny inline-SVG line chart. Coordinates computed here, drawn in the template."""
     pts = price_history(order_id)
@@ -696,9 +770,17 @@ def overview():
     past = sorted((t for t in trips_ if (t["depart_iso"][:10] or "9999") < today),
                   key=lambda t: t["depart_iso"], reverse=True)
     # Same cards as My trips, capped — this is a summary, not the full list.
+    acct = _account()
+    months = db.monthly_series(acct)
+    weeks = db.weekly_activity(acct)
     return render_template("overview.html", nav="overview",
-                           s=db.account_summary(_account()),
-                           upcoming=upcoming[:4], recent=past[:3])
+                           s=db.account_summary(acct),
+                           upcoming=upcoming[:4], recent=past[:3],
+                           months=months, weeks=weeks,
+                           spend_chart=spend_chart(months),
+                           activity=activity_chart(weeks),
+                           bookings=db.recent_bookings(acct),
+                           c_spend=SERIES_SPEND, c_saved=SERIES_SAVED)
 
 
 # ---------------------------------------------------------------------------

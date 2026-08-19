@@ -30,53 +30,218 @@
   </div>
 </div>
 
-{% if upcoming %}
+<div class="charts">
+  <!-- ---------- spend vs recovered ---------- -->
+  <div class="card chart-card">
+    <div class="chart-head">
+      <h3>Spend &amp; recovered</h3>
+      <div class="legend">
+        <span><i style="background:{{ c_spend }}"></i>Spend</span>
+        <span><i style="background:{{ c_saved }}"></i>Recovered</span>
+      </div>
+    </div>
+
+    {% if spend_chart.has_data %}
+    <svg class="plot" viewBox="0 0 {{ spend_chart.w }} {{ spend_chart.h }}"
+         role="img" aria-label="Monthly spend and recovered savings, last six months">
+      {% for g in spend_chart.grid %}
+      <line x1="46" x2="{{ spend_chart.w - 14 }}" y1="{{ g.y }}" y2="{{ g.y }}" class="grid"/>
+      <text x="38" y="{{ g.y + 4 }}" class="ax" text-anchor="end">{{ g.label }}</text>
+      {% endfor %}
+
+      {% for key, colour in [('spend', c_spend), ('saved', c_saved)] %}
+      <polyline fill="none" stroke="{{ colour }}" stroke-width="2"
+                stroke-linejoin="round" stroke-linecap="round"
+                points="{% for p in spend_chart[key] %}{{ p.x }},{{ p.y }} {% endfor %}"/>
+      {% for p in spend_chart[key] %}
+      <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" fill="{{ colour }}"
+              stroke="var(--surface)" stroke-width="2"
+              data-tip="{{ p.label }} · {{ key|replace('saved','recovered')|capitalize }} {{ p.value }} {{ s.currency }}"/>
+      {% endfor %}
+      {% endfor %}
+
+      {# the endpoint only — a number on every point is unreadable #}
+      <text x="{{ spend_chart.spend[-1].x }}" y="{{ spend_chart.spend[-1].y - 10 }}"
+            class="ax end" text-anchor="end">{{ spend_chart.spend[-1].value }}</text>
+
+      {% for p in spend_chart.spend %}
+      <text x="{{ p.x }}" y="{{ spend_chart.h - 8 }}" class="ax" text-anchor="middle">{{ p.label }}</text>
+      {% endfor %}
+    </svg>
+
+    <details class="tv">
+      <summary>Show as a table</summary>
+      <table>
+        <thead><tr><th>Month</th><th>Spend</th><th>Recovered</th></tr></thead>
+        <tbody>
+          {% for m in months %}
+          <tr><td>{{ m.label }}</td>
+              <td class="num">{{ m.spend }} {{ s.currency }}</td>
+              <td class="num">{{ m.recovered }} {{ s.currency }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% else %}
+    <p class="muted empty">No spend recorded in the last six months.</p>
+    {% endif %}
+  </div>
+
+  <!-- ---------- weekly activity ---------- -->
+  <div class="card chart-card">
+    <div class="chart-head">
+      <h3>Weekly activity</h3>
+      <span class="muted" style="font-size:12.5px">fare checks run</span>
+    </div>
+
+    {% if activity.has_data %}
+    <svg class="plot" viewBox="0 0 {{ activity.w }} {{ activity.h }}"
+         role="img" aria-label="Fare checks run per week, last eight weeks">
+      <line x1="34" x2="{{ activity.w - 10 }}" y1="{{ activity.baseline }}"
+            y2="{{ activity.baseline }}" class="grid"/>
+      <text x="26" y="{{ activity.baseline + 4 }}" class="ax" text-anchor="end">0</text>
+      <text x="26" y="16" class="ax" text-anchor="end">{{ activity.top }}</text>
+      {% for b in activity.bars %}
+      <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
+            rx="4" fill="{{ c_spend }}"
+            data-tip="Week of {{ b.label }} · {{ b.checks }} check{{ 's' if b.checks != 1 }}{% if b.reshops %} · {{ b.reshops }} rebooked{% endif %}"/>
+      <text x="{{ b.x + b.w / 2 }}" y="{{ activity.h - 6 }}" class="ax"
+            text-anchor="middle">{{ b.label }}</text>
+      {% endfor %}
+    </svg>
+
+    <details class="tv">
+      <summary>Show as a table</summary>
+      <table>
+        <thead><tr><th>Week of</th><th>Checks</th><th>Rebooked</th></tr></thead>
+        <tbody>
+          {% for w in weeks %}
+          <tr><td>{{ w.label }}</td><td class="num">{{ w.checks }}</td>
+              <td class="num">{{ w.reshops }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% else %}
+    <p class="muted empty">No fare checks yet. Monitoring starts once a trip is booked.</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ---------- recent bookings ---------- -->
 <div class="sec-top">
-  <h2>Upcoming</h2>
+  <h2>Recent bookings</h2>
   <a href="{{ url_for('trips') }}" class="btn btn-ghost btn-sm">All trips</a>
 </div>
-{% for t in upcoming %}
-{% include "_trip_card.html" %}
-{% endfor %}
 
-{% elif recent %}
-<div class="sec-top">
-  <h2>Recent</h2>
-  <a href="{{ url_for('trips') }}" class="btn btn-ghost btn-sm">All trips</a>
+{% if bookings %}
+<div class="card" style="padding:0; overflow-x:auto">
+  <table class="bk">
+    <thead>
+      <tr><th>Reference</th><th>Traveller</th><th>Route</th><th>Departs</th>
+          <th class="r">Paid</th><th class="r">Saved</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for b in bookings %}
+      <tr>
+        <td class="mono" style="font-weight:700; letter-spacing:.06em">{{ b.reference }}</td>
+        <td>{{ b.traveller }}{% if b.party > 1 %}
+            <span class="muted">+{{ b.party - 1 }}</span>{% endif %}</td>
+        <td>{{ b.route }} <span class="muted">{{ b.carrier }}</span></td>
+        <td class="muted">{{ b.departure_date }}</td>
+        <td class="r num">{{ b.paid }} <span class="cur">{{ b.currency }}</span></td>
+        <td class="r num">{% if b.saved %}<span class="neg">{{ b.saved }}</span>{% else %}—{% endif %}</td>
+        <td>{% if b.monitoring %}<span class="tag tag-sage"><span class="dot"></span>Monitoring</span>
+            {% else %}<span class="tag tag-mute">Paused</span>{% endif %}</td>
+        <td class="r"><a href="{{ url_for('trip_detail', order_id=b.order_id) }}"
+                         class="btn btn-ghost btn-sm">View</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
-{% for t in recent %}
-{% include "_trip_card.html" %}
-{% endfor %}
-
 {% else %}
-<div class="card" style="text-align:center; padding:48px 24px; margin-top:18px">
+<div class="card" style="text-align:center; padding:48px 24px">
   <p class="muted" style="margin:0 0 16px">
-    Nothing booked yet. Once you book, your trips and savings appear here.
+    Nothing booked yet. Once you book, your spend, activity and trips appear here.
   </p>
   <a href="{{ url_for('search') }}" class="btn">Search flights</a>
 </div>
 {% endif %}
 
+{% if upcoming %}
+<div class="sec-top"><h2>Upcoming</h2></div>
+{% for t in upcoming %}{% include "_trip_card.html" %}{% endfor %}
+{% endif %}
+
+<div id="tip" class="tip" hidden></div>
+
 <style>
   .tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
-  .tile {
-    background:var(--surface); border:1px solid var(--line);
-    border-radius:var(--r-card); padding:18px 20px;
-  }
-  .tile .v {
-    font-size:28px; font-weight:800; letter-spacing:-.035em; margin-top:6px;
-    font-variant-numeric:tabular-nums;
-  }
+  .tile { background:var(--surface); border:1px solid var(--line);
+          border-radius:var(--r-card); padding:18px 20px; }
+  .tile .v { font-size:28px; font-weight:800; letter-spacing:-.035em; margin-top:6px;
+             font-variant-numeric:tabular-nums; }
   .tile .v.good { color:var(--green); }
   .tile .cur { font-size:12px; font-weight:600; color:var(--muted-2); margin-left:4px; }
   .tile .sub { font-size:12.5px; color:var(--muted-2); margin-top:5px; }
-  .sec-top {
-    display:flex; align-items:center; justify-content:space-between;
-    gap:16px; margin:30px 0 12px;
+
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
+  .chart-card { padding:18px 20px; }
+  .chart-head { display:flex; align-items:baseline; justify-content:space-between;
+                gap:12px; margin-bottom:12px; }
+  .chart-head h3 { margin:0; }
+  .legend { display:flex; gap:14px; font-size:12.5px; color:var(--muted); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend i { width:9px; height:9px; border-radius:2px; display:inline-block; }
+
+  .plot { width:100%; height:auto; display:block; overflow:visible; }
+  /* hairline, one shade off the surface — never dashed */
+  .grid { stroke:var(--line); stroke-width:1; }
+  .ax { fill:var(--muted-2); font-size:10.5px; font-family:'Inter',sans-serif; }
+  .ax.end { fill:var(--text); font-weight:700; font-size:11.5px; }
+  .plot circle, .plot rect { cursor:default; }
+  .empty { font-size:13.5px; padding:26px 0; text-align:center; }
+
+  .tv { margin-top:12px; }
+  .tv summary { font-size:12.5px; color:var(--muted); cursor:pointer; }
+  .tv table { margin-top:10px; }
+  .tv th, .tv td { padding:6px 8px; font-size:12.5px; }
+
+  .bk th, .bk td { padding:12px 14px; white-space:nowrap; }
+  .bk .r { text-align:right; }
+
+  .tip {
+    position:fixed; z-index:60; pointer-events:none;
+    background:var(--surface-2); border:1px solid var(--line);
+    border-radius:var(--r-sm); padding:7px 10px; font-size:12.5px;
+    color:var(--text); box-shadow:var(--shadow);
   }
+
+  .sec-top { display:flex; align-items:center; justify-content:space-between;
+             gap:16px; margin:30px 0 12px; }
   .sec-top h2 { margin:0; }
+  @media (max-width:1040px){ .charts { grid-template-columns:1fr; } }
   @media (max-width:980px){ .tiles { grid-template-columns:1fr 1fr; } }
   @media (max-width:560px){ .tiles { grid-template-columns:1fr; } }
 </style>
+
+<script>
+  // Hover layer. An SVG chart that cannot be interrogated is a picture.
+  (function () {
+    const tip = document.getElementById('tip');
+    document.querySelectorAll('.plot [data-tip]').forEach(el => {
+      el.addEventListener('mouseenter', e => {
+        tip.textContent = el.getAttribute('data-tip');
+        tip.hidden = false;
+      });
+      el.addEventListener('mousemove', e => {
+        tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px';
+        tip.style.top = (e.clientY - tip.offsetHeight - 12) + 'px';
+      });
+      el.addEventListener('mouseleave', () => { tip.hidden = true; });
+    });
+  })();
+</script>
 
 {% endblock %}

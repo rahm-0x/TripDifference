@@ -433,3 +433,74 @@ def account_summary(account_id):
                                                WHERE account_id = %s)""",
                          (account_id,), fetch="one")["n"]
     return out
+
+
+# ---------------------------------------------------------------------------
+# dashboard series
+# ---------------------------------------------------------------------------
+#
+# Every one of these reads real rows. A dashboard that invents a trend is worse
+# than an empty one, so a quiet month is a zero and an account with no history
+# gets an empty state rather than a shape.
+
+def monthly_series(account_id, months=6):
+    """Spend and recovered per calendar month, oldest first, gaps filled."""
+    rows = q("""WITH span AS (
+                  SELECT generate_series(
+                    date_trunc('month', now()) - make_interval(months => %s - 1),
+                    date_trunc('month', now()), '1 month') AS m)
+                SELECT to_char(span.m, 'Mon')            AS label,
+                       to_char(span.m, 'YYYY-MM')        AS ym,
+                       COALESCE(sum(o.paid), 0)          AS spend,
+                       COALESCE(sum(o.refunded), 0)      AS recovered
+                  FROM span
+                  LEFT JOIN orders o
+                    ON o.account_id = %s
+                   AND date_trunc('month', o.created_at) = span.m
+                 GROUP BY span.m
+                 ORDER BY span.m""", (months, account_id), fetch="all")
+    return [dict(r) for r in rows]
+
+
+def weekly_activity(account_id, weeks=8):
+    """Monitoring checks per week — how much work the engine actually did."""
+    rows = q("""WITH span AS (
+                  SELECT generate_series(
+                    date_trunc('week', now()) - make_interval(weeks => %s - 1),
+                    date_trunc('week', now()), '1 week') AS w)
+                SELECT to_char(span.w, 'DD Mon')  AS label,
+                       count(a.id)                AS checks,
+                       count(a.id) FILTER (WHERE a.outcome = 'reshop') AS reshops
+                  FROM span
+                  LEFT JOIN audit_events a
+                    ON date_trunc('week', a.ts) = span.w
+                   AND a.order_id IN (SELECT order_id FROM orders WHERE account_id = %s)
+                 GROUP BY span.w
+                 ORDER BY span.w""", (weeks, account_id), fetch="all")
+    return [dict(r) for r in rows]
+
+
+def recent_bookings(account_id, limit=5):
+    rows = q("""SELECT order_id, booking_reference, route, carrier, departure_date,
+                       paid, refunded, currency, monitoring, raw
+                  FROM orders WHERE account_id = %s
+                 ORDER BY created_at DESC LIMIT %s""",
+             (account_id, limit), fetch="all")
+    out = []
+    for r in rows:
+        pax = (r["raw"] or {}).get("passengers") or []
+        lead = pax[0] if pax else {}
+        out.append({
+            "order_id": r["order_id"],
+            "reference": r["booking_reference"],
+            "route": r["route"],
+            "carrier": r["carrier"],
+            "departure_date": r["departure_date"].isoformat() if r["departure_date"] else "",
+            "traveller": f"{lead.get('given_name','')} {lead.get('family_name','')}".strip() or "—",
+            "party": len(pax),
+            "paid": str(r["paid"]) if r["paid"] is not None else "—",
+            "saved": str(r["refunded"]) if r["refunded"] is not None else None,
+            "currency": r["currency"],
+            "monitoring": r["monitoring"],
+        })
+    return out
