@@ -377,29 +377,55 @@ def _hash_token(token):
     return hashlib.sha256(token.encode()).digest()
 
 
-def create_account(company, email, password_hash, profile):
-    """Open signup: one new account (the company) plus its first user.
+def create_account(email, password_hash=None, supabase_user_id=None):
+    """Open signup: one new account plus its first user. Just email/password
+    (or a linked Google identity) — name, DOB and the rest of the profile
+    are collected in the onboarding profile step (complete_profile), not
+    here. `accounts.name` gets a placeholder from the email's local part
+    until complete_profile fills in the real name.
 
     Both rows or neither — a user without an account has nothing to own.
     """
     with pool().connection() as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO accounts (name) VALUES (%s) RETURNING id",
-                    (company,))
+                    (email.split("@")[0],))
         account_id = cur.fetchone()["id"]
         cur.execute(
-            """INSERT INTO users (account_id, email, password_hash,
-                                  given_name, family_name, title, born_on,
-                                  gender, phone_number)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
-            (account_id, email, password_hash,
-             profile.get("given_name", ""), profile.get("family_name", ""),
-             profile.get("title", ""), profile.get("born_on") or None,
-             profile.get("gender", ""), profile.get("phone_number", "")))
+            """INSERT INTO users (account_id, email, password_hash, supabase_user_id)
+               VALUES (%s, %s, %s, %s) RETURNING *""",
+            (account_id, email, password_hash, supabase_user_id))
         return cur.fetchone()
+
+
+def complete_profile(user_id, account_id, *, given_name, family_name, middle_name,
+                     born_on, referral_source, invite_code):
+    """Onboarding step 2 — the 'let's get to know you' fields. Also updates
+    accounts.name from its email-local-part placeholder to the real name."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE users SET given_name = %s, family_name = %s, middle_name = %s,
+                                born_on = %s, referral_source = %s, invite_code = %s
+                WHERE id = %s RETURNING *""",
+            (given_name, family_name, middle_name, born_on or None,
+             referral_source, invite_code, user_id))
+        user = cur.fetchone()
+        cur.execute("UPDATE accounts SET name = %s WHERE id = %s",
+                    (f"{given_name} {family_name}".strip() or user["email"], account_id))
+        return user
 
 
 def user_by_email(email):
     return q("SELECT * FROM users WHERE email = %s", (email,), fetch="one")
+
+
+def user_by_supabase_id(supabase_user_id):
+    return q("SELECT * FROM users WHERE supabase_user_id = %s",
+             (supabase_user_id,), fetch="one")
+
+
+def link_supabase_id(user_id, supabase_user_id):
+    q("UPDATE users SET supabase_user_id = %s WHERE id = %s",
+      (supabase_user_id, user_id))
 
 
 def email_taken(email):
@@ -412,6 +438,71 @@ def account_settings_update(user_id, *, nickname, phone_number):
     travelers and is edited from Travelers, not here."""
     q("""UPDATE users SET nickname = %s, phone_number = %s WHERE id = %s""",
       (nickname or "", phone_number or "", user_id))
+
+
+# ---------------------------------------------------------------------------
+# stripe — card on file
+# ---------------------------------------------------------------------------
+
+def account_stripe_ids(account_id):
+    return q("""SELECT stripe_customer_id, stripe_payment_method_id
+                FROM accounts WHERE id = %s""", (account_id,), fetch="one")
+
+
+def account_set_stripe_customer(account_id, stripe_customer_id):
+    q("UPDATE accounts SET stripe_customer_id = %s WHERE id = %s",
+      (stripe_customer_id, account_id))
+
+
+def account_save_payment_method(account_id, *, stripe_payment_method_id, brand,
+                                last4, exp_month, exp_year):
+    q("""UPDATE accounts SET stripe_payment_method_id = %s, card_brand = %s,
+                             card_last4 = %s, card_exp_month = %s, card_exp_year = %s
+         WHERE id = %s""",
+      (stripe_payment_method_id, brand or "", last4 or "", exp_month, exp_year, account_id))
+
+
+def account_card(account_id):
+    """None until a card is on file — the shape eligibility.assess's
+    has_card gate and every template that shows the card both key off."""
+    row = q("""SELECT card_brand, card_last4, card_exp_month, card_exp_year
+                FROM accounts WHERE id = %s AND stripe_payment_method_id IS NOT NULL""",
+            (account_id,), fetch="one")
+    if not row:
+        return None
+    return {
+        "brand": row["card_brand"].title(), "last4": row["card_last4"],
+        "expiry": f"{row['card_exp_month']:02d}/{str(row['card_exp_year'])[-2:]}"
+                  if row["card_exp_month"] and row["card_exp_year"] else "",
+        "holder": "",
+    }
+
+
+# ---------------------------------------------------------------------------
+# email capture layer
+# ---------------------------------------------------------------------------
+
+def email_import_sources(account_id):
+    return q("""SELECT * FROM email_import_sources WHERE account_id = %s
+                ORDER BY created_at""", (account_id,), fetch="all")
+
+
+def email_import_source_create(account_id, kind, address, status="pending"):
+    return q("""INSERT INTO email_import_sources (account_id, kind, address, status)
+                VALUES (%s, %s, %s, %s) RETURNING *""",
+            (account_id, kind, address, status), fetch="one")
+
+
+def email_import_source_authorized(account_id, from_address):
+    """Is `from_address` on this account's allowlist of forwarding senders?
+    Routing (which account a forwarded email belongs to) comes from the
+    `to` address's plus-addressed account_id, decoded before this is
+    called — this only answers whether that account has vouched for the
+    sender, so a stranger can't forward junk into someone else's reservations."""
+    return q("""SELECT 1 FROM email_import_sources
+                WHERE account_id = %s AND kind = 'forwarding'
+                  AND lower(address) = lower(%s) AND status = 'active'""",
+            (account_id, from_address), fetch="one") is not None
 
 
 def start_session(user_id):

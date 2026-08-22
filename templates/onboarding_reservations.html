@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Add your reservations — Trip Difference{% endblock %}
+{% block body %}
+
+{% with msgs = get_flashed_messages(category_filter=['reservation_error']) %}
+{% if msgs %}
+<div class="notice" style="margin-bottom:16px; border-color:rgba(217,95,95,.3)">
+  <span>!</span><div>{{ msgs[0] }}</div>
+</div>
+{% endif %}
+{% endwith %}
+
+<div class="ob-tabs">
+  <span class="modal-tab on">Flights</span>
+  <span class="modal-tab off" title="Hotels aren't supported yet">Hotels
+    <span class="tag tag-mute" style="margin-left:6px">Coming soon</span></span>
+</div>
+
+<div class="page-head">
+  <h1>Add all your upcoming flights</h1>
+  <p>You can start saving right away. Add your reservation manually or set up automatic retrieval.</p>
+</div>
+
+<div class="ob-res-grid">
+  <div class="card">
+    <h3 style="margin-bottom:14px">Enter manually</h3>
+    <form method="post" action="{{ url_for('reservation_new') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="onboarding">
+
+      <div class="field">
+        <label for="booking_reference">Booking / confirmation number</label>
+        <input id="booking_reference" name="booking_reference" required
+               placeholder="e.g. ABCDEF" class="mono">
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="traveler_id">Traveler</label>
+          <select id="traveler_id" name="traveler_id">
+            <option value="">— None on file —</option>
+            {% for t in travelers %}
+            <option value="{{ t.id }}">{{ t.given_name }} {{ t.family_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="carrier">Airline</label>
+          <input id="carrier" name="carrier" required placeholder="e.g. Alaska Airlines">
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="seg_origin">From</label>
+          <input id="seg_origin" name="seg_origin" required maxlength="3"
+                 placeholder="JFK" style="text-transform:uppercase" class="mono">
+        </div>
+        <div class="field">
+          <label for="seg_destination">To</label>
+          <input id="seg_destination" name="seg_destination" required maxlength="3"
+                 placeholder="LAX" style="text-transform:uppercase" class="mono">
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="seg_flight_number">Flight number</label>
+          <input id="seg_flight_number" name="seg_flight_number" placeholder="e.g. 701" class="mono">
+        </div>
+        <div class="field">
+          <label for="departure_date">Departure date</label>
+          <input id="departure_date" name="departure_date" type="date">
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="paid">Amount paid</label>
+          <input id="paid" name="paid" required inputmode="decimal" placeholder="428.00">
+        </div>
+        <div class="field">
+          <label for="currency">Currency</label>
+          <input id="currency" name="currency" value="USD" maxlength="3"
+                 style="text-transform:uppercase" class="mono">
+        </div>
+      </div>
+      <input type="hidden" name="seg_cabin" value="economy">
+      <input type="hidden" name="fare_type" value="cash">
+
+      <button type="submit" class="btn-block" style="margin-top:6px">Add reservation</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-bottom:6px">Other ways to add reservations</h3>
+    <div class="ob-import-opt">
+      <div class="ob-import-head">
+        <span>G</span> Automatically with Gmail
+        <span class="tag tag-mute">Awaiting Google verification</span>
+      </div>
+      <p class="muted" style="font-size:12.5px; margin:6px 0 10px">
+        Connect your Gmail account to automatically retrieve your bookings.
+        Google is still reviewing this access — the connection will start
+        working once that clears.
+      </p>
+      <a href="{{ url_for('gmail_auth_start') }}" class="btn btn-ghost btn-sm">Connect →</a>
+    </div>
+
+    <div class="ob-import-opt">
+      <div class="ob-import-head"><span>↗</span> Forwarding inbox</div>
+      <p class="muted" style="font-size:12.5px; margin:6px 0 10px">
+        Forward reservation confirmations to your dedicated address —
+        we'll pull the details out automatically.
+      </p>
+      <div class="static-value mono" style="font-size:13px">{{ forward_to }}</div>
+
+      <form method="post" action="{{ url_for('email_source_add') }}" style="margin-top:10px">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div style="display:flex; gap:8px">
+          <input name="address" type="email" placeholder="Authorize a sender, e.g. you@gmail.com"
+                 style="flex:1" required>
+          <button type="submit" class="btn btn-sm">Add</button>
+        </div>
+      </form>
+      {% if sources %}
+      <div style="margin-top:10px">
+        {% for s in sources if s.kind == 'forwarding' %}
+        <div class="muted mono" style="font-size:12px; padding:3px 0">{{ s.address }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="ob-actions">
+  <a href="{{ url_for('onboarding_payment') }}" class="btn">Continue</a>
+  <a href="{{ url_for('onboarding_payment') }}" class="btn btn-ghost">Skip for now</a>
+</div>
+
+<style>
+  .ob-tabs { display:flex; gap:18px; margin-bottom:18px; }
+  .modal-tab { font-size:13.5px; font-weight:600; padding-bottom:6px; }
+  .modal-tab.on { color:var(--text); border-bottom:2px solid var(--gold); }
+  .modal-tab.off { color:var(--muted-2); }
+  .ob-res-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  .ob-import-opt { border:1px solid var(--line); border-radius:var(--r-sm); padding:14px; margin-bottom:12px; }
+  .ob-import-head { display:flex; align-items:center; gap:8px; font-weight:600; font-size:13.5px; }
+  .static-value { padding:8px 10px; background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-sm); }
+  .ob-actions { display:flex; gap:10px; margin-top:22px; }
+  @media (max-width:860px){ .ob-res-grid { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}

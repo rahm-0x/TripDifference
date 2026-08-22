@@ -4,3 +4,4 @@ python-dotenv>=1.0
 click>=8.1
 psycopg[binary,pool]>=3.2
 argon2-cffi>=23.1
+stripe>=11.0

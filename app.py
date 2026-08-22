@@ -14,6 +14,9 @@ Login / activate are presentation screens. They do not gate anything: this is a
 single-operator rig and adding real auth would only get in the way.
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -22,13 +25,18 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from flask import (Flask, flash, get_flashed_messages, redirect, render_template,
-                   request, send_from_directory, url_for)
+                   request, send_from_directory, session, url_for)
+
+import requests
 
 import auth
+import billing
 import db
 import duffel_http
 import eligibility
+import parsing
 import paths
+import supabase_auth
 from duffel_http import DuffelError
 from engine import (OrderSnapshot, Outcome, ReshopPolicy, SERVICE_FEE_RATE,
                     evaluate, log_decision, log_eligibility)
@@ -66,9 +74,6 @@ app.config.update(
 
 DEFAULT_POLICY = ReshopPolicy(min_saving=Decimal("20.00"), departure_buffer_hours=24)
 
-# Stand-ins for data a real deployment would hold. Kept in one place so it is
-# obvious what is fixture and what comes from Duffel.
-CARD = {"brand": "Visa", "last4": "4242", "holder": "Northwind Ltd", "expiry": "09/29"}
 PASSENGER_FIELDS = ("title", "given_name", "family_name", "born_on", "gender",
                     "email", "phone_number")
 
@@ -102,7 +107,8 @@ def _csrf_guard():
 @app.context_processor
 def inject_globals():
     user = auth.current_user()
-    return {"user": auth.view_model(user), "card": CARD,
+    card = db.account_card(user["account_id"]) if user else None
+    return {"user": auth.view_model(user), "card": card,
             "policy": DEFAULT_POLICY, "profile": auth.profile_of(user),
             "csrf_token": auth.csrf_token()}
 
@@ -206,6 +212,15 @@ def _account():
     return user["account_id"] if user else None
 
 
+def _forward_to_address(account_id):
+    """Plus-addressed so routing an inbound forward needs no DB lookup —
+    the account_id is right there in the address. Resend inbound isn't
+    enabled yet (docs/bolt-on-pivot.md), so this renders even before it is;
+    the address just won't receive anything until that dashboard step's done."""
+    domain = os.environ.get("RESEND_EMAIL_DOMAIN", "tripdifference.com")
+    return f"trips+{account_id}@{domain}"
+
+
 def load_orders():
     return db.load_orders(_account())
 
@@ -219,11 +234,11 @@ def upsert_order(record):
 
 
 def snapshot_of(record):
-    # has_card is hardcoded True until Stripe lands — see eligibility.assess's
-    # docstring. `fallback` only matters when raw is empty (a manual/imported
+    # `fallback` only matters when raw is empty (a manual/imported
     # reservation with no Duffel order behind it).
+    has_card = bool(db.account_card(record.get("account_id")))
     return OrderSnapshot.from_duffel(record["raw"], fare_type=record.get("fare_type") or "cash",
-                                     has_card=True, fallback=record)
+                                     has_card=has_card, fallback=record)
 
 
 def _manual_leg_view(record):
@@ -526,34 +541,147 @@ def login():
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
+    """Step 1 of onboarding: just email + password (or Google — see
+    /auth/google/start). Name, DOB and the rest of the profile are
+    collected in /onboarding/profile, not here."""
     if request.method == "POST":
-        form = {k: request.form.get(k, "").strip() for k in
-                ("given_name", "family_name", "company", "email")}
-        form["email"] = form["email"].lower()
+        email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
 
         def again(msg):
-            return render_template("signup.html", hide_nav=True, form=form, error=msg), 400
+            return render_template("signup.html", hide_nav=True, email=email, error=msg), 400
 
         problem = auth.password_problem(password, request.form.get("confirm", ""))
         if problem:
             return again(problem)
-        if not all(form.values()):
-            return again("Every field is required.")
-        if db.email_taken(form["email"]):
+        if not email:
+            return again("Email is required.")
+        if db.email_taken(email):
             return again("An account already exists for that email.")
 
-        user = db.create_account(form["company"], form["email"],
-                                 auth.hash_password(password), form)
+        user = db.create_account(email, auth.hash_password(password))
         auth.sign_in(user["id"])
-        return redirect(url_for("index"))
-    return render_template("signup.html", hide_nav=True, form={})
+        return redirect(url_for("onboarding_profile"))
+    return render_template("signup.html", hide_nav=True, email="")
+
+
+# ---------------------------------------------------------------------------
+# onboarding — profile, reservations, payment (each its own step/route so a
+# signup can resume mid-flow rather than losing progress in one giant form)
+# ---------------------------------------------------------------------------
+
+@app.route("/onboarding/profile", methods=["GET", "POST"])
+@auth.login_required
+def onboarding_profile():
+    user = auth.current_user()
+    if request.method == "POST":
+        form = {k: request.form.get(k, "").strip() for k in
+                ("given_name", "middle_name", "family_name", "born_on",
+                 "referral_source", "invite_code")}
+        if not (form["given_name"] and form["family_name"]):
+            return render_template("onboarding_profile.html", hide_nav=True, form=form,
+                                   error="First and last name are required."), 400
+        db.complete_profile(user["id"], user["account_id"], **form)
+        return redirect(url_for("onboarding_reservations"))
+    return render_template("onboarding_profile.html", hide_nav=True, form={
+        "given_name": user["given_name"], "middle_name": user.get("middle_name", ""),
+        "family_name": user["family_name"],
+        "born_on": user["born_on"].isoformat() if user["born_on"] else "",
+        "referral_source": user.get("referral_source", ""),
+        "invite_code": user.get("invite_code", ""),
+    })
+
+
+@app.route("/onboarding/reservations", methods=["GET"])
+@auth.login_required
+def onboarding_reservations():
+    acct = _account()
+    return render_template("onboarding_reservations.html", hide_nav=True,
+                           travelers=db.travelers(acct),
+                           forward_to=_forward_to_address(acct),
+                           sources=db.email_import_sources(acct))
+
+
+@app.route("/auth/gmail/start")
+@auth.login_required
+def gmail_auth_start():
+    """Scaffolded, not functional. gmail.readonly is a sensitive Google
+    scope requiring Google's manual app-verification process — see
+    docs/bolt-on-pivot.md. This records intent so Settings/onboarding can
+    show 'pending' honestly rather than a dead button; there's nothing to
+    poll until that verification clears."""
+    user = auth.current_user()
+    db.email_import_source_create(_account(), "google", user["email"], status="pending")
+    return redirect(request.referrer or url_for("onboarding_reservations"))
+
+
+@app.route("/onboarding/payment", methods=["GET"])
+@auth.login_required
+def onboarding_payment():
+    acct = _account()
+    user = auth.current_user()
+    customer_id = billing.ensure_customer(acct, user["email"])
+    intent = billing.create_setup_intent(customer_id)
+    return render_template("onboarding_payment.html", hide_nav=True,
+                           client_secret=intent.client_secret,
+                           stripe_publishable_key=os.environ.get("STRIPE_PUBLISHABLE_KEY", ""))
+
+
+@app.route("/onboarding/payment/confirm", methods=["POST"])
+@auth.login_required
+def onboarding_payment_confirm():
+    acct = _account()
+    payment_method_id = request.form.get("payment_method_id", "").strip()
+    if payment_method_id:
+        ids = db.account_stripe_ids(acct)
+        billing.save_payment_method(acct, ids["stripe_customer_id"], payment_method_id)
+    return redirect(url_for("overview"))
 
 
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
     auth.sign_out()
     return redirect(url_for("index"))
+
+
+@app.route("/auth/google/start")
+def google_auth_start():
+    verifier, challenge = supabase_auth.new_pkce_pair()
+    session["_google_pkce_verifier"] = verifier
+    redirect_to = url_for("google_auth_callback", _external=True)
+    return redirect(supabase_auth.start_url(redirect_to, challenge))
+
+
+@app.route("/auth/google/callback")
+def google_auth_callback():
+    code = request.args.get("code", "")
+    verifier = session.pop("_google_pkce_verifier", None)
+    if not code or not verifier:
+        return redirect(url_for("login"))
+    try:
+        supa_user = supabase_auth.exchange_code(code, verifier)
+    except (requests.RequestException, KeyError):
+        return render_template("login.html", hide_nav=True, prefill_email="",
+                               error="Google sign-in didn't complete. Try again."), 502
+
+    supabase_user_id = supa_user["id"]
+    email = (supa_user.get("email") or "").lower()
+
+    user = db.user_by_supabase_id(supabase_user_id)
+    if not user and email:
+        # A matching verified email on an existing password account links
+        # rather than duplicating — same person, a second way in.
+        user = db.user_by_email(email)
+        if user:
+            db.link_supabase_id(user["id"], supabase_user_id)
+    if not user:
+        user = db.create_account(email, password_hash=None,
+                                 supabase_user_id=supabase_user_id)
+
+    auth.sign_in(user["id"])
+    if not (user.get("given_name") and user.get("family_name")):
+        return redirect(url_for("onboarding_profile"))
+    return redirect(url_for("overview"))
 
 
 # ---------------------------------------------------------------------------
@@ -800,7 +928,8 @@ def book():
         return render_template("results.html", nav="search", offers=None, form={},
                                error=str(exc))
 
-    snap = OrderSnapshot.from_duffel(order)
+    has_card = bool(db.account_card(_account()))
+    snap = OrderSnapshot.from_duffel(order, has_card=has_card)
 
     # Gate monitoring on fare conditions at booking time. Never default to on.
     assessment = snap.eligibility
@@ -915,7 +1044,7 @@ def wallet():
     """
     rows = db.wallet_transactions(_account())
     return render_template("wallet.html", nav="wallet", rows=rows,
-                           totals=db.wallet_totals(rows), card=CARD)
+                           totals=db.wallet_totals(rows))
 
 
 # ---------------------------------------------------------------------------
@@ -936,7 +1065,86 @@ def settings():
                                    nickname=request.form.get("nickname", "").strip(),
                                    phone_number=request.form.get("phone_number", "").strip())
         return redirect(url_for("settings"))
-    return render_template("settings.html", nav="settings", card=CARD, account_user=user)
+    acct = _account()
+    return render_template("settings.html", nav="settings", account_user=user,
+                           forward_to=_forward_to_address(acct),
+                           sources=db.email_import_sources(acct))
+
+
+@app.route("/settings/email-sources", methods=["POST"])
+@auth.login_required
+def email_source_add():
+    """Authorize a personal address to forward confirmations to this
+    account's forward-to address — the allowlist the inbound webhook
+    checks against, not the forward-to address itself (that's derived,
+    see _forward_to_address)."""
+    address = request.form.get("address", "").strip().lower()
+    if address:
+        db.email_import_source_create(_account(), "forwarding", address, status="active")
+    return redirect(request.referrer or url_for("settings"))
+
+
+def _verify_resend_signature(secret, svix_id, svix_timestamp, svix_signature, body):
+    """Svix-style HMAC verification — the scheme Resend's webhooks use.
+    `secret` is the whsec_-prefixed signing secret from Resend's dashboard;
+    `svix_signature` may carry multiple space-separated `v1,<sig>` entries."""
+    if not (secret and svix_id and svix_timestamp and svix_signature):
+        return False
+    key = base64.b64decode(secret.removeprefix("whsec_"))
+    signed = f"{svix_id}.{svix_timestamp}.{body.decode()}".encode()
+    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    return any(
+        hmac.compare_digest(expected, part.split(",", 1)[1])
+        for part in svix_signature.split() if part.startswith("v1,")
+    )
+
+
+@app.route("/webhooks/resend/inbound", methods=["POST"])
+def resend_inbound():
+    """Forwarding-inbox intake. No @auth.login_required — this is a
+    server-to-server webhook, trusted by signature instead of a session,
+    same model Duffel's own calls already use.
+
+    Payload shape is Resend's inbound-email event; the exact field names
+    should be double-checked against a real delivered event once inbound
+    routing is actually enabled (docs/bolt-on-pivot.md — MX record not
+    live yet), since this was written against the documented shape, not a
+    captured one.
+    """
+    if not _verify_resend_signature(
+        os.environ.get("RESEND_WEBHOOK_SECRET", ""),
+        request.headers.get("svix-id", ""), request.headers.get("svix-timestamp", ""),
+        request.headers.get("svix-signature", ""), request.get_data(),
+    ):
+        return "", 401
+
+    payload = request.get_json(silent=True) or {}
+    data = payload.get("data") or {}
+    to_field = data.get("to")
+    to_addr = (to_field[0] if isinstance(to_field, list) else to_field) or ""
+    from_addr = (data.get("from") or "").lower()
+
+    # trips+{account_id}@domain — the account_id is right there, no lookup.
+    m = re.match(r"trips\+([0-9a-f-]{36})@", to_addr)
+    if not m:
+        return "", 200  # not addressed to a forward-to address; ignore quietly
+    account_id = m.group(1)
+
+    if not db.email_import_source_authorized(account_id, from_addr):
+        return "", 200  # unrecognized sender — don't let a stranger inject reservations
+
+    parsed = parsing.parse_confirmation(data.get("subject", ""),
+                                        data.get("text") or data.get("html") or "")
+    record = db.create_manual_order(
+        account_id, traveler_id=None,
+        seg_origin=parsed["seg_origin"], seg_destination=parsed["seg_destination"],
+        seg_flight_number=parsed["seg_flight_number"], seg_cabin="economy",
+        carrier=parsed["carrier"], booking_reference=parsed["booking_reference"],
+        departure_date=parsed["departure_date"] or None,
+        paid=parsed["paid"], currency="USD", fare_type="cash",
+    )
+    log_eligibility(record["order_id"], snapshot_of(record).eligibility)
+    return "", 200
 
 
 # ---------------------------------------------------------------------------
@@ -1072,6 +1280,8 @@ def reservation_new():
     # "Added to monitoring" (or not-eligible) event for this reservation too,
     # not just for reservations booked through us.
     log_eligibility(record["order_id"], snapshot_of(record).eligibility)
+    if request.form.get("next") == "onboarding":
+        return redirect(url_for("onboarding_payment"))
     return redirect(url_for("trip_detail", order_id=record["order_id"]))
 
 
@@ -1306,6 +1516,11 @@ def execute(order_id, action):
     if request.form.get("confirm_text", "").strip().upper() != "CONFIRM":
         return refuse("Type CONFIRM exactly to proceed.")
 
+    # For the delivery_detail copy below — card-gating means this should
+    # always exist by the time an exchange executes, but a card removed
+    # after monitoring started shouldn't crash the confirm step.
+    card = db.account_card(record.get("account_id")) or {"last4": "on file"}
+
     last = record.get("last_decision") or {}
     if last.get("source") == "simulated":
         return refuse("Last decision came from the simulated source. "
@@ -1356,7 +1571,7 @@ def execute(order_id, action):
                 savings = {"old_amount": str(paid), "new_amount": str(paid + delta),
                           "realized_savings": str(-delta),
                           "delivery_type": "refund_to_card",
-                          "delivery_detail": f"card ending in {CARD['last4']}"}
+                          "delivery_detail": f"card ending in {card['last4']}"}
         else:
             quote = duffel_http.request("POST", "/air/order_cancellations", body={
                 "data": {"order_id": order_id}}, label="ui_cancel_quote")
@@ -1378,7 +1593,7 @@ def execute(order_id, action):
                           "realized_savings": str(refunded),
                           "delivery_type": "airline_credit" if is_credit else "refund_to_card",
                           "delivery_detail": (f"{record.get('carrier')} account" if is_credit
-                                              else f"card ending in {CARD['last4']}")}
+                                              else f"card ending in {card['last4']}")}
     except (DuffelError, RuntimeError) as exc:
         # The order-change *create* call is safe to retry; a failed confirm is
         # not, because the exchange may have landed anyway. Only release the
