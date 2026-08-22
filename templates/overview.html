@@ -4,75 +4,119 @@
 
 {% with msgs = get_flashed_messages(category_filter=['reservation_error']) %}
 {% if msgs %}
-<div class="notice notice-danger" style="margin-bottom:16px">
+<div class="notice" style="margin-bottom:16px; border-color:rgba(192,57,43,.3)">
   <span>!</span><div>{{ msgs[0] }}</div>
 </div>
 {% endif %}
 {% endwith %}
 
-<div class="page-head">
-  <h1>Welcome back, {{ user.name.split(' ')[0] }}.</h1>
-  {% if not card %}
-  <p class="hero-gate">Link a card to start saving</p>
-  {% else %}
-  <p>Counted from your own reservations — nothing here is illustrative.</p>
-  {% endif %}
+<div class="home-head">
+  <div>
+    <h1 class="greet">Good {{ 'morning' if now_hour < 12 else ('afternoon' if now_hour < 18 else 'evening') }}, {{ user.name.split(' ')[0] }}.</h1>
+    {% if not card %}
+    <p class="hero-gate">Link a card to start saving</p>
+    {% endif %}
+  </div>
+  <button type="button" class="btn btn-sm" data-open-modal="addReservation">+ Add Reservation</button>
 </div>
 
-<div class="tiles tiles-3">
-  <div class="tile">
-    <div class="lbl">Bookings</div>
-    <div class="v">{{ s.bookings }}</div>
-    <div class="sub">{{ s.monitoring }} being monitored</div>
+<div class="kpi-row">
+  <div class="kpi">
+    <div class="kpi-lbl">Bookings</div>
+    <div class="kpi-v">{{ s.bookings }}</div>
   </div>
-  <div class="tile">
-    <div class="lbl">Total spent</div>
-    <div class="v">{{ s.spend }}<span class="cur">{{ s.currency }}</span></div>
-    <div class="sub">across all reservations</div>
+  <div class="kpi">
+    <div class="kpi-lbl">Total Spent</div>
+    <div class="kpi-v">{{ s.spend }}<span class="kpi-cur">{{ s.currency }}</span></div>
   </div>
-  <div class="tile">
-    <div class="lbl">Total saved</div>
-    <div class="v {{ 'good' if s.recovered > 0 }}">{{ s.recovered }}<span class="cur">{{ s.currency }}</span></div>
-    <div class="sub">
-      from {{ s.rebooked }} recover{{ 'y' if s.rebooked == 1 else 'ies' }}
-      {% if s.simulated %}<br><span class="sim-note">+{{ s.sim_recovered }} simulated</span>{% endif %}
-    </div>
+  <div class="kpi">
+    <div class="kpi-lbl">Total Saved</div>
+    <div class="kpi-v kpi-positive">{{ net_saved }}<span class="kpi-cur">{{ wallet_currency }}</span></div>
   </div>
 </div>
 
 <div class="home-grid">
-  <div class="card chart-card">
-    <div class="chart-head">
-      <h3>Saved over time</h3>
-      <span class="muted" style="font-size:12.5px">last six months</span>
+  <div class="home-left">
+    <div class="card trend-panel">
+      <div class="trend-head">
+        <h3>Saved all time</h3>
+        <div class="pill-group">
+          <button type="button" class="pill">Month</button>
+          <button type="button" class="pill">Year</button>
+          <button type="button" class="pill on">All Time</button>
+        </div>
+      </div>
+
+      {% if net_saved <= 0 %}
+      <div class="trend-empty">
+        <svg viewBox="0 0 400 60" class="trend-empty-line" preserveAspectRatio="none">
+          <line x1="0" y1="45" x2="400" y2="45" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="5 5"/>
+        </svg>
+        <p>No savings yet — link a card to start tracking price drops.</p>
+        <a href="{{ url_for('onboarding_payment') }}" class="btn btn-sm">Link a Card</a>
+      </div>
+      {% else %}
+      <svg class="plot" viewBox="0 0 {{ saved_chart.w }} {{ saved_chart.h }}"
+           role="img" aria-label="Total saved by month">
+        {% for g in saved_chart.grid %}
+        <line x1="40" x2="{{ saved_chart.w - 14 }}" y1="{{ g.y }}" y2="{{ g.y }}" class="grid"/>
+        <text x="34" y="{{ g.y + 4 }}" class="ax" text-anchor="end">{{ g.label }}</text>
+        {% endfor %}
+        <polyline fill="none" stroke="{{ c_saved }}" stroke-width="2.5" stroke-dasharray="6 5"
+                  stroke-linejoin="round" stroke-linecap="round"
+                  points="{% for p in saved_chart.points %}{{ p.x }},{{ p.y }} {% endfor %}"/>
+        {% for p in saved_chart.points %}
+        <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" fill="{{ c_saved }}"
+                stroke="var(--surface)" stroke-width="2"
+                data-tip="{{ p.label }} · Saved {{ p.value }} {{ s.currency }}"/>
+        <text x="{{ p.x }}" y="{{ saved_chart.h - 8 }}" class="ax" text-anchor="middle">{{ p.label }}</text>
+        {% endfor %}
+      </svg>
+      {% endif %}
     </div>
-    {% if saved_chart.has_data %}
-    <svg class="plot" viewBox="0 0 {{ saved_chart.w }} {{ saved_chart.h }}"
-         role="img" aria-label="Total saved by month, last six months">
-      {% for g in saved_chart.grid %}
-      <line x1="40" x2="{{ saved_chart.w - 14 }}" y1="{{ g.y }}" y2="{{ g.y }}" class="grid"/>
-      <text x="34" y="{{ g.y + 4 }}" class="ax" text-anchor="end">{{ g.label }}</text>
-      {% endfor %}
-      <polyline fill="none" stroke="{{ c_saved }}" stroke-width="2.5" stroke-dasharray="6 5"
-                stroke-linejoin="round" stroke-linecap="round"
-                points="{% for p in saved_chart.points %}{{ p.x }},{{ p.y }} {% endfor %}"/>
-      {% for p in saved_chart.points %}
-      <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" fill="{{ c_saved }}"
-              stroke="var(--surface)" stroke-width="2"
-              data-tip="{{ p.label }} · Saved {{ p.value }} {{ s.currency }}"/>
-      <text x="{{ p.x }}" y="{{ saved_chart.h - 8 }}" class="ax" text-anchor="middle">{{ p.label }}</text>
-      {% endfor %}
-    </svg>
-    {% else %}
-    <p class="muted empty">No savings recorded in the last six months.</p>
-    {% endif %}
+
+    <div class="breakdown-row">
+      <div class="card breakdown-panel" data-breakdown="airline">
+        <div class="trend-head">
+          <h3>Airline Breakdown</h3>
+          <div class="pill-group toggle-metric">
+            <button type="button" class="pill {{ 'on' if carrier_default_metric == 'saved' }}" data-metric="saved">Saved</button>
+            <button type="button" class="pill {{ 'on' if carrier_default_metric == 'spend' }}" data-metric="spend">Spent</button>
+          </div>
+        </div>
+        {% if not carriers %}
+        <p class="muted empty">No spend recorded yet.</p>
+        {% else %}
+        <svg class="plot" viewBox="0 0 {{ carrier_chart.w }} {{ carrier_chart.h }}"
+             role="img" aria-label="Airline breakdown">
+          {% for b in carrier_chart.bars %}
+          {% set init_w = b.saved_w if carrier_default_metric == 'saved' else b.spend_w %}
+          <text x="0" y="{{ b.y + b.h - 5 }}" class="ax lbl-l">{{ b.carrier }}</text>
+          <rect class="metric-bar" x="{{ carrier_chart.label_w }}" y="{{ b.y }}"
+                data-w-saved="{{ b.saved_w }}" data-w-spend="{{ b.spend_w }}"
+                width="{{ init_w }}" height="{{ b.h }}" rx="4"
+                fill="{{ c_saved if carrier_default_metric == 'saved' else c_spend }}"
+                data-tip-saved="{{ b.carrier }} · saved {{ b.saved_value }} {{ s.currency }} · {{ b.saved_share }}"
+                data-tip-spend="{{ b.carrier }} · spent {{ b.spend_value }} {{ s.currency }} · {{ b.spend_share }}"/>
+          <text class="ax val metric-val" x="{{ carrier_chart.label_w + init_w + 10 }}" y="{{ b.y + b.h - 5 }}"
+                data-v-saved="{{ b.saved_value }}" data-v-spend="{{ b.spend_value }}">{{ b.saved_value if carrier_default_metric == 'saved' else b.spend_value }}</text>
+          {% endfor %}
+        </svg>
+        {% endif %}
+      </div>
+
+      <div class="card breakdown-panel">
+        <div class="trend-head"><h3>Hotel Breakdown</h3></div>
+        <p class="muted empty">No savings yet by hotel.</p>
+      </div>
+    </div>
   </div>
 
-  <div class="side-col">
+  <div class="home-right">
     <div class="card">
-      <div class="chart-head" style="margin-bottom:10px">
-        <h3>Upcoming reservations</h3>
-        <a href="{{ url_for('trips') }}" class="btn btn-ghost btn-sm">View all →</a>
+      <div class="trend-head" style="margin-bottom:10px">
+        <h3>Upcoming Reservations</h3>
+        <a href="{{ url_for('trips') }}" class="link-sm">View all →</a>
       </div>
       {% if upcoming %}
       <div class="up-list">
@@ -95,7 +139,7 @@
     </div>
 
     <div class="card">
-      <h3 style="margin-bottom:10px">Activity timeline</h3>
+      <h3 style="margin-bottom:10px">Activity Timeline</h3>
       {% if activity %}
       <div class="timeline">
         {% for a in activity %}
@@ -110,41 +154,10 @@
         {% endfor %}
       </div>
       {% else %}
-      <p class="muted empty" style="padding:18px 0">No activity yet.</p>
+      <p class="muted empty" style="padding:18px 0">No recent savings activity.</p>
       {% endif %}
     </div>
   </div>
-</div>
-
-<div class="sec-top">
-  <h2>Airline breakdown</h2>
-  <button type="button" class="btn btn-sm" data-open-modal="addReservation">+ Add Reservation</button>
-</div>
-
-<div class="card chart-card">
-  {% if not carriers %}
-    <p class="muted empty">No spend recorded yet.</p>
-  {% elif carriers|length == 1 %}
-    <div class="solo">
-      <div class="lbl">All spend with</div>
-      <div class="solo-n">{{ carriers[0].carrier }}</div>
-      <div class="solo-v">{{ carriers[0].spend }}<span class="cur">{{ s.currency }}</span>
-        <span class="muted">· {{ carriers[0].bookings }} booking{{ 's' if carriers[0].bookings != 1 }}</span>
-      </div>
-    </div>
-  {% else %}
-  <svg class="plot" viewBox="0 0 {{ carrier_chart.w }} {{ carrier_chart.h }}"
-       role="img" aria-label="Spend by airline, largest first">
-    {% for b in carrier_chart.bars %}
-    <text x="0" y="{{ b.y + b.h - 5 }}" class="ax lbl-l">{{ b.carrier }}</text>
-    <rect x="{{ carrier_chart.label_w }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
-          rx="4" fill="{{ c_spend }}"
-          data-tip="{{ b.carrier }} · {{ b.value }} {{ s.currency }} · {{ b.bookings }} booking{{ 's' if b.bookings != 1 }} · {{ b.share }}"/>
-    <text x="{{ carrier_chart.label_w + b.w + 10 }}" y="{{ b.y + b.h - 5 }}"
-          class="ax val">{{ b.value }}</text>
-    {% endfor %}
-  </svg>
-  {% endif %}
 </div>
 
 <div id="tip" class="tip" hidden></div>
@@ -152,42 +165,47 @@
 {% include "_add_reservation_modal.html" %}
 
 <style>
-  .hero-gate { font-size:20px; font-weight:800; letter-spacing:-.02em; color:var(--gold); margin-top:4px; }
-  .notice-danger { border-color:rgba(217,95,95,.3); color:var(--text); }
+  .home-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px;
+               margin-bottom:22px; }
+  .greet { font-size:24px; }
+  .hero-gate { font-size:20px; font-weight:700; letter-spacing:-.02em; color:var(--gold); margin-top:4px; }
 
-  .tiles-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
-  .tile { background:var(--surface); border:1px solid var(--line);
-          border-radius:var(--r-card); padding:18px 20px; }
-  .tile .v { font-size:28px; font-weight:800; letter-spacing:-.035em; margin-top:6px;
-             font-variant-numeric:tabular-nums; }
-  .tile .v.good { color:var(--green); }
-  .tile .cur { font-size:12px; font-weight:600; color:var(--muted-2); margin-left:4px; }
-  .tile .sub { font-size:12.5px; color:var(--muted-2); margin-top:5px; }
-  .sim-note { color:var(--gold-dim); font-style:italic; }
+  .kpi-row { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:22px; }
+  .kpi { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-card); padding:18px 20px; }
+  .kpi-lbl { font-size:12px; color:var(--muted-2); font-weight:600; text-transform:none; letter-spacing:0; }
+  .kpi-v { font-family:'IBM Plex Mono', ui-monospace, monospace; font-size:28px; font-weight:600;
+           letter-spacing:-.01em; margin-top:6px; }
+  .kpi-v.kpi-positive { color:var(--green); }
+  .kpi-cur { font-size:12px; font-weight:500; color:var(--muted-2); margin-left:4px; }
 
-  .home-grid { display:grid; grid-template-columns:1.5fr 1fr; gap:14px; margin-top:14px; }
-  .side-col { display:flex; flex-direction:column; gap:14px; }
-  .chart-card { padding:18px 20px; }
-  .chart-head { display:flex; align-items:baseline; justify-content:space-between;
-                gap:12px; margin-bottom:12px; }
-  .chart-head h3 { margin:0; }
+  .home-grid { display:grid; grid-template-columns:2fr 1fr; gap:20px; }
+  .home-left, .home-right { display:flex; flex-direction:column; gap:22px; }
+  .trend-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+  .trend-head h3 { margin:0; }
+  .link-sm { font-size:12.5px; color:var(--gold); }
+
+  .pill-group { display:flex; gap:2px; background:var(--surface-2); border-radius:999px; padding:3px; }
+  .pill { border:none; background:transparent; color:var(--muted); font-size:12px; font-weight:600;
+          padding:6px 12px; border-radius:999px; cursor:pointer; }
+  .pill.on { background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.06); }
+
+  .trend-empty { text-align:center; padding:20px 0 6px; }
+  .trend-empty-line { width:100%; height:50px; display:block; margin-bottom:14px; }
+  .trend-empty p { font-size:13.5px; color:var(--muted); margin:0 0 14px; }
+
+  .breakdown-row { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  .breakdown-panel { min-height:180px; }
+  .empty { font-size:13.5px; padding:22px 0; text-align:center; }
 
   .plot { width:100%; height:auto; display:block; overflow:visible; }
   .grid { stroke:var(--line); stroke-width:1; }
-  .ax { fill:var(--muted-2); font-size:10.5px; font-family:'Inter',sans-serif; }
-  .ax.lbl-l { fill:var(--muted); font-size:11.5px; }
-  .ax.val { fill:var(--text); font-weight:600; font-size:11.5px; font-variant-numeric:tabular-nums; }
-  .empty { font-size:13.5px; padding:26px 0; text-align:center; }
-  .solo { padding:14px 0 6px; }
-  .solo-n { font-size:17px; font-weight:700; letter-spacing:-.02em; margin-top:4px; }
-  .solo-v { font-size:24px; font-weight:800; letter-spacing:-.035em; margin-top:8px;
-            font-variant-numeric:tabular-nums; }
-  .solo-v .muted { font-size:13px; font-weight:500; letter-spacing:0; }
+  .ax { fill:var(--muted-2); font-family:'IBM Plex Mono', monospace; font-size:10.5px; }
+  .ax.lbl-l { fill:var(--muted); font-size:11.5px; font-family:'IBM Plex Sans', sans-serif; }
+  .ax.val { fill:var(--text); font-weight:600; font-size:11.5px; }
 
   .up-list { display:flex; flex-direction:column; }
   .up-row { display:flex; align-items:center; justify-content:space-between; gap:12px;
-            padding:11px 0; border-top:1px solid var(--line-soft); text-decoration:none;
-            color:inherit; }
+            padding:11px 0; border-top:1px solid var(--line-soft); text-decoration:none; color:inherit; }
   .up-row:first-child { border-top:none; }
   .up-row b { display:block; font-size:13.5px; }
   .up-row .muted { font-size:12px; }
@@ -197,36 +215,64 @@
   .timeline { display:flex; flex-direction:column; }
   .tl-row { display:flex; gap:10px; padding:10px 0; border-top:1px solid var(--line-soft); }
   .tl-row:first-child { border-top:none; }
-  .tl-dot { width:8px; height:8px; border-radius:999px; background:var(--green);
-            margin-top:5px; flex:none; }
+  .tl-dot { width:8px; height:8px; border-radius:999px; background:var(--green); margin-top:5px; flex:none; }
   .tl-dot-warn { background:var(--muted-2); }
   .tl-row b { font-size:13px; }
 
-  .sec-top { display:flex; align-items:center; justify-content:space-between;
-             gap:16px; margin:30px 0 12px; }
-  .sec-top h2 { margin:0; }
+  .tip { position:fixed; z-index:60; pointer-events:none; background:var(--text); color:var(--surface);
+         border-radius:var(--r-sm); padding:7px 10px; font-size:12.5px; box-shadow:var(--shadow); }
 
-  .tip {
-    position:fixed; z-index:60; pointer-events:none;
-    background:var(--surface-2); border:1px solid var(--line);
-    border-radius:var(--r-sm); padding:7px 10px; font-size:12.5px;
-    color:var(--text); box-shadow:var(--shadow);
-  }
-
-  @media (max-width:1040px){ .home-grid { grid-template-columns:1fr; } }
-  @media (max-width:980px){ .tiles-3 { grid-template-columns:1fr; } }
+  @media (max-width:1040px){ .home-grid { grid-template-columns:1fr; } .breakdown-row { grid-template-columns:1fr; } }
+  @media (max-width:980px){ .kpi-row { grid-template-columns:1fr; } }
 </style>
 
 <script>
   (function () {
     const tip = document.getElementById('tip');
-    document.querySelectorAll('.plot [data-tip]').forEach(el => {
-      el.addEventListener('mouseenter', () => { tip.textContent = el.getAttribute('data-tip'); tip.hidden = false; });
+    function bindTip(el, textAttr) {
+      el.addEventListener('mouseenter', () => { tip.textContent = el.getAttribute(textAttr); tip.hidden = false; });
       el.addEventListener('mousemove', e => {
         tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px';
         tip.style.top = (e.clientY - tip.offsetHeight - 12) + 'px';
       });
       el.addEventListener('mouseleave', () => { tip.hidden = true; });
+    }
+    document.querySelectorAll('.plot [data-tip]').forEach(el => bindTip(el, 'data-tip'));
+
+    // Airline Breakdown: Saved/Spent toggle, real client-side interaction —
+    // pre-computed widths/values for both metrics, no server round trip.
+    document.querySelectorAll('[data-breakdown]').forEach(panel => {
+      const buttons = panel.querySelectorAll('.toggle-metric .pill');
+      buttons.forEach(btn => btn.addEventListener('click', () => {
+        const metric = btn.dataset.metric;
+        buttons.forEach(b => b.classList.toggle('on', b === btn));
+        panel.querySelectorAll('.metric-bar').forEach(rect => {
+          rect.setAttribute('width', rect.getAttribute('data-w-' + metric));
+          rect.setAttribute('fill', metric === 'saved' ? {{ c_saved|tojson }} : {{ c_spend|tojson }});
+        });
+        panel.querySelectorAll('.metric-val').forEach(text => {
+          text.textContent = text.getAttribute('data-v-' + metric);
+          const rect = text.previousElementSibling;
+          text.setAttribute('x', parseFloat(rect.getAttribute('x')) + parseFloat(rect.getAttribute('width')) + 10);
+        });
+        panel.querySelectorAll('.metric-bar').forEach(rect => {
+          rect.setAttribute('data-tip', rect.getAttribute('data-tip-' + metric));
+        });
+      }));
+      const initialMetric = panel.querySelector('.toggle-metric .pill.on');
+      const initialKey = initialMetric ? initialMetric.dataset.metric : 'saved';
+      panel.querySelectorAll('.metric-bar').forEach(rect => {
+        rect.setAttribute('data-tip', rect.getAttribute('data-tip-' + initialKey));
+        bindTip(rect, 'data-tip');
+      });
+    });
+
+    // Month/Year/All Time pill — visual only, no range-filtered data source yet.
+    document.querySelectorAll('.pill-group:not(.toggle-metric) .pill').forEach(btn => {
+      btn.addEventListener('click', () => {
+        btn.parentElement.querySelectorAll('.pill').forEach(b => b.classList.remove('on'));
+        btn.classList.add('on');
+      });
     });
   })();
 </script>

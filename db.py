@@ -591,6 +591,15 @@ def travelers(account_id):
     return [_traveler(r) for r in rows]
 
 
+def onboarding_counts(account_id):
+    """The two real counts the sidebar's onboarding-progress widget needs —
+    one query, not account_summary()'s full aggregate set."""
+    return q("""SELECT
+                  (SELECT count(*) FROM orders WHERE account_id = %s)    AS bookings,
+                  (SELECT count(*) FROM travelers WHERE account_id = %s) AS travelers""",
+            (account_id, account_id), fetch="one")
+
+
 def traveler(traveler_id, account_id):
     return _traveler(q("SELECT * FROM travelers WHERE id = %s AND account_id = %s",
                        (traveler_id, account_id), fetch="one"))
@@ -747,8 +756,9 @@ def spend_by_carrier(account_id, top=5):
     being tellable apart, and this is one measure across categories anyway.
     """
     rows = q("""SELECT COALESCE(NULLIF(carrier, ''), 'Unknown') AS carrier,
-                       sum(paid)  AS spend,
-                       count(*)   AS bookings
+                       sum(paid)               AS spend,
+                       COALESCE(sum(refunded), 0) AS saved,
+                       count(*)                AS bookings
                   FROM orders
                  WHERE account_id = %s AND paid IS NOT NULL
                  GROUP BY 1 ORDER BY 2 DESC""", (account_id,), fetch="all")
@@ -758,6 +768,7 @@ def spend_by_carrier(account_id, top=5):
     head, tail = rows[:top], rows[top:]
     head.append({"carrier": "Other",
                  "spend": sum(r["spend"] for r in tail),
+                 "saved": sum(r["saved"] for r in tail),
                  "bookings": sum(r["bookings"] for r in tail)})
     return head
 

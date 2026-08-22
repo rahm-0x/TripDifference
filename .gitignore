@@ -11,3 +11,4 @@ decisions.log
 .vercel
 .env*
 duffel_reshop_test-*.log
+.DS_Store

@@ -104,11 +104,35 @@ def _csrf_guard():
                                      "else. Go back and try again."), 403
 
 
+def _onboarding_steps(user, card, counts):
+    return [
+        {"done": bool(user.get("given_name") and user.get("family_name")),
+         "title": "Complete your profile", "sub": "Tell us your name so tickets match your ID.",
+         "cta": "Finish profile", "url": url_for("onboarding_profile")},
+        {"done": counts["bookings"] > 0,
+         "title": "Add your first reservation", "sub": "We track prices and claim savings when fares drop.",
+         "cta": "Add reservation", "url": url_for("trips")},
+        {"done": bool(card),
+         "title": "Link a card", "sub": "No card, no active monitoring — required to claim savings.",
+         "cta": "Link a card", "url": url_for("onboarding_payment")},
+        {"done": counts["travelers"] > 0,
+         "title": "Add a traveler", "sub": "Saved passenger details speed up future bookings.",
+         "cta": "Add traveler", "url": url_for("travelers")},
+    ]
+
+
 @app.context_processor
 def inject_globals():
     user = auth.current_user()
     card = db.account_card(user["account_id"]) if user else None
-    return {"user": auth.view_model(user), "card": card,
+    onboarding = None
+    if user:
+        steps = _onboarding_steps(user, card, db.onboarding_counts(user["account_id"]))
+        done = sum(1 for s in steps if s["done"])
+        next_step = next((s for s in steps if not s["done"]), None)
+        onboarding = {"done": done, "total": len(steps), "complete": next_step is None,
+                      "next": next_step}
+    return {"user": auth.view_model(user), "card": card, "onboarding": onboarding,
             "policy": DEFAULT_POLICY, "profile": auth.profile_of(user),
             "csrf_token": auth.csrf_token()}
 
@@ -433,25 +457,35 @@ def activity_chart(rows, w=720, h=150):
 
 
 def carrier_chart(rows, w=720, row_h=30):
-    """Horizontal bars, ranked. Not a donut: this is a comparison, and a pie of
-    close values is unreadable — with a single carrier it would be one 100%
-    slice, which is a stat tile, not a chart."""
-    total = sum(float(r["spend"]) for r in rows) or 1.0
-    biggest = max([float(r["spend"]) for r in rows] + [1.0])
+    """Horizontal bars, ranked by spend. Not a donut: this is a comparison,
+    and a pie of close values is unreadable — with a single carrier it
+    would be one 100% slice, which is a stat tile, not a chart.
+
+    Computes both spend and saved widths/values per bar (not just the
+    ranking metric) so the Saved/Spent toggle can flip client-side with
+    no server round trip — a real interaction, not two separate charts."""
+    spend_total = sum(float(r["spend"]) for r in rows) or 1.0
+    saved_total = sum(float(r["saved"]) for r in rows) or 1.0
+    spend_biggest = max([float(r["spend"]) for r in rows] + [1.0])
+    saved_biggest = max([float(r["saved"]) for r in rows] + [1.0])
     label_w, pad_r = 150, 96
     track = w - label_w - pad_r
     bars = []
     for i, r in enumerate(rows):
-        v = float(r["spend"])
+        sv, av = float(r["spend"]), float(r["saved"])
         bars.append({
             "y": i * row_h, "h": row_h - 10,
-            "w": round(track * v / biggest, 1),
-            "carrier": r["carrier"], "value": f"{v:,.2f}",
-            "share": f"{v / total * 100:.0f}%",
+            "spend_w": round(track * sv / spend_biggest, 1),
+            "saved_w": round(track * av / saved_biggest, 1),
+            "carrier": r["carrier"],
+            "spend_value": f"{sv:,.2f}", "saved_value": f"{av:,.2f}",
+            "spend_share": f"{sv / spend_total * 100:.0f}%",
+            "saved_share": f"{av / saved_total * 100:.0f}%" if av else "0%",
             "bookings": r["bookings"],
         })
     return {"bars": bars, "w": w, "h": max(len(rows) * row_h, row_h),
-            "label_w": label_w, "total": f"{total:,.2f}"}
+            "label_w": label_w, "spend_total": f"{spend_total:,.2f}",
+            "saved_total": f"{saved_total:,.2f}"}
 
 
 def build_chart(order_id, paid):
@@ -1022,14 +1056,27 @@ def overview():
     months = db.monthly_series(acct)
     carriers = db.spend_by_carrier(acct)
     activity = [{**r, **_activity_label(r)} for r in db.audit_rows_for_account(acct, limit=12)]
+    # Total Saved is the net figure (after our fee) — same computation
+    # wallet.html's "Net back to you" tile uses, reused rather than
+    # reimplemented, and restricted to real executions by wallet_totals'
+    # own kind == 'recovery' filter (execution = 'executed' rows only).
+    wallet_rows = db.wallet_transactions(acct)
+    totals = db.wallet_totals(wallet_rows)
     return render_template("overview.html", nav="overview",
+                           now_hour=datetime.now(timezone.utc).hour,
                            s=db.account_summary(acct),
+                           net_saved=totals["net_back"], wallet_currency=totals["currency"],
                            upcoming=upcoming[:4],
                            months=months,
                            saved_chart=saved_chart(months),
                            activity=activity,
                            travelers=db.travelers(acct),
                            carriers=carriers,
+                           # Default the Airline Breakdown toggle to whichever
+                           # metric actually has data — an all-zero "Saved"
+                           # view on a brand-new account reads as broken.
+                           carrier_default_metric=("saved" if any(
+                               float(c["saved"]) > 0 for c in carriers) else "spend"),
                            carrier_chart=carrier_chart(carriers) if carriers else None,
                            c_spend=SERIES_SPEND, c_saved=SERIES_SAVED)
 
