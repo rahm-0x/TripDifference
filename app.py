@@ -18,11 +18,11 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from flask import (Flask, redirect, render_template, request,
-                   send_from_directory, url_for)
+from flask import (Flask, flash, get_flashed_messages, redirect, render_template,
+                   request, send_from_directory, url_for)
 
 import auth
 import db
@@ -219,7 +219,28 @@ def upsert_order(record):
 
 
 def snapshot_of(record):
-    return OrderSnapshot.from_duffel(record["raw"], fare_type=record.get("fare_type") or "cash")
+    # has_card is hardcoded True until Stripe lands — see eligibility.assess's
+    # docstring. `fallback` only matters when raw is empty (a manual/imported
+    # reservation with no Duffel order behind it).
+    return OrderSnapshot.from_duffel(record["raw"], fare_type=record.get("fare_type") or "cash",
+                                     has_card=True, fallback=record)
+
+
+def _manual_leg_view(record):
+    """The single leg for a reservation with no Duffel raw payload — built
+    from the stored segment columns (migration 010) instead of slice_view's
+    Duffel-shaped parse. No arrival/departure clock-time is captured on
+    manual entry, so depart/arrive stay blank; depart_iso still carries the
+    date so upcoming/past sorting works."""
+    date = record.get("departure_date") or ""
+    return {
+        "origin": record.get("seg_origin", ""), "destination": record.get("seg_destination", ""),
+        "depart": "", "arrive": "", "depart_iso": f"{date}T00:00:00" if date else "",
+        "date": datelabel(date), "duration": "", "duration_min": 0,
+        "stops": 0, "next_day": False,
+        "flight_numbers": f"{record.get('carrier','')} {record.get('seg_flight_number','')}".strip(),
+        "fare_brand": None,
+    }
 
 
 def trip_view(record):
@@ -232,12 +253,20 @@ def trip_view(record):
     toggle and eligibility — an ineligible fare can never read as monitored.
     """
     raw = record.get("raw") or {}
-    legs = [v for v in (slice_view(s) for s in raw.get("slices", [])) if v]
+    if raw:
+        legs = [v for v in (slice_view(s) for s in raw.get("slices", [])) if v]
+    else:
+        # A manual/imported reservation — no Duffel slices to parse, so the
+        # leg comes from the stored segment columns instead (migration 010).
+        legs = [_manual_leg_view(record)] if record.get("seg_origin") else []
     first = legs[0] if legs else {}
-    snap = snapshot_of(record) if raw else None
+    snap = snapshot_of(record)
     d = record.get("last_decision") or {}
     pax = (raw.get("passengers") or [{}])[0]
-    a = eligibility.assess(raw, fare_type=record.get("fare_type") or "cash") if raw else None
+    # has_card hardcoded True until Stripe lands — see eligibility.assess's
+    # docstring; snapshot_of() already computed the same assessment onto
+    # snap.eligibility, reused here rather than assessed twice.
+    a = snap.eligibility
     return {
         "eligibility": {
             "state": a.state.value, "label": a.label, "reason": a.reason.value,
@@ -249,6 +278,8 @@ def trip_view(record):
         } if a else None,
         "eligible": bool(a and a.should_poll),
         "order_id": record["order_id"],
+        "source": record.get("source") or "td_rebook",
+        "fare_type": record.get("fare_type") or "cash",
         "booking_reference": record.get("booking_reference", ""),
         "paid": record.get("paid"), "currency": record.get("currency", "USD"),
         "carrier": record.get("carrier", ""), "itinerary": record.get("itinerary", ""),
@@ -340,6 +371,28 @@ def spend_chart(rows):
     return {"spend": pts("spend"), "saved": pts("recovered"), "grid": grid,
             "top": top, "w": CHART_W, "h": CHART_H,
             "has_data": any(float(r["spend"]) or float(r["recovered"]) for r in rows)}
+
+
+def saved_chart(rows, w=720, h=170):
+    """Home's headline trend — total saved over time, one dashed line.
+    Same geometry as spend_chart but isolated to the 'recovered' series;
+    kept separate rather than parameterising spend_chart since Home and the
+    Reservations page (which keeps the two-series version) want different
+    axis heights."""
+    top = _nice_top(max([float(r["recovered"]) for r in rows] + [0]))
+    pad_l, pad_r, pad_t, pad_b = 44, 14, 14, 30
+    inner_w, inner_h = w - pad_l - pad_r, h - pad_t - pad_b
+    n = max(len(rows) - 1, 1)
+    pts = []
+    for i, r in enumerate(rows):
+        x = pad_l + inner_w * i / n
+        y = pad_t + inner_h * (1 - float(r["recovered"]) / top) if top else pad_t + inner_h
+        pts.append({"x": round(x, 1), "y": round(y, 1),
+                    "label": r["label"], "value": f"{float(r['recovered']):,.2f}"})
+    grid = [{"y": round(pad_t + inner_h * (1 - f), 1),
+             "label": f"{int(top * f):,}"} for f in (0, .5, 1)]
+    return {"points": pts, "grid": grid, "top": top, "w": w, "h": h,
+            "has_data": any(float(r["recovered"]) for r in rows)}
 
 
 def activity_chart(rows, w=720, h=150):
@@ -800,6 +853,33 @@ def trip_booked(order_id):
 # employee views
 # ---------------------------------------------------------------------------
 
+def _activity_label(row):
+    """One audit_events row → Activity Timeline entry (title + detail).
+    Customer-facing copy, same spirit as eligibility.CUSTOMER_COPY but for
+    the audit log — not a new decision system, just friendlier phrasing of
+    what evaluate()/execute() already recorded."""
+    kind = row.get("kind")
+    if kind == "eligibility":
+        title = ("Added to monitoring" if row.get("state") == "monitoring"
+                 else "Not eligible for monitoring")
+        return {"title": title, "detail": row.get("detail", "")}
+    if kind == "execution":
+        execution = row.get("execution")
+        if execution == "awaiting_confirmation":
+            title = "Lower fare found — awaiting confirmation"
+        elif execution == "blocked_simulated":
+            title = "Lower fare found (simulated)"
+        elif execution == "failed":
+            title = "Recovery attempt failed"
+        else:
+            title = "Recovery executed"
+        return {"title": title, "detail": row.get("detail", "")}
+    # decision
+    if row.get("outcome") == "reshop":
+        return {"title": "Lower fare found", "detail": row.get("reason", "")}
+    return {"title": "Checked for a lower fare", "detail": "No drop found this check"}
+
+
 @app.route("/overview")
 @auth.login_required
 def overview():
@@ -809,20 +889,17 @@ def overview():
     trips_ = [trip_view(r) for r in load_orders()]
     upcoming = sorted((t for t in trips_ if (t["depart_iso"][:10] or "9999") >= today),
                       key=lambda t: t["depart_iso"])
-    past = sorted((t for t in trips_ if (t["depart_iso"][:10] or "9999") < today),
-                  key=lambda t: t["depart_iso"], reverse=True)
-    # Same cards as My trips, capped — this is a summary, not the full list.
     acct = _account()
     months = db.monthly_series(acct)
-    weeks = db.weekly_activity(acct)
     carriers = db.spend_by_carrier(acct)
+    activity = [{**r, **_activity_label(r)} for r in db.audit_rows_for_account(acct, limit=12)]
     return render_template("overview.html", nav="overview",
                            s=db.account_summary(acct),
-                           upcoming=upcoming[:4], recent=past[:3],
-                           months=months, weeks=weeks,
-                           spend_chart=spend_chart(months),
-                           activity=activity_chart(weeks),
-                           bookings=db.recent_bookings(acct),
+                           upcoming=upcoming[:4],
+                           months=months,
+                           saved_chart=saved_chart(months),
+                           activity=activity,
+                           travelers=db.travelers(acct),
                            carriers=carriers,
                            carrier_chart=carrier_chart(carriers) if carriers else None,
                            c_spend=SERIES_SPEND, c_saved=SERIES_SAVED)
@@ -839,6 +916,27 @@ def wallet():
     rows = db.wallet_transactions(_account())
     return render_template("wallet.html", nav="wallet", rows=rows,
                            totals=db.wallet_totals(rows), card=CARD)
+
+
+# ---------------------------------------------------------------------------
+# settings
+# ---------------------------------------------------------------------------
+
+@app.route("/settings", methods=["GET", "POST"])
+@auth.login_required
+def settings():
+    """Account-level fields only (name/phone/nickname) — per-Traveler data
+    (loyalty, trusted traveler, preferences) lives on travelers and is
+    edited from Travelers, not here. Payment method and reservation-import
+    connections render below from existing/stub data; both get real
+    backends in later passes (Stripe, the Email Capture Layer)."""
+    user = auth.current_user()
+    if request.method == "POST":
+        db.account_settings_update(user["id"],
+                                   nickname=request.form.get("nickname", "").strip(),
+                                   phone_number=request.form.get("phone_number", "").strip())
+        return redirect(url_for("settings"))
+    return render_template("settings.html", nav="settings", card=CARD, account_user=user)
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +1024,57 @@ def traveler_remove(traveler_id):
     return redirect(url_for("travelers"))
 
 
+@app.route("/reservations/new", methods=["POST"])
+@auth.login_required
+def reservation_new():
+    """Add Reservation — a reservation booked with the airline directly, not
+    through TD. No Duffel order exists to derive display fields from, so the
+    segment is stored as real columns (migration 010) rather than being
+    parsed from a `raw` payload that doesn't exist for this source."""
+    form = {k: request.form.get(k, "").strip() for k in (
+        "booking_reference", "traveler_id", "carrier", "seg_origin",
+        "seg_destination", "seg_flight_number", "seg_cabin",
+        "departure_date", "paid", "currency", "fare_type")}
+    form["seg_origin"] = form["seg_origin"].upper()
+    form["seg_destination"] = form["seg_destination"].upper()
+    form["seg_flight_number"] = form["seg_flight_number"].upper()
+
+    problem = None
+    if not form["booking_reference"]:
+        problem = "A booking or confirmation number is required."
+    elif not (form["seg_origin"] and form["seg_destination"]):
+        problem = "Origin and destination are required."
+    elif not form["carrier"]:
+        problem = "Airline is required."
+    paid = None
+    if not problem:
+        try:
+            paid = Decimal(form["paid"])
+            if paid <= 0:
+                raise InvalidOperation
+        except InvalidOperation:
+            problem = "Enter a valid amount paid."
+
+    if problem:
+        flash(problem, "reservation_error")
+        return redirect(request.referrer or url_for("trips"))
+
+    record = db.create_manual_order(
+        _account(), traveler_id=form["traveler_id"] or None,
+        seg_origin=form["seg_origin"], seg_destination=form["seg_destination"],
+        seg_flight_number=form["seg_flight_number"], seg_cabin=form["seg_cabin"] or "economy",
+        carrier=form["carrier"], booking_reference=form["booking_reference"],
+        departure_date=form["departure_date"] or None,
+        paid=paid, currency=(form["currency"] or "USD").upper(),
+        fare_type=form["fare_type"] if form["fare_type"] in ("cash", "points") else "cash",
+    )
+    # Same audit entry point book() uses — so the Activity Timeline shows an
+    # "Added to monitoring" (or not-eligible) event for this reservation too,
+    # not just for reservations booked through us.
+    log_eligibility(record["order_id"], snapshot_of(record).eligibility)
+    return redirect(url_for("trip_detail", order_id=record["order_id"]))
+
+
 @app.route("/trips")
 @auth.login_required
 def trips():
@@ -939,10 +1088,19 @@ def trips():
             count += 1
     upcoming.sort(key=lambda t: t["depart_iso"])
     past.sort(key=lambda t: t["depart_iso"], reverse=True)
+    acct = _account()
+    months = db.monthly_series(acct)
+    weeks = db.weekly_activity(acct)
     return render_template("trips.html", nav="trips", upcoming=upcoming, past=past,
                            saved_total=(str(saved) if count else None),
                            saved_currency=(upcoming + past)[0]["currency"] if (upcoming or past) else "USD",
-                           saved_count=count)
+                           saved_count=count,
+                           s=db.account_summary(acct),
+                           months=months, weeks=weeks,
+                           spend_chart=spend_chart(months),
+                           activity=activity_chart(weeks),
+                           travelers=db.travelers(acct),
+                           c_spend=SERIES_SPEND, c_saved=SERIES_SAVED)
 
 
 @app.route("/trips/<order_id>")
@@ -982,8 +1140,8 @@ def toggle_monitor(order_id):
     if record:
         # Monitoring can always be turned off, but never on for a fare that
         # cannot win — the toggle must not be able to re-create the bug.
-        a = eligibility.assess(record.get("raw") or {},
-                               fare_type=record.get("fare_type") or "cash")
+        # Same assessment trip_view() shows, not a second computation.
+        a = snapshot_of(record).eligibility
         wanted = not record.get("monitoring", True)
         upsert_order({"order_id": order_id, "monitoring": wanted and a.should_poll})
     if request.form.get("next") == "trip":
@@ -1123,6 +1281,11 @@ def confirm_action(order_id, action):
     record = find_order(order_id)
     if not record or action not in ("exchange", "cancel"):
         return redirect(url_for("orders"))
+    if record.get("source") != "td_rebook":
+        # No real Duffel order behind this reservation to change or cancel —
+        # book-new-before-cancel-old (the mechanism that would recover
+        # savings on an imported reservation) isn't built yet.
+        return redirect(url_for("orders"))
     return render_template("confirm_action.html", nav="ops", order=record, action=action)
 
 
@@ -1132,6 +1295,8 @@ def execute(order_id, action):
     """Step 2 of 2. Requires the typed confirmation from the previous page."""
     record = find_order(order_id)
     if not record:
+        return redirect(url_for("orders"))
+    if record.get("source") != "td_rebook":
         return redirect(url_for("orders"))
 
     def refuse(msg):

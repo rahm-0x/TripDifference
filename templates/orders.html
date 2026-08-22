@@ -159,14 +159,20 @@
       <button type="submit" class="btn-ghost btn-sm">Run live cycle</button>
     </form>
 
-    {% if d and d.outcome == 'reshop' and d.source == 'duffel' %}
-    <a href="{{ url_for('confirm_action', order_id=o.order_id, action='exchange') }}"
-       class="btn btn-sm">Review exchange →</a>
+    {% if o.source == 'td_rebook' %}
+      {% if d and d.outcome == 'reshop' and d.source == 'duffel' %}
+      <a href="{{ url_for('confirm_action', order_id=o.order_id, action='exchange') }}"
+         class="btn btn-sm">Review exchange →</a>
+      {% endif %}
+      <a href="{{ url_for('trip_detail', order_id=o.order_id) }}" class="btn btn-ghost btn-sm">Trip view</a>
+      <a href="{{ url_for('confirm_action', order_id=o.order_id, action='cancel') }}"
+         class="btn btn-ghost btn-sm" style="margin-left:auto; color:var(--danger)">Cancel order →</a>
+    {% else %}
+      <a href="{{ url_for('trip_detail', order_id=o.order_id) }}" class="btn btn-ghost btn-sm">Trip view</a>
+      <span class="muted" style="font-size:12px; margin-left:auto">
+        Imported reservation — recovery execution isn't built yet
+      </span>
     {% endif %}
-
-    <a href="{{ url_for('trip_detail', order_id=o.order_id) }}" class="btn btn-ghost btn-sm">Trip view</a>
-    <a href="{{ url_for('confirm_action', order_id=o.order_id, action='cancel') }}"
-       class="btn btn-ghost btn-sm" style="margin-left:auto; color:var(--danger)">Cancel order →</a>
   </div>
 </div>
 {% endfor %}

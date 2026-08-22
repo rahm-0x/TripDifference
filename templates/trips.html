@@ -1,50 +1,207 @@
 {% extends "base.html" %}
-{% block title %}My trips — Trip Difference{% endblock %}
+{% block title %}Reservations — Trip Difference{% endblock %}
 {% block body %}
 
+{% with msgs = get_flashed_messages(category_filter=['reservation_error']) %}
+{% if msgs %}
+<div class="notice" style="margin-bottom:16px; border-color:rgba(217,95,95,.3)">
+  <span>!</span><div>{{ msgs[0] }}</div>
+</div>
+{% endif %}
+{% endwith %}
+
 <div class="page-head">
-  <h1>My trips</h1>
-  <p>Monitored fares are re-priced automatically. Savings are refunded to the company card.</p>
+  <h1>Reservations</h1>
+  <p>Every reservation on the account — booked with us or brought in from elsewhere.</p>
 </div>
 
-{% if saved_total %}
-<div class="saved">
-  <div class="saved-n">{{ saved_total }} {{ saved_currency }}</div>
-  <div class="saved-t">refunded to your team so far from {{ saved_count }} rebooking{{ 's' if saved_count != 1 }}</div>
+<div class="tiles tiles-3">
+  <div class="tile">
+    <div class="lbl">Trips all time</div>
+    <div class="v">{{ s.bookings }}</div>
+  </div>
+  <div class="tile">
+    <div class="lbl">Savings events</div>
+    <div class="v">{{ s.savings_events }}</div>
+  </div>
+  <div class="tile">
+    <div class="lbl">Total spent</div>
+    <div class="v">{{ s.spend }}<span class="cur">{{ s.currency }}</span></div>
+  </div>
 </div>
-{% endif %}
 
-{% for group, rows in [('Upcoming', upcoming), ('Past', past)] %}
+<div class="res-toolbar">
+  <div class="tabs">
+    <button type="button" class="tab on" data-tab="upcoming">Upcoming reservations</button>
+    <button type="button" class="tab" data-tab="past">Past reservations</button>
+    <button type="button" class="tab" data-tab="all">All reservations</button>
+  </div>
+  <div class="res-toolbar-r">
+    <input id="resSearch" class="search" placeholder="Search reservations…">
+    <button type="button" class="btn btn-sm" data-open-modal="addReservation">+ Add Reservation</button>
+  </div>
+</div>
+
+{% set rows = upcoming + past %}
 {% if rows %}
-<h2 style="margin:26px 0 12px">{{ group }}</h2>
-
-{% for t in rows %}
-{% include "_trip_card.html" %}
-{% endfor %}
-{% endif %}
-{% endfor %}
-
-{% if not upcoming and not past %}
+<div class="card" style="padding:0; overflow-x:auto">
+  <table class="res-table">
+    <thead>
+      <tr><th>Trip</th><th>Type</th><th>Reference</th><th>Date</th>
+          <th class="r">Cost</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody id="resBody">
+      {% set group = 'upcoming' %}
+      {% for t in upcoming %}{% include "_reservation_row.html" %}{% endfor %}
+      {% set group = 'past' %}
+      {% for t in past %}{% include "_reservation_row.html" %}{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
 <div class="card" style="text-align:center; padding:48px 24px">
-  <p class="muted" style="margin:0 0 16px">You haven't booked anything yet.</p>
-  <a href="{{ url_for('index') }}" class="btn">Search flights</a>
+  <p class="muted" style="margin:0 0 16px">Nothing here yet.</p>
+  <button type="button" class="btn" data-open-modal="addReservation">+ Add Reservation</button>
 </div>
 {% endif %}
+
+<div class="sec-top"><h2>Spend &amp; recovered</h2></div>
+<div class="charts">
+  <div class="card chart-card">
+    {% if spend_chart.has_data %}
+    <svg class="plot" viewBox="0 0 {{ spend_chart.w }} {{ spend_chart.h }}"
+         role="img" aria-label="Monthly spend and recovered savings, last six months">
+      {% for g in spend_chart.grid %}
+      <line x1="48" x2="{{ spend_chart.w - 14 }}" y1="{{ g.y }}" y2="{{ g.y }}" class="grid"/>
+      <text x="40" y="{{ g.y + 4 }}" class="ax" text-anchor="end">{{ g.label }}</text>
+      {% endfor %}
+      {% for key, colour in [('spend', c_spend), ('saved', c_saved)] %}
+      <polyline fill="none" stroke="{{ colour }}" stroke-width="2"
+                stroke-linejoin="round" stroke-linecap="round"
+                points="{% for p in spend_chart[key] %}{{ p.x }},{{ p.y }} {% endfor %}"/>
+      {% for p in spend_chart[key] %}
+      <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" fill="{{ colour }}"
+              stroke="var(--surface)" stroke-width="2"
+              data-tip="{{ p.label }} · {{ key|replace('saved','recovered')|capitalize }} {{ p.value }} {{ s.currency }}"/>
+      {% endfor %}{% endfor %}
+      {% for p in spend_chart.spend %}
+      <text x="{{ p.x }}" y="{{ spend_chart.h - 6 }}" class="ax" text-anchor="middle">{{ p.label }}</text>
+      {% endfor %}
+    </svg>
+    <div class="legend" style="margin-top:8px">
+      <span><i style="background:{{ c_spend }}"></i>Spend</span>
+      <span><i style="background:{{ c_saved }}"></i>Recovered</span>
+    </div>
+    {% else %}
+    <p class="muted empty">No spend recorded in the last six months.</p>
+    {% endif %}
+  </div>
+
+  <div class="card chart-card">
+    <div class="chart-head"><h3>Weekly activity</h3>
+      <span class="muted" style="font-size:12.5px">fare checks run</span></div>
+    {% if activity.has_data %}
+    <svg class="plot" viewBox="0 0 {{ activity.w }} {{ activity.h }}"
+         role="img" aria-label="Fare checks run per week, last eight weeks">
+      <line x1="34" x2="{{ activity.w - 10 }}" y1="{{ activity.baseline }}"
+            y2="{{ activity.baseline }}" class="grid"/>
+      <text x="26" y="{{ activity.baseline + 4 }}" class="ax" text-anchor="end">0</text>
+      <text x="26" y="16" class="ax" text-anchor="end">{{ activity.top }}</text>
+      {% for b in activity.bars %}
+      <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"
+            rx="4" fill="{{ c_spend }}"
+            data-tip="Week of {{ b.label }} · {{ b.checks }} check{{ 's' if b.checks != 1 }}{% if b.reshops %} · {{ b.reshops }} rebooked{% endif %}"/>
+      <text x="{{ b.x + b.w / 2 }}" y="{{ activity.h - 6 }}" class="ax" text-anchor="middle">{{ b.label }}</text>
+      {% endfor %}
+    </svg>
+    {% else %}
+    <p class="muted empty">No fare checks yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div id="tip" class="tip" hidden></div>
+
+{% include "_add_reservation_modal.html" %}
 
 <style>
-  .saved {
-    position:relative; overflow:hidden;
-    background:var(--surface); border:1px solid rgba(212,171,79,.22);
-    border-radius:var(--r-card); padding:22px 26px; box-shadow:var(--shadow);
-  }
-  .saved::before {
-    content:''; position:absolute; inset:0; pointer-events:none;
-    background:radial-gradient(ellipse at 0% 0%,rgba(212,171,79,.10),transparent 60%);
-  }
-  .saved-n { font-size:34px; font-weight:800; letter-spacing:-.035em;
-             color:var(--gold); line-height:1; position:relative; }
-  .saved-t { font-size:13.5px; color:var(--muted); margin-top:7px; position:relative; }
+  .tiles-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .tile { background:var(--surface); border:1px solid var(--line);
+          border-radius:var(--r-card); padding:18px 20px; }
+  .tile .v { font-size:28px; font-weight:800; letter-spacing:-.035em; margin-top:6px;
+             font-variant-numeric:tabular-nums; }
+  .tile .cur { font-size:12px; font-weight:600; color:var(--muted-2); margin-left:4px; }
 
+  .res-toolbar { display:flex; align-items:center; justify-content:space-between;
+                 gap:14px; margin:20px 0 12px; flex-wrap:wrap; }
+  .tabs { display:flex; gap:6px; background:var(--surface-2); border:1px solid var(--line);
+          border-radius:999px; padding:3px; }
+  .tab { border:none; background:transparent; color:var(--muted); font-size:12.5px;
+         font-weight:600; padding:7px 14px; border-radius:999px; cursor:pointer; }
+  .tab.on { background:var(--surface); color:var(--text); box-shadow:var(--shadow); }
+  .res-toolbar-r { display:flex; gap:10px; align-items:center; }
+  .search { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-sm);
+            padding:8px 12px; font-size:13px; color:var(--text); width:220px; }
+
+  .res-table th, .res-table td { padding:12px 14px; white-space:nowrap; }
+  .res-table .r { text-align:right; }
+
+  .sec-top { display:flex; align-items:center; justify-content:space-between;
+             gap:16px; margin:30px 0 12px; }
+  .sec-top h2 { margin:0; }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .chart-card { padding:18px 20px; }
+  .chart-head { display:flex; align-items:baseline; justify-content:space-between;
+                gap:12px; margin-bottom:12px; }
+  .legend { display:flex; gap:14px; font-size:12.5px; color:var(--muted); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend i { width:9px; height:9px; border-radius:2px; display:inline-block; }
+  .plot { width:100%; height:auto; display:block; overflow:visible; }
+  .grid { stroke:var(--line); stroke-width:1; }
+  .ax { fill:var(--muted-2); font-size:10.5px; font-family:'Inter',sans-serif; }
+  .empty { font-size:13.5px; padding:26px 0; text-align:center; }
+  .tip { position:fixed; z-index:60; pointer-events:none; background:var(--surface-2);
+         border:1px solid var(--line); border-radius:var(--r-sm); padding:7px 10px;
+         font-size:12.5px; color:var(--text); box-shadow:var(--shadow); }
+
+  @media (max-width:1040px){ .charts { grid-template-columns:1fr; } }
+  @media (max-width:980px){ .tiles-3 { grid-template-columns:1fr; } }
 </style>
+
+<script>
+  (function () {
+    const tabs = document.querySelectorAll('.tab');
+    const rows = document.querySelectorAll('#resBody tr');
+    const search = document.getElementById('resSearch');
+    let activeTab = 'upcoming';
+
+    function apply() {
+      const q = (search.value || '').toLowerCase().trim();
+      rows.forEach(r => {
+        const inTab = activeTab === 'all' || r.dataset.group === activeTab;
+        const inSearch = !q || r.textContent.toLowerCase().includes(q);
+        r.hidden = !(inTab && inSearch);
+      });
+    }
+    tabs.forEach(t => t.addEventListener('click', () => {
+      tabs.forEach(x => x.classList.remove('on'));
+      t.classList.add('on');
+      activeTab = t.dataset.tab;
+      apply();
+    }));
+    search.addEventListener('input', apply);
+    apply();
+
+    const tip = document.getElementById('tip');
+    document.querySelectorAll('.plot [data-tip]').forEach(el => {
+      el.addEventListener('mouseenter', () => { tip.textContent = el.getAttribute('data-tip'); tip.hidden = false; });
+      el.addEventListener('mousemove', e => {
+        tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px';
+        tip.style.top = (e.clientY - tip.offsetHeight - 12) + 'px';
+      });
+      el.addEventListener('mouseleave', () => { tip.hidden = true; });
+    });
+  })();
+</script>
 
 {% endblock %}

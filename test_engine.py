@@ -294,6 +294,27 @@ def test_order_snapshot_from_real_duffel_payload():
     assert order.void_window_ends_at.tzinfo is not None
 
 
+def test_order_snapshot_from_fallback_when_no_duffel_order():
+    """A manual/imported reservation has no Duffel order (`{}`) — the
+    snapshot is built from the stored order-record columns instead
+    (migration 010), not parsed from a payload that doesn't exist."""
+    order = OrderSnapshot.from_duffel({}, fallback={
+        "order_id": "manual_abc123", "paid": "428.00", "currency": "USD",
+        "seg_origin": "JFK", "seg_destination": "LAX",
+        "seg_flight_number": "701", "seg_cabin": "economy",
+        "carrier": "Alaska Airlines", "booking_reference": "ILBTXL",
+        "departure_date": "2026-08-29",
+    })
+    assert order.id == "manual_abc123"
+    assert order.total == Decimal("428.00")
+    assert str(order.route) == "JFK-LAX"
+    assert order.itinerary.key == (("ALASKA AIRLINES", "701"),)
+    assert order.departure_date == "2026-08-29"
+    assert order.changeable is True
+    assert order.departing_at is None
+    assert order.eligibility.reason is EligibilityReason.CUSTOMER_SOURCED
+
+
 def test_changeable_falls_back_to_available_actions():
     payload = {
         "id": "ord_x", "total_amount": "10.00", "total_currency": "USD",
@@ -531,6 +552,36 @@ def test_points_fare_is_not_eligible_even_with_perfect_conditions():
 def test_cash_fare_type_is_the_default_and_unaffected():
     assert elig.assess(order_payload()).state is Eligibility.MONITORING
     assert elig.assess(order_payload(), fare_type="cash").state is Eligibility.MONITORING
+
+
+def test_no_payment_method_blocks_monitoring_even_with_perfect_conditions():
+    """Card-gating: no card on file means no active monitoring, full stop —
+    same shape as the points-fare gate, checked before fare conditions."""
+    a = elig.assess(order_payload(), has_card=False)
+    assert a.state is Eligibility.NOT_ELIGIBLE
+    assert a.reason is EligibilityReason.NO_PAYMENT_METHOD
+    assert a.should_poll is False
+
+
+def test_has_card_defaults_true_and_is_unaffected():
+    assert elig.assess(order_payload()).state is Eligibility.MONITORING
+    assert elig.assess(order_payload(), has_card=True).state is Eligibility.MONITORING
+
+
+def test_manual_reservation_with_no_duffel_order_is_eligible_on_fare_type_and_card_alone():
+    """A reservation with no Duffel order behind it (email import / manual
+    entry) has no conditions.change_before_departure to check — eligibility
+    is fare_type + card only, per the target spec's model."""
+    a = elig.assess({})
+    assert a.state is Eligibility.MONITORING
+    assert a.reason is EligibilityReason.CUSTOMER_SOURCED
+    assert a.should_poll is True
+
+    a = elig.assess({}, fare_type="points")
+    assert a.reason is EligibilityReason.POINTS_FARE
+
+    a = elig.assess({}, has_card=False)
+    assert a.reason is EligibilityReason.NO_PAYMENT_METHOD
 
 
 def test_engine_skips_ineligible_without_pricing():

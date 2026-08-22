@@ -34,7 +34,15 @@
 <div class="trip-grid">
   <div>
     <div class="card">
-      <h3 style="margin-bottom:6px">Itinerary</h3>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap">
+        <h3 style="margin:0">Itinerary</h3>
+        {% if trip.source and trip.source != 'td_rebook' %}
+        <span class="tag tag-mute">Imported</span>
+        {% endif %}
+        {% if trip.fare_type == 'points' %}
+        <span class="tag tag-mute">Points fare</span>
+        {% endif %}
+      </div>
       {% for leg in trip.legs %}
       <div style="display:flex; gap:20px; align-items:center; padding:14px 0;
                   {% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
@@ -85,7 +93,12 @@
         <span class="muted" style="font-size:12.5px">booked price vs. current market</span>
       </div>
 
-      {% if chart %}
+      {% if not card %}
+      <div class="mask-panel">
+        <p class="muted" style="margin:0 0 12px">Link a card to see live pricing.</p>
+        <a href="{{ url_for('settings') }}" class="btn btn-sm">Link a card</a>
+      </div>
+      {% elif chart %}
       <svg viewBox="0 0 {{ chart.w }} {{ chart.h }}" class="chart" role="img"
            aria-label="Price history: booked {{ trip.paid }}, latest {{ chart.last }}">
         <line x1="{{ chart.pad }}" y1="{{ chart.paid_y }}" x2="{{ chart.w - chart.pad }}" y2="{{ chart.paid_y }}"
@@ -171,8 +184,21 @@
           <div><dt>Last checked</dt><dd>{{ trip.last_checked or 'Never' }}</dd></div>
           <div><dt>Savings floor</dt><dd>{{ policy.min_saving }} {{ trip.currency }}</dd></div>
           <div><dt>Stops</dt><dd>{{ policy.departure_buffer_hours }}h before departure</dd></div>
+          {% if card %}
           <div><dt>Refunds to</dt><dd>{{ card.brand }} ···· {{ card.last4 }}</dd></div>
+          {% endif %}
         </dl>
+
+        {% if trip.source and trip.source != 'td_rebook' %}
+        <div class="card-flat" style="margin-top:12px">
+          <div class="lbl" style="margin-bottom:5px">Recovery execution</div>
+          <div style="font-size:12.5px; line-height:1.5">
+            This reservation was imported, not booked with us — we're watching
+            for a price drop, but automatically claiming the savings on an
+            imported reservation isn't built yet.
+          </div>
+        </div>
+        {% endif %}
 
         {% if trip.last_decision %}
         {% set d = trip.last_decision %}
@@ -211,6 +237,7 @@
   @media (max-width:900px){ .trip-grid { grid-template-columns:1fr; } }
 
   .chart { width:100%; height:150px; display:block; overflow:visible; }
+  .mask-panel { text-align:center; padding:36px 0; }
   .chart-lbl { font-size:10px; fill:var(--ink-faint); font-family:'Inter',sans-serif; }
 
   .watch-row {

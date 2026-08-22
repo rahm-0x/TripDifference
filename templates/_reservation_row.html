@@ -1,0 +1,26 @@
+{# One row in the Reservations table. `t` is a trip_view() dict, `group` is
+   'upcoming' or 'past' — used by the client-side tab filter in trips.html. #}
+<tr data-group="{{ group }}">
+  <td>
+    <b>{{ t.origin }} → {{ t.destination }}</b>
+    <div class="muted" style="font-size:12px">{{ t.carrier }}</div>
+  </td>
+  <td>Flight</td>
+  <td class="mono">{{ t.booking_reference }}</td>
+  <td class="muted">{{ t.date_label }}</td>
+  <td class="r num">{{ t.paid }} <span class="cur">{{ t.currency }}</span></td>
+  <td>
+    {% if t.refunded %}
+      <span class="tag tag-terra">Rebooked</span>
+    {% elif t.monitoring %}
+      <span class="tag tag-sage"><span class="dot"></span>Monitoring</span>
+    {% elif t.eligibility %}
+      <span class="tag {{ 'tag-danger' if t.eligibility.state == 'not_eligible' else 'tag-mute' }}"
+            title="{{ t.eligibility.customer_copy }}">{{ t.eligibility.label }}</span>
+    {% else %}
+      <span class="tag tag-mute">Paused</span>
+    {% endif %}
+  </td>
+  <td class="r"><a href="{{ url_for('trip_detail', order_id=t.order_id) }}"
+                   class="btn btn-ghost btn-sm">View</a></td>
+</tr>

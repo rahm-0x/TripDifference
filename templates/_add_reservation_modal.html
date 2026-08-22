@@ -1,0 +1,132 @@
+{# Included from overview.html and trips.html — both show an "Add Reservation"
+   button. Flights only; Hotels renders disabled (no hotel support anywhere
+   in the app — see docs/bolt-on-pivot.md's explicit deferral). #}
+<dialog id="addReservation" class="modal">
+  <form method="post" action="{{ url_for('reservation_new') }}">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+    <div class="modal-head">
+      <div class="modal-tabs">
+        <span class="modal-tab on">Flights</span>
+        <span class="modal-tab off" title="Hotels aren't supported yet">Hotels
+          <span class="tag tag-mute" style="margin-left:6px">Coming soon</span></span>
+      </div>
+      <button type="button" class="icon-btn" data-close-modal aria-label="Close">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="field">
+        <label for="ar_booking_reference">Booking / confirmation number</label>
+        <input id="ar_booking_reference" name="booking_reference" required
+               placeholder="e.g. ABCDEF" class="mono">
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="ar_traveler_id">Traveler</label>
+          <select id="ar_traveler_id" name="traveler_id">
+            <option value="">— None on file —</option>
+            {% for t in travelers %}
+            <option value="{{ t.id }}">{{ t.given_name }} {{ t.family_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="ar_carrier">Airline</label>
+          <input id="ar_carrier" name="carrier" required placeholder="e.g. Alaska Airlines">
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="ar_seg_origin">From</label>
+          <input id="ar_seg_origin" name="seg_origin" required maxlength="3"
+                 placeholder="JFK" style="text-transform:uppercase" class="mono">
+        </div>
+        <div class="field">
+          <label for="ar_seg_destination">To</label>
+          <input id="ar_seg_destination" name="seg_destination" required maxlength="3"
+                 placeholder="LAX" style="text-transform:uppercase" class="mono">
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="ar_seg_flight_number">Flight number</label>
+          <input id="ar_seg_flight_number" name="seg_flight_number" placeholder="e.g. 701" class="mono">
+        </div>
+        <div class="field">
+          <label for="ar_departure_date">Departure date</label>
+          <input id="ar_departure_date" name="departure_date" type="date">
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="ar_seg_cabin">Cabin</label>
+          <select id="ar_seg_cabin" name="seg_cabin">
+            <option value="economy">Economy</option>
+            <option value="premium_economy">Premium economy</option>
+            <option value="business">Business</option>
+            <option value="first">First</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ar_fare_type">Fare type</label>
+          <select id="ar_fare_type" name="fare_type">
+            <option value="cash">Cash</option>
+            <option value="points">Points / miles</option>
+          </select>
+          <p class="hint">Points fares can't be repriced — there's no cash difference to recover.</p>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="ar_paid">Amount paid</label>
+          <input id="ar_paid" name="paid" required inputmode="decimal" placeholder="428.00">
+        </div>
+        <div class="field">
+          <label for="ar_currency">Currency</label>
+          <input id="ar_currency" name="currency" value="USD" maxlength="3"
+                 style="text-transform:uppercase" class="mono">
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
+      <button type="submit" class="btn">Add reservation</button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .modal { border:1px solid var(--line); border-radius:var(--r-card);
+           background:var(--surface); color:var(--text); padding:0;
+           width:min(560px, 92vw); box-shadow:var(--shadow-lg); }
+  .modal::backdrop { background:rgba(0,0,0,.55); }
+  .modal-head { display:flex; align-items:center; justify-content:space-between;
+                padding:16px 18px; border-bottom:1px solid var(--line); }
+  .modal-tabs { display:flex; gap:18px; }
+  .modal-tab { font-size:13.5px; font-weight:600; padding-bottom:2px; }
+  .modal-tab.on { color:var(--text); border-bottom:2px solid var(--gold); }
+  .modal-tab.off { color:var(--muted-2); cursor:not-allowed; }
+  .modal-body { padding:16px 18px; max-height:64vh; overflow-y:auto; }
+  .modal-body .field { margin-bottom:12px; }
+  .modal-foot { display:flex; justify-content:flex-end; gap:10px;
+                padding:14px 18px; border-top:1px solid var(--line); }
+</style>
+
+<script>
+  (function () {
+    const dlg = document.getElementById('addReservation');
+    document.querySelectorAll('[data-open-modal="addReservation"]').forEach(btn => {
+      btn.addEventListener('click', () => dlg.showModal());
+    });
+    dlg.querySelectorAll('[data-close-modal]').forEach(btn => {
+      btn.addEventListener('click', () => dlg.close());
+    });
+    dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+  })();
+</script>

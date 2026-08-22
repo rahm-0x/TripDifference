@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Settings — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Settings</h1>
+  <p>Account-level details. Per-traveler information lives on Travelers.</p>
+</div>
+
+<div class="settings-grid">
+  <div class="card">
+    <div class="chart-head" style="margin-bottom:14px">
+      <h3>General information</h3>
+    </div>
+    <form method="post">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="grid2">
+        <div class="field">
+          <label for="nickname">Nickname</label>
+          <input id="nickname" name="nickname" value="{{ account_user.nickname or '' }}"
+                 placeholder="How we address you">
+        </div>
+        <div class="field">
+          <label for="phone_number">Phone number</label>
+          <input id="phone_number" name="phone_number" value="{{ account_user.phone_number or '' }}"
+                 placeholder="+15551234567">
+        </div>
+      </div>
+      <div class="field">
+        <label>Email address</label>
+        <div class="static-value">{{ account_user.email }}</div>
+        <p class="hint">Contact support to change the email on file.</p>
+      </div>
+      <button type="submit" class="btn">Save changes</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="chart-head" style="margin-bottom:14px">
+      <h3>Payment method</h3>
+    </div>
+    {% if card %}
+    <div class="pm-row">
+      <b>{{ card.brand }} ending {{ card.last4 }}</b>
+      <span class="muted">{{ card.holder }} · expires {{ card.expiry }}</span>
+    </div>
+    {% else %}
+    <p class="muted" style="margin:0 0 12px">No card on file — active monitoring is paused until one is linked.</p>
+    <button type="button" class="btn" disabled title="Coming soon">Link a card</button>
+    {% endif %}
+  </div>
+
+  <div class="card disabled-panel">
+    <div class="chart-head" style="margin-bottom:14px">
+      <h3>Manage reservation imports</h3>
+      <span class="tag tag-mute">Coming soon</span>
+    </div>
+    <p class="muted" style="margin:0 0 14px">
+      Automatically import reservations by connecting Gmail or forwarding
+      confirmation emails. Not available yet.
+    </p>
+    <div class="pm-row" style="opacity:.5">
+      <span>🔗</span><span>Connect with Google</span>
+    </div>
+    <p class="hint" style="margin-top:12px">
+      Once enabled, you'll be able to forward confirmations to a dedicated
+      address and see them appear here automatically.
+    </p>
+  </div>
+</div>
+
+<style>
+  .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .settings-grid > .card:first-child { grid-column:1 / -1; }
+  .static-value { padding:9px 0; font-size:14px; }
+  .pm-row { display:flex; flex-direction:column; gap:3px; padding:12px 0; }
+  .disabled-panel { opacity:.85; }
+  @media (max-width:900px){ .settings-grid { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}

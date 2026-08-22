@@ -31,6 +31,8 @@ class Eligibility(str, Enum):
 
 class EligibilityReason(str, Enum):
     POINTS_FARE = "points_fare"
+    NO_PAYMENT_METHOD = "no_payment_method"
+    CUSTOMER_SOURCED = "customer_sourced"
     CHANGES_ALLOWED = "changes_allowed"
     NO_CHANGE_ACTION = "no_change_action"
     CHANGE_NOT_ALLOWED = "change_not_allowed"
@@ -45,6 +47,11 @@ CUSTOMER_COPY = {
     EligibilityReason.POINTS_FARE:
         "This was booked with points, not cash, so there's no fare difference "
         "for us to recover.",
+    EligibilityReason.NO_PAYMENT_METHOD:
+        "Link a card and we'll start watching this fare for a price drop.",
+    EligibilityReason.CUSTOMER_SOURCED:
+        "We're watching this fare and will let you know if a cheaper option "
+        "appears.",
     EligibilityReason.CHANGES_ALLOWED:
         "We're watching this fare and will rebook you if the price drops.",
     EligibilityReason.NO_CHANGE_ACTION:
@@ -102,13 +109,16 @@ def _decimal(value):
         return None
 
 
-def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash"):
+def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_card=True):
     """
-    `order` is a raw Duffel order payload. `fare_type` is 'cash' or 'points' —
-    every fare Duffel's cash-offer search can book is 'cash' by construction,
-    so the default holds for every order this app has ever booked itself;
-    only a customer-sourced reservation (email import / manual entry) can
-    actually be 'points'.
+    `order` is a raw Duffel order payload, or `{}` for a reservation with no
+    Duffel order behind it (customer-sourced: email import / manual entry).
+    `fare_type` is 'cash' or 'points' — every fare Duffel's cash-offer search
+    can book is 'cash' by construction, so the default holds for every order
+    this app has ever booked itself; only a customer-sourced reservation can
+    actually be 'points'. `has_card` defaults True so nothing regresses ahead
+    of real Stripe wiring — card-gating (business rule: no card on file, no
+    active monitoring) is enforced here once a real value is passed in.
 
     Order of checks matters — the first failing gate is the one reported.
     """
@@ -116,6 +126,23 @@ def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash"):
         return Assessment(
             Eligibility.NOT_ELIGIBLE, EligibilityReason.POINTS_FARE,
             "fare_type is 'points' — no cash fare difference to recover")
+
+    if not has_card:
+        return Assessment(
+            Eligibility.NOT_ELIGIBLE, EligibilityReason.NO_PAYMENT_METHOD,
+            "no payment method on file — card-gating blocks active monitoring")
+
+    if not order:
+        # No Duffel order to read changeability/penalty conditions from —
+        # TD never wrote this reservation. The penalty-ratio check below is
+        # about whether changing an *existing Duffel order* in place is
+        # economical, which doesn't apply here; eligibility is fare_type +
+        # card only, same as the target spec's model for a customer-sourced
+        # reservation.
+        return Assessment(
+            Eligibility.MONITORING, EligibilityReason.CUSTOMER_SOURCED,
+            "no Duffel order behind this reservation — eligible on fare_type "
+            "and card-on-file alone")
 
     total = _decimal(order.get("total_amount"))
     total_currency = (order.get("total_currency") or "").upper()

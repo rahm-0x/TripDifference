@@ -122,38 +122,52 @@ def audit_append(payload):
        Jsonb(payload)))
 
 
-def audit_rows(limit=300, order_id=None):
-    """Newest first, in the shape templates/decisions.html already renders.
+_AUDIT_COLS = """id, ts, kind, order_id, source, outcome, reason, execution,
+                 market_best, market_delta, change_total, currency, detail, payload"""
 
-    The promoted columns win over the payload. The payload is whatever the
-    writer chose to record and a row can predate a field or omit it entirely;
-    ts, kind and order_id are always present on the row itself, and the log
-    must not fail to render because one entry is shaped differently.
-    """
-    cols = """id, ts, kind, order_id, source, outcome, reason, execution,
-              market_best, market_delta, change_total, currency, detail, payload"""
+
+def _audit_payload(r):
+    """One audit_events row → the dict shape templates/decisions.html already
+    renders. The promoted columns win over the payload. The payload is
+    whatever the writer chose to record and a row can predate a field or
+    omit it entirely; ts, kind and order_id are always present on the row
+    itself, and the log must not fail to render because one entry is shaped
+    differently."""
+    payload = dict(r["payload"] or {})
+    payload["ts"] = r["ts"].isoformat()
+    payload["kind"] = r["kind"]
+    payload["order_id"] = r["order_id"]
+    for k in ("source", "outcome", "reason", "execution", "detail"):
+        if not payload.get(k) and r[k]:
+            payload[k] = r[k]
+    for k in ("market_best", "market_delta", "change_total"):
+        if not payload.get(k) and r[k] is not None:
+            payload[k] = str(r[k])
+    return payload
+
+
+def audit_rows(limit=300, order_id=None):
+    """Newest first. Ops-wide (no account scoping) — see audit_rows_for_account
+    for the customer-facing, account-scoped Activity Timeline."""
     if order_id:
-        rows = q(f"""SELECT {cols} FROM audit_events WHERE order_id = %s
+        rows = q(f"""SELECT {_AUDIT_COLS} FROM audit_events WHERE order_id = %s
                      ORDER BY ts DESC, id DESC LIMIT %s""",
                  (order_id, limit), fetch="all")
     else:
-        rows = q(f"""SELECT {cols} FROM audit_events
+        rows = q(f"""SELECT {_AUDIT_COLS} FROM audit_events
                      ORDER BY ts DESC, id DESC LIMIT %s""", (limit,), fetch="all")
+    return [_audit_payload(r) for r in rows]
 
-    out = []
-    for r in rows:
-        payload = dict(r["payload"] or {})
-        payload["ts"] = r["ts"].isoformat()
-        payload["kind"] = r["kind"]
-        payload["order_id"] = r["order_id"]
-        for k in ("source", "outcome", "reason", "execution", "detail"):
-            if not payload.get(k) and r[k]:
-                payload[k] = r[k]
-        for k in ("market_best", "market_delta", "change_total"):
-            if not payload.get(k) and r[k] is not None:
-                payload[k] = str(r[k])
-        out.append(payload)
-    return out
+
+def audit_rows_for_account(account_id, limit=20):
+    """Newest first, scoped to one account's own orders — the Activity
+    Timeline's data source, straight from audit_events (same table
+    /decisions already reads), no separate display list."""
+    rows = q(f"""SELECT {_AUDIT_COLS} FROM audit_events
+                  WHERE order_id IN (SELECT order_id FROM orders WHERE account_id = %s)
+                  ORDER BY ts DESC, id DESC LIMIT %s""",
+             (account_id, limit), fetch="all")
+    return [_audit_payload(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -164,16 +178,21 @@ _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "departure_date", "paid", "original_paid", "refunded",
                "currency", "monitoring", "executed", "raw", "last_decision",
                "sim_scenario", "simulated", "sim_paid", "sim_refunded",
-               "offer_id", "source", "fare_type")
+               "offer_id", "source", "fare_type", "traveler_id",
+               "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
 # DEFAULT never fires — the coercion has to happen here instead.
-_TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currency"}
+_TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currency",
+                  "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin"}
 # Columns with their own DB default and a CHECK constraint, so an
 # absent/blank value here must fall through to the column default rather
 # than being coerced to '' like the plain text fields above.
 _ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash"}
+# Nullable uuid FK — a blank string must stay NULL, not become '' (invalid
+# uuid input), unlike the plain text fields above.
+_NULLABLE_UUID = {"traveler_id"}
 
 
 def _to_record(row):
@@ -231,6 +250,8 @@ def upsert_order(record, account_id):
                 v = v or ""
             elif k in _ORDER_DEFAULTS:
                 v = v or _ORDER_DEFAULTS[k]
+            elif k in _NULLABLE_UUID:
+                v = v or None
             elif k in ("monitoring", "simulated"):
                 v = bool(v)
             vals[k] = v
@@ -246,6 +267,27 @@ def upsert_order(record, account_id):
                 RETURNING *""",
             (order_id, account_id, *[vals[c] for c in _ORDER_COLS]))
         return _to_record(cur.fetchone())
+
+
+def create_manual_order(account_id, *, traveler_id, seg_origin, seg_destination,
+                         seg_flight_number, seg_cabin, carrier, booking_reference,
+                         departure_date, paid, currency, fare_type):
+    """A reservation with no Duffel order behind it — booked with the airline
+    directly, added by hand. No `raw` payload exists to derive display fields
+    from, so the segment is stored for real instead (see migration 010).
+    """
+    order_id = "manual_" + secrets.token_urlsafe(8)
+    return upsert_order({
+        "order_id": order_id, "source": "manual", "fare_type": fare_type,
+        "raw": {}, "monitoring": False,
+        "traveler_id": traveler_id or None,
+        "seg_origin": seg_origin, "seg_destination": seg_destination,
+        "seg_flight_number": seg_flight_number, "seg_cabin": seg_cabin,
+        "carrier": carrier, "booking_reference": booking_reference,
+        "route": f"{seg_origin}-{seg_destination}", "itinerary": seg_flight_number,
+        "departure_date": departure_date or None,
+        "paid": paid, "currency": currency,
+    }, account_id)
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +404,14 @@ def user_by_email(email):
 
 def email_taken(email):
     return q("SELECT 1 FROM users WHERE email = %s", (email,), fetch="one") is not None
+
+
+def account_settings_update(user_id, *, nickname, phone_number):
+    """Settings' General Information panel. Account-level fields only —
+    per-Traveler data (loyalty, trusted traveler, preferences) lives on
+    travelers and is edited from Travelers, not here."""
+    q("""UPDATE users SET nickname = %s, phone_number = %s WHERE id = %s""",
+      (nickname or "", phone_number or "", user_id))
 
 
 def start_session(user_id):
@@ -521,6 +571,10 @@ def account_summary(account_id):
                             WHERE order_id IN (SELECT order_id FROM orders
                                                WHERE account_id = %s)""",
                          (account_id,), fetch="one")["n"]
+    out["savings_events"] = q("""SELECT count(*) AS n FROM savings_events
+                                 WHERE order_id IN (SELECT order_id FROM orders
+                                                    WHERE account_id = %s)""",
+                              (account_id,), fetch="one")["n"]
     return out
 
 

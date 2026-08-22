@@ -140,8 +140,35 @@ class OrderSnapshot:
     eligibility: object = None      # eligibility.Assessment, when built from a payload
 
     @classmethod
-    def from_duffel(cls, order, fare_type="cash"):
-        """Build from a raw Duffel order payload. Tolerant of missing fields."""
+    def from_duffel(cls, order, fare_type="cash", has_card=True, fallback=None):
+        """Build from a raw Duffel order payload, or — when `order` is empty
+        (a reservation with no Duffel order behind it: email import / manual
+        entry) — from `fallback`, the stored order-record columns app.py's
+        snapshot_of() supplies instead (migration 010). Tolerant of missing
+        fields either way.
+        """
+        if not order:
+            fb = fallback or {}
+            return cls(
+                id=fb.get("order_id", ""),
+                total=Decimal(str(fb.get("paid") or "0")),
+                currency=fb.get("currency", "") or "",
+                slice_id="",
+                route=Route(fb.get("seg_origin", "") or "", fb.get("seg_destination", "") or ""),
+                itinerary=Itinerary(fb.get("carrier", "") or "",
+                                    (fb.get("seg_flight_number", "") or "",)),
+                departure_date=fb.get("departure_date") or "",
+                departing_at=None,
+                cabin=fb.get("seg_cabin") or "economy",
+                # No Duffel conditions to distrust — market-price monitoring
+                # works the same way regardless; nothing here vetoes it.
+                changeable=True,
+                void_window_ends_at=None,
+                booking_reference=fb.get("booking_reference", "") or "",
+                carrier_name=fb.get("carrier", "") or "",
+                eligibility=eligibility.assess(order, fare_type=fare_type, has_card=has_card),
+            )
+
         sl = (order.get("slices") or [{}])[0]
         segments = sl.get("segments") or []
 
@@ -190,7 +217,7 @@ class OrderSnapshot:
             void_window_ends_at=_parse_dt(order.get("void_window_ends_at")),
             booking_reference=order.get("booking_reference", ""),
             carrier_name=(order.get("owner") or {}).get("name", ""),
-            eligibility=eligibility.assess(order, fare_type=fare_type),
+            eligibility=eligibility.assess(order, fare_type=fare_type, has_card=has_card),
         )
 
 
