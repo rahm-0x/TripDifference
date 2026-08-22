@@ -312,7 +312,42 @@ def test_order_snapshot_from_fallback_when_no_duffel_order():
     assert order.departure_date == "2026-08-29"
     assert order.changeable is True
     assert order.departing_at is None
+    assert order.has_duffel_order is False
     assert order.eligibility.reason is EligibilityReason.CUSTOMER_SOURCED
+
+
+def test_evaluate_never_prices_a_change_for_a_manual_reservation():
+    """A manual/imported reservation's order.id isn't a real Duffel order_id
+    — evaluate() must not call price_change() against it (it would 422:
+    'Linked record(s) not found'). The market-price search (diagnostic,
+    route/date/cabin-based, no order_id needed) still runs; only the
+    order-change quote is skipped, with an honest NO_EXECUTION_MECHANISM
+    reason rather than a crash.
+
+    Regression test: this exact call chain 422'd in a live check against
+    Duffel's sandbox against a manual order before the has_duffel_order
+    gate was added to evaluate().
+    """
+    class MarketOnlySource:
+        name = "duffel"
+
+        def get_current_price(self, *a, **k):
+            return []
+
+        def price_change(self, *a, **k):
+            raise AssertionError("price_change must not be called for a "
+                                 "reservation with no real Duffel order")
+
+    order = OrderSnapshot.from_duffel({}, fallback={
+        "order_id": "manual_xyz789", "paid": "428.00", "currency": "USD",
+        "seg_origin": "JFK", "seg_destination": "LAX",
+        "seg_flight_number": "701", "seg_cabin": "economy",
+        "carrier": "Alaska Airlines", "booking_reference": "ILBTXL",
+        "departure_date": "2026-08-29",
+    }, has_card=True)
+    d = run(order, MarketOnlySource())
+    assert d.outcome is Outcome.SKIP
+    assert d.reason is Reason.NO_EXECUTION_MECHANISM
 
 
 def test_changeable_falls_back_to_available_actions():

@@ -74,6 +74,7 @@ class Reason(str, Enum):
     NO_IDENTICAL_ITINERARY = "no_identical_itinerary"
     CHANGE_TOTAL_NOT_NEGATIVE = "change_total_not_negative"
     BELOW_FLOOR = "below_floor"
+    NO_EXECUTION_MECHANISM = "no_execution_mechanism"
 
 
 # Eligibility reasons map onto engine skip reasons.
@@ -138,6 +139,11 @@ class OrderSnapshot:
     booking_reference: str = ""
     carrier_name: str = ""
     eligibility: object = None      # eligibility.Assessment, when built from a payload
+    # False for a manual/imported reservation — there's no real Duffel order
+    # to quote an order-change against, only a market-price search (which
+    # doesn't need one). evaluate() must not call price_change() when this
+    # is False; it would 422 against a non-existent order_id.
+    has_duffel_order: bool = True
 
     @classmethod
     def from_duffel(cls, order, fare_type="cash", has_card=True, fallback=None):
@@ -167,6 +173,7 @@ class OrderSnapshot:
                 booking_reference=fb.get("booking_reference", "") or "",
                 carrier_name=fb.get("carrier", "") or "",
                 eligibility=eligibility.assess(order, fare_type=fare_type, has_card=has_card),
+                has_duffel_order=False,
             )
 
         sl = (order.get("slices") or [{}])[0]
@@ -418,6 +425,19 @@ def evaluate(order, source, policy=None, now=None, log=True):
         market_delta = None
         market_best = None
         print(f"  market lookup failed for {order.id}: {type(exc).__name__}: {exc}")
+
+    # A manual/imported reservation has no real Duffel order to quote a
+    # change against — order.id isn't a Duffel order_id at all. The market
+    # search above still ran and still gets recorded (that's the only
+    # price-history source Historical has for these), but there is no
+    # order-change mechanism to call yet — see docs/bolt-on-pivot.md on
+    # book-new-before-cancel-old not being built.
+    if not order.has_duffel_order:
+        return decide(Outcome.SKIP, Reason.NO_EXECUTION_MECHANISM,
+                      "no Duffel order behind this reservation — market price "
+                      "recorded, but there is no execution mechanism to quote "
+                      "an exchange against yet",
+                      market_best=market_best, market_delta=market_delta)
 
     # --- the number that actually decides --------------------------------
     new_slice = SliceSpec(order.route.origin, order.route.destination,
