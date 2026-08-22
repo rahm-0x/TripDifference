@@ -20,6 +20,18 @@
             {% if t.born_on %}born {{ t.born_on }}{% endif %}
             {% if t.email %} · {{ t.email }}{% endif %}
             {% if t.phone_number %} · {{ t.phone_number }}{% endif %}
+            {% if t.nationality %} · {{ t.nationality }}{% endif %}
+          </span>
+          <span class="trav-sub">
+            {% if t.loyalty_programs %}
+              {{ t.loyalty_programs|length }} loyalty program{{ 's' if t.loyalty_programs|length != 1 }}
+            {% else %}No loyalty programs on file{% endif %}
+            {% set ttn = [t.known_traveler_number, t.redress_number, t.canadian_travel_number]|select|list %}
+            {% if ttn or t.clear_plus %}
+              · Trusted traveler on file
+            {% else %}
+              · No trusted traveler numbers on file
+            {% endif %}
           </span>
         </div>
         <div class="trav-act">
@@ -91,6 +103,69 @@
                  value="{{ form.phone_number or '' }}" placeholder="+15551234567">
           <p class="hint">Include the country code — airlines reject numbers without one.</p>
         </div>
+        <div class="field">
+          <label for="nationality">Nationality</label>
+          <input id="nationality" name="nationality" value="{{ form.nationality or '' }}"
+                 placeholder="e.g. US">
+        </div>
+
+        <h4 class="form-section">Loyalty programs</h4>
+        {% for i in range(3) %}
+        {% set prog = (form.loyalty_programs or [])[i] if (form.loyalty_programs or [])|length > i else {} %}
+        <div class="grid2">
+          <div class="field">
+            <input name="loyalty_airline" placeholder="Airline" value="{{ prog.airline or '' }}">
+          </div>
+          <div class="field">
+            <input name="loyalty_number" placeholder="Member number" value="{{ prog.member_number or '' }}">
+          </div>
+        </div>
+        {% endfor %}
+
+        <h4 class="form-section">Trusted traveler</h4>
+        <div class="grid2">
+          <div class="field">
+            <label for="known_traveler_number">Known Traveler Number</label>
+            <input id="known_traveler_number" name="known_traveler_number"
+                   value="{{ form.known_traveler_number or '' }}">
+          </div>
+          <div class="field">
+            <label for="redress_number">Redress Number</label>
+            <input id="redress_number" name="redress_number" value="{{ form.redress_number or '' }}">
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label for="canadian_travel_number">Canadian Travel Number</label>
+            <input id="canadian_travel_number" name="canadian_travel_number"
+                   value="{{ form.canadian_travel_number or '' }}">
+          </div>
+          <div class="field" style="display:flex; align-items:flex-end; padding-bottom:6px">
+            <label style="display:flex; align-items:center; gap:8px; font-weight:400">
+              <input type="checkbox" name="clear_plus" {{ 'checked' if form.clear_plus }}>
+              CLEAR Plus member
+            </label>
+          </div>
+        </div>
+
+        <h4 class="form-section">Preferences</h4>
+        <div class="grid2">
+          <div class="field">
+            <label for="home_airport">Home airport</label>
+            <input id="home_airport" name="home_airport" value="{{ form.home_airport or '' }}"
+                   placeholder="e.g. JFK">
+          </div>
+          <div class="field">
+            <label for="seat_preference">Seat preference</label>
+            <input id="seat_preference" name="seat_preference" value="{{ form.seat_preference or '' }}"
+                   placeholder="e.g. Aisle">
+          </div>
+        </div>
+        <div class="field">
+          <label for="preferred_airline">Preferred airline</label>
+          <input id="preferred_airline" name="preferred_airline" value="{{ form.preferred_airline or '' }}">
+        </div>
+
         <button type="submit" class="btn-block">
           {{ 'Save changes' if editing else 'Add traveler' }}</button>
         {% if editing %}
@@ -113,6 +188,9 @@
   .trav-who { min-width:0; }
   .trav-who b { display:block; font-size:15px; }
   .trav-who span { display:block; font-size:12.5px; color:var(--muted-2); margin-top:2px; }
+  .trav-sub { color:var(--ink-faint) !important; }
+  .form-section { font-size:12px; text-transform:uppercase; letter-spacing:.04em;
+                  color:var(--ink-faint); margin:18px 0 8px; }
   .trav-act { margin-left:auto; display:flex; gap:8px; align-items:center; }
   .trav-act form { margin:0; }
   @media (max-width:900px){ .trav-grid { grid-template-columns:1fr; } }

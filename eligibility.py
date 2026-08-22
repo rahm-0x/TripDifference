@@ -30,6 +30,7 @@ class Eligibility(str, Enum):
 
 
 class EligibilityReason(str, Enum):
+    POINTS_FARE = "points_fare"
     CHANGES_ALLOWED = "changes_allowed"
     NO_CHANGE_ACTION = "no_change_action"
     CHANGE_NOT_ALLOWED = "change_not_allowed"
@@ -41,6 +42,9 @@ class EligibilityReason(str, Enum):
 
 # Customer-facing copy. Keyed by reason so the UI never invents its own wording.
 CUSTOMER_COPY = {
+    EligibilityReason.POINTS_FARE:
+        "This was booked with points, not cash, so there's no fare difference "
+        "for us to recover.",
     EligibilityReason.CHANGES_ALLOWED:
         "We're watching this fare and will rebook you if the price drops.",
     EligibilityReason.NO_CHANGE_ACTION:
@@ -98,12 +102,21 @@ def _decimal(value):
         return None
 
 
-def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO):
+def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash"):
     """
-    `order` is a raw Duffel order payload.
+    `order` is a raw Duffel order payload. `fare_type` is 'cash' or 'points' —
+    every fare Duffel's cash-offer search can book is 'cash' by construction,
+    so the default holds for every order this app has ever booked itself;
+    only a customer-sourced reservation (email import / manual entry) can
+    actually be 'points'.
 
     Order of checks matters — the first failing gate is the one reported.
     """
+    if fare_type == "points":
+        return Assessment(
+            Eligibility.NOT_ELIGIBLE, EligibilityReason.POINTS_FARE,
+            "fare_type is 'points' — no cash fare difference to recover")
+
     total = _decimal(order.get("total_amount"))
     total_currency = (order.get("total_currency") or "").upper()
 

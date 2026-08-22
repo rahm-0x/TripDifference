@@ -30,7 +30,7 @@ import duffel_http
 import eligibility
 import paths
 from duffel_http import DuffelError
-from engine import (OrderSnapshot, Outcome, ReshopPolicy,
+from engine import (OrderSnapshot, Outcome, ReshopPolicy, SERVICE_FEE_RATE,
                     evaluate, log_decision, log_eligibility)
 from prices import (DuffelPriceSource, Route, SimulatedPriceSource,
                     get_price_source)
@@ -219,7 +219,7 @@ def upsert_order(record):
 
 
 def snapshot_of(record):
-    return OrderSnapshot.from_duffel(record["raw"])
+    return OrderSnapshot.from_duffel(record["raw"], fare_type=record.get("fare_type") or "cash")
 
 
 def trip_view(record):
@@ -237,7 +237,7 @@ def trip_view(record):
     snap = snapshot_of(record) if raw else None
     d = record.get("last_decision") or {}
     pax = (raw.get("passengers") or [{}])[0]
-    a = eligibility.assess(raw) if raw else None
+    a = eligibility.assess(raw, fare_type=record.get("fare_type") or "cash") if raw else None
     return {
         "eligibility": {
             "state": a.state.value, "label": a.label, "reason": a.reason.value,
@@ -763,6 +763,13 @@ def book():
         "monitoring": assessment.should_poll,
         "booked_at": datetime.now(timezone.utc).isoformat(),
         "last_decision": None, "raw": order,
+        # This route purchases via Duffel on TD's own balance — under the
+        # bolt-on model that only ever happens as the internal rebook step,
+        # never as a customer-facing "book with us" flow.
+        "source": "td_rebook",
+        # Duffel's cash-offer search is the only thing this route can book —
+        # there is no points/award path through it.
+        "fare_type": "cash",
     })
 
     # Seed the simulated scenario from reality, so simulation starts at the
@@ -838,6 +845,23 @@ def wallet():
 # travelers — passenger profiles, not logins
 # ---------------------------------------------------------------------------
 
+def _traveler_form():
+    """The full traveler form: booking-profile fields plus the bolt-on
+    additions (loyalty, trusted traveler, preferences). Kept in one place so
+    traveler_new and traveler_edit build an identical shape."""
+    form = {f: request.form.get(f, "").strip() for f in db.TRAVELER_FIELDS}
+    form.update({f: request.form.get(f, "").strip()
+                for f in db.TRAVELER_TEXT_PROFILE_FIELDS})
+    form["clear_plus"] = request.form.get("clear_plus") == "on"
+    airlines = request.form.getlist("loyalty_airline")
+    numbers = request.form.getlist("loyalty_number")
+    form["loyalty_programs"] = [
+        {"airline": a.strip(), "member_number": n.strip()}
+        for a, n in zip(airlines, numbers) if a.strip() and n.strip()
+    ]
+    return form
+
+
 def _traveler_problem(form):
     """Saved profiles go straight into a booking, so hold them to the same
     rules Duffel will apply — catching it here beats catching it after payment."""
@@ -865,7 +889,7 @@ def travelers():
 @app.route("/travelers/new", methods=["POST"])
 @auth.login_required
 def traveler_new():
-    form = {f: request.form.get(f, "").strip() for f in db.TRAVELER_FIELDS}
+    form = _traveler_form()
     problem = _traveler_problem(form)
     if problem:
         return render_template("travelers.html", nav="travelers",
@@ -882,7 +906,7 @@ def traveler_edit(traveler_id):
     if not existing:
         return redirect(url_for("travelers"))
     if request.method == "POST":
-        form = {f: request.form.get(f, "").strip() for f in db.TRAVELER_FIELDS}
+        form = _traveler_form()
         problem = _traveler_problem(form)
         if problem:
             return render_template("travelers.html", nav="travelers",
@@ -929,7 +953,8 @@ def trip_detail(order_id):
         return redirect(url_for("trips"))
     trip = trip_view(record)
     return render_template("trip.html", nav="trips", trip=trip,
-                           chart=build_chart(order_id, trip["paid"]))
+                           chart=build_chart(order_id, trip["paid"]),
+                           savings_events=db.savings_events_for_order(order_id))
 
 
 # ---------------------------------------------------------------------------
@@ -957,7 +982,8 @@ def toggle_monitor(order_id):
     if record:
         # Monitoring can always be turned off, but never on for a fare that
         # cannot win — the toggle must not be able to re-create the bug.
-        a = eligibility.assess(record.get("raw") or {})
+        a = eligibility.assess(record.get("raw") or {},
+                               fare_type=record.get("fare_type") or "cash")
         wanted = not record.get("monitoring", True)
         upsert_order({"order_id": order_id, "monitoring": wanted and a.should_poll})
     if request.form.get("next") == "trip":
@@ -1154,8 +1180,18 @@ def execute(order_id, action):
                 "POST", f"/air/order_changes/{change['id']}/actions/confirm",
                 body=body, label="ui_change_confirm")
             note = f"exchange confirmed at {result.get('confirmed_at')}, change_total {delta}"
+            savings = None
             if delta < 0:
                 extra = {"refunded": str(-delta), "original_paid": record.get("paid")}
+                paid = Decimal(record.get("paid") or 0)
+                # An exchange settles the price difference in cash either
+                # direction (never as an airline credit) — Duffel's
+                # order-change payment object only ever takes a card/balance
+                # payment or nothing, there is no credit branch here.
+                savings = {"old_amount": str(paid), "new_amount": str(paid + delta),
+                          "realized_savings": str(-delta),
+                          "delivery_type": "refund_to_card",
+                          "delivery_detail": f"card ending in {CARD['last4']}"}
         else:
             quote = duffel_http.request("POST", "/air/order_cancellations", body={
                 "data": {"order_id": order_id}}, label="ui_cancel_quote")
@@ -1164,6 +1200,20 @@ def execute(order_id, action):
                 body={"data": {}}, label="ui_cancel_confirm")
             note = (f"cancelled at {result.get('confirmed_at')}, "
                     f"refunded {result.get('refund_amount')} {result.get('refund_currency')}")
+            savings = None
+            refunded = Decimal(result.get("refund_amount") or 0)
+            if refunded > 0:
+                paid = Decimal(record.get("paid") or 0)
+                # refund_to is Duffel's own signal for which path fired —
+                # 'airline_credit'/'airline_credits' means the airline's
+                # policy paid out as a loyalty-account credit, not cash back.
+                is_credit = (result.get("refund_to") or "").replace("_", "") \
+                    in ("airlinecredit", "airlinecredits")
+                savings = {"old_amount": str(paid), "new_amount": str(paid - refunded),
+                          "realized_savings": str(refunded),
+                          "delivery_type": "airline_credit" if is_credit else "refund_to_card",
+                          "delivery_detail": (f"{record.get('carrier')} account" if is_credit
+                                              else f"card ending in {CARD['last4']}")}
     except (DuffelError, RuntimeError) as exc:
         # The order-change *create* call is safe to retry; a failed confirm is
         # not, because the exchange may have landed anyway. Only release the
@@ -1177,6 +1227,10 @@ def execute(order_id, action):
 
     db.finish_execution(attempt["id"], "succeeded", note=note,
                         duffel_change_id=duffel_change_id, result=result)
+    if savings:
+        db.savings_event_create(order_id, execution_attempt_id=attempt["id"],
+                                currency=record.get("currency") or "",
+                                commission_rate=SERVICE_FEE_RATE, **savings)
     fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
     upsert_order({"order_id": order_id, "raw": fresh, "monitoring": False,
                   "executed": note, "paid": fresh["total_amount"], **extra})

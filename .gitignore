@@ -10,3 +10,4 @@ orders.json
 decisions.log
 .vercel
 .env*
+duffel_reshop_test-*.log

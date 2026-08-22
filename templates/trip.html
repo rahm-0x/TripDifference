@@ -17,13 +17,19 @@
   </div>
 </div>
 
-{% if trip.refunded %}
+{% for ev in savings_events %}
 <div class="notice" style="background:var(--sage-wash); border-color:rgba(95,191,127,.22); color:var(--green); margin-bottom:16px">
   <span>↓</span>
-  <div><b>Rebooked at a lower fare — {{ trip.refunded }} {{ trip.currency }} refunded.</b>
-  Same flight and times; the refund went back to {{ card.brand }} ending {{ card.last4 }}.</div>
+  <div>
+    {% if ev.delivery_type == 'airline_credit' %}
+    <b>Credited {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
+    {% else %}
+    <b>Refunded {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
+    {% endif %}
+    Our fee (25%): {{ ev.commission_amount }} {{ ev.currency }}.
+  </div>
 </div>
-{% endif %}
+{% endfor %}
 
 <div class="trip-grid">
   <div>

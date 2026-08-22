@@ -519,6 +519,20 @@ def test_every_reason_has_customer_copy():
         assert elig.CUSTOMER_COPY[reason].strip(), f"{reason} has no customer copy"
 
 
+def test_points_fare_is_not_eligible_even_with_perfect_conditions():
+    """A points booking must never be monitored, no matter how favourable the
+    change conditions look — there is no cash fare difference to recover."""
+    a = elig.assess(order_payload(), fare_type="points")
+    assert a.state is Eligibility.NOT_ELIGIBLE
+    assert a.reason is EligibilityReason.POINTS_FARE
+    assert a.should_poll is False
+
+
+def test_cash_fare_type_is_the_default_and_unaffected():
+    assert elig.assess(order_payload()).state is Eligibility.MONITORING
+    assert elig.assess(order_payload(), fare_type="cash").state is Eligibility.MONITORING
+
+
 def test_engine_skips_ineligible_without_pricing():
     order = make_order(eligibility=elig.assess(order_payload(
         total_amount="573.33",

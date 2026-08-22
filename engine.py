@@ -140,7 +140,7 @@ class OrderSnapshot:
     eligibility: object = None      # eligibility.Assessment, when built from a payload
 
     @classmethod
-    def from_duffel(cls, order):
+    def from_duffel(cls, order, fare_type="cash"):
         """Build from a raw Duffel order payload. Tolerant of missing fields."""
         sl = (order.get("slices") or [{}])[0]
         segments = sl.get("segments") or []
@@ -190,7 +190,7 @@ class OrderSnapshot:
             void_window_ends_at=_parse_dt(order.get("void_window_ends_at")),
             booking_reference=order.get("booking_reference", ""),
             carrier_name=(order.get("owner") or {}).get("name", ""),
-            eligibility=eligibility.assess(order),
+            eligibility=eligibility.assess(order, fare_type=fare_type),
         )
 
 

@@ -164,12 +164,16 @@ _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "departure_date", "paid", "original_paid", "refunded",
                "currency", "monitoring", "executed", "raw", "last_decision",
                "sim_scenario", "simulated", "sim_paid", "sim_refunded",
-               "offer_id")
+               "offer_id", "source", "fare_type")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
 # DEFAULT never fires — the coercion has to happen here instead.
 _TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currency"}
+# Columns with their own DB default and a CHECK constraint, so an
+# absent/blank value here must fall through to the column default rather
+# than being coerced to '' like the plain text fields above.
+_ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash"}
 
 
 def _to_record(row):
@@ -225,6 +229,8 @@ def upsert_order(record, account_id):
                 v = Jsonb(v) if v is not None else None
             elif k in _TEXT_NOT_NULL:
                 v = v or ""
+            elif k in _ORDER_DEFAULTS:
+                v = v or _ORDER_DEFAULTS[k]
             elif k in ("monitoring", "simulated"):
                 v = bool(v)
             vals[k] = v
@@ -286,6 +292,39 @@ def release_execution(attempt_id):
     Only safe when the failure happened strictly before the network call."""
     q("DELETE FROM execution_attempts WHERE id=%s AND status='in_progress'",
       (attempt_id,))
+
+
+# ---------------------------------------------------------------------------
+# savings events — which delivery path an execution actually produced
+# ---------------------------------------------------------------------------
+
+def savings_event_create(order_id, *, execution_attempt_id, old_amount, new_amount,
+                          realized_savings, currency, delivery_type, delivery_detail,
+                          commission_rate):
+    """Record what an execution actually delivered, once — called from the
+    same branch in app.execute() that already knows the Duffel result, not a
+    second decision engine re-deriving it."""
+    commission_amount = (Decimal(realized_savings) * Decimal(commission_rate)
+                         ).quantize(Decimal("0.01"))
+    return q("""INSERT INTO savings_events
+                   (order_id, execution_attempt_id, old_amount, new_amount,
+                    realized_savings, currency, delivery_type, delivery_detail,
+                    commission_rate, commission_amount, status)
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'completed')
+                 RETURNING *""",
+            (order_id, execution_attempt_id, _num(old_amount), _num(new_amount),
+             _num(realized_savings), currency, delivery_type, delivery_detail,
+             _num(commission_rate), commission_amount), fetch="one")
+
+
+def savings_events_for_order(order_id):
+    rows = q("""SELECT * FROM savings_events WHERE order_id = %s
+                ORDER BY created_at DESC""", (order_id,), fetch="all")
+    for r in rows:
+        for k in ("old_amount", "new_amount", "realized_savings",
+                  "commission_rate", "commission_amount"):
+            r[k] = str(r[k]) if r.get(k) is not None else None
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +425,14 @@ def clear_failures(email):
 TRAVELER_FIELDS = ("title", "given_name", "family_name", "born_on", "gender",
                    "email", "phone_number")
 
+# Profile fields the bolt-on model needs — loyalty, trusted-traveler,
+# preferences. Kept apart from TRAVELER_FIELDS on purpose: that tuple feeds
+# the passenger dict a booking sends straight to Duffel, and none of this
+# belongs in that payload.
+TRAVELER_TEXT_PROFILE_FIELDS = ("nationality", "known_traveler_number",
+                                "redress_number", "canadian_travel_number",
+                                "home_airport", "seat_preference", "preferred_airline")
+
 
 def _traveler(row):
     if row is None:
@@ -393,6 +440,7 @@ def _traveler(row):
     t = dict(row)
     t["born_on"] = t["born_on"].isoformat() if t.get("born_on") else ""
     t["id"] = str(t["id"])        # so the picker can serialise these to JSON
+    t["loyalty_programs"] = t.get("loyalty_programs") or []
     return t
 
 
@@ -408,16 +456,31 @@ def traveler(traveler_id, account_id):
 
 
 def traveler_save(data, account_id, traveler_id=None):
-    vals = [data.get(f) or None if f == "born_on" else (data.get(f) or "")
-            for f in TRAVELER_FIELDS]
+    """`data` may carry TRAVELER_FIELDS only (the original booking-profile
+    form) or also TRAVELER_TEXT_PROFILE_FIELDS/clear_plus/loyalty_programs
+    (the fuller bolt-on profile) — fields not present just keep their
+    existing value on update, or the column default on insert.
+    """
+    cols = list(TRAVELER_FIELDS) + list(TRAVELER_TEXT_PROFILE_FIELDS) + ["clear_plus", "loyalty_programs"]
+    vals = []
+    for f in cols:
+        if f == "born_on":
+            vals.append(data.get(f) or None)
+        elif f == "clear_plus":
+            vals.append(bool(data.get(f)))
+        elif f == "loyalty_programs":
+            vals.append(Jsonb(data.get(f) or []))
+        else:
+            vals.append(data.get(f) or "")
+
     if traveler_id:
-        sets = ", ".join(f"{f} = %s" for f in TRAVELER_FIELDS)
+        sets = ", ".join(f"{f} = %s" for f in cols)
         return _traveler(q(f"""UPDATE travelers SET {sets}, updated_at = now()
                                WHERE id = %s AND account_id = %s RETURNING *""",
                            (*vals, traveler_id, account_id), fetch="one"))
-    cols = ", ".join(TRAVELER_FIELDS)
-    holders = ", ".join(["%s"] * len(TRAVELER_FIELDS))
-    return _traveler(q(f"""INSERT INTO travelers (account_id, {cols})
+    col_list = ", ".join(cols)
+    holders = ", ".join(["%s"] * len(cols))
+    return _traveler(q(f"""INSERT INTO travelers (account_id, {col_list})
                            VALUES (%s, {holders}) RETURNING *""",
                        (account_id, *vals), fetch="one"))
 
@@ -571,8 +634,8 @@ def wallet_transactions(account_id, limit=100):
     decision the engine reached, not money that moved, and putting one in a
     ledger would be a lie about the balance.
     """
-    charges = q("""SELECT created_at AS ts, 'charge' AS kind, order_id,
-                          booking_reference, route, paid AS amount, currency
+    charges = q("""SELECT created_at AS ts, order_id, booking_reference, route,
+                          paid AS amount, currency, source
                      FROM orders
                     WHERE account_id = %s AND paid IS NOT NULL""",
                 (account_id,), fetch="all")
@@ -604,10 +667,17 @@ def wallet_transactions(account_id, limit=100):
 
     rows = []
     for c in charges:
-        rows.append({"ts": c["ts"], "kind": "charge", "simulated": False,
-                     "label": "Flight booked", "order_id": c["order_id"],
+        # td_rebook: TD funded the Duffel purchase — a real debit. Anything
+        # else (email_import/manual/forward) is a reservation the customer
+        # already paid for elsewhere; recording it moves no money.
+        td_funded = c["source"] == "td_rebook"
+        rows.append({"ts": c["ts"], "kind": "charge" if td_funded else "intake",
+                     "simulated": False,
+                     "label": "Flight booked" if td_funded else "Reservation added",
+                     "order_id": c["order_id"],
                      "reference": c["booking_reference"], "route": c["route"],
-                     "amount": -Decimal(c["amount"]), "currency": c["currency"]})
+                     "amount": -Decimal(c["amount"]) if td_funded else Decimal("0"),
+                     "currency": c["currency"]})
     for e in execs:
         recovered = Decimal(e["recovered"])
         fee = Decimal(e["service_fee"] or 0)

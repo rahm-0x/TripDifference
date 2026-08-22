@@ -103,6 +103,18 @@
       "change_total": "125.00",
       "new_total": "318.68",
       "penalty": "25.00"
+    },
+    "ord_0000B9XDk63JZsGrryd9iC": {
+      "carrier": "BA",
+      "flight_numbers": [
+        "0117"
+      ],
+      "currency": "USD",
+      "route": "LHR-JFK",
+      "market_price": "434.24",
+      "change_total": "125.00",
+      "new_total": "534.24",
+      "penalty": "25.00"
     }
   }
 }
