@@ -443,8 +443,7 @@ def create_account(email, password_hash=None, supabase_user_id=None):
 
 def complete_profile(user_id, account_id, *, given_name, family_name, middle_name,
                      born_on, referral_source, invite_code):
-    """Onboarding step 2 — the 'let's get to know you' fields. Also updates
-    accounts.name from its email-local-part placeholder to the real name."""
+    """Onboarding step 2 — the 'let's get to know you' fields."""
     with pool().connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE users SET given_name = %s, family_name = %s, middle_name = %s,
@@ -452,10 +451,7 @@ def complete_profile(user_id, account_id, *, given_name, family_name, middle_nam
                 WHERE id = %s RETURNING *""",
             (given_name, family_name, middle_name, born_on or None,
              referral_source, invite_code, user_id))
-        user = cur.fetchone()
-        cur.execute("UPDATE accounts SET name = %s WHERE id = %s",
-                    (f"{given_name} {family_name}".strip() or user["email"], account_id))
-        return user
+        return cur.fetchone()
 
 
 def user_by_email(email):

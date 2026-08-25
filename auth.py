@@ -12,7 +12,7 @@ import secrets
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
-from flask import g, redirect, request, session, url_for
+from flask import g, redirect, render_template, request, session, url_for
 
 import db
 
@@ -70,6 +70,24 @@ def login_required(view):
             return redirect(url_for("login", next=request.full_path.rstrip("?")))
         return view(*a, **kw)
     return wrapped
+
+
+def role_required(*roles):
+    """Alongside login_required, not yet applied to any route — the schema
+    (users.role, migration 016) exists ahead of per-route enforcement,
+    which is a later phase's work."""
+    def decorator(view):
+        @functools.wraps(view)
+        def wrapped(*a, **kw):
+            user = current_user()
+            if user is None:
+                return redirect(url_for("login", next=request.full_path.rstrip("?")))
+            if user["role"] not in roles:
+                return render_template("error.html", hide_nav=True,
+                                       error="You don't have permission to do that."), 403
+            return view(*a, **kw)
+        return wrapped
+    return decorator
 
 
 def view_model(user):
