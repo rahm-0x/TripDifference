@@ -14,6 +14,7 @@ decisions.log
 /static/
 /requirements-dev.txt
 /test_engine.py
+/test_money_path.py
 /server.py
 /index.html
 /duffel.py
