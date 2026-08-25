@@ -27,16 +27,31 @@
 </div>
 {% endif %}
 
+{% if trip.executed %}
+<div class="notice" style="background:var(--surface-2); border-color:var(--line); color:var(--text); margin-bottom:16px">
+  <span>{{ '✕' if 'cancelled' in trip.executed else '↻' }}</span>
+  <div>
+    <b>{{ 'This booking was cancelled.' if 'cancelled' in trip.executed else 'This booking was exchanged.' }}</b>
+    <span class="muted">{{ trip.executed }}</span>
+  </div>
+</div>
+{% endif %}
+
 {% for ev in savings_events %}
-<div class="notice" style="background:var(--sage-wash); border-color:rgba(22,163,74,.22); color:var(--green); margin-bottom:16px">
-  <span>↓</span>
+<div class="notice notice-{{ 'credit' if ev.delivery_type == 'airline_credit' else ('forfeit' if ev.delivery_type == 'forfeited' else 'cash') }}"
+     style="margin-bottom:16px">
+  <span>{{ '◆' if ev.delivery_type == 'airline_credit' else ('—' if ev.delivery_type == 'forfeited' else '↓') }}</span>
   <div>
     {% if ev.delivery_type == 'airline_credit' %}
     <b>Credited {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
+    {% elif ev.delivery_type == 'forfeited' %}
+    <b>The fare dropped, but nothing was recovered.</b> {{ ev.delivery_detail }}
     {% else %}
     <b>Refunded {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
     {% endif %}
-    Our fee (25%): {{ ev.commission_amount }} {{ ev.currency }}.
+    {% if ev.commission_amount and ev.commission_amount != '0.00' %}
+    Our fee ({{ (ev.commission_rate * 100)|round(1) }}%): {{ ev.commission_amount }} {{ ev.currency }}.
+    {% endif %}
   </div>
 </div>
 {% endfor %}
@@ -108,31 +123,23 @@
         <p class="muted" style="margin:0 0 12px">Link a card to see live pricing.</p>
         <a href="{{ url_for('settings') }}" class="btn btn-sm">Link a card</a>
       </div>
-      {% elif chart %}
-      <svg viewBox="0 0 {{ chart.w }} {{ chart.h }}" class="chart" role="img"
-           aria-label="Price history: booked {{ trip.paid }}, latest {{ chart.last }}">
-        <line x1="{{ chart.pad }}" y1="{{ chart.paid_y }}" x2="{{ chart.w - chart.pad }}" y2="{{ chart.paid_y }}"
-              stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="4 4"/>
-        <text x="{{ chart.pad }}" y="{{ chart.paid_y - 7 }}" class="chart-lbl">
-          booked {{ trip.paid }}</text>
+      {% elif band %}
+      {% set band_id = "trip" %}
+      <div class="band-wrap">{% include "_band_svg.html" %}</div>
+      <div class="band-legend">
+        <span class="lg"><i class="sw paid"></i>What you paid</span>
+        <span class="lg"><i class="sw mkt"></i>Market price today</span>
+        <span class="lg"><i class="sw below"></i>Cheaper than you paid — recoverable</span>
+        <span class="lg"><i class="sw above"></i>More expensive — you bought well</span>
+      </div>
 
-        <polyline points="{{ chart.points }}" fill="none" stroke="var(--terra)"
-                  stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-        {% for p in chart.dots %}
-        <circle cx="{{ p.x }}" cy="{{ p.y }}" r="3" fill="var(--terra)"/>
-        {% endfor %}
-
-        <text x="{{ chart.pad }}" y="{{ chart.h - 6 }}" class="chart-lbl">{{ chart.first_ts }}</text>
-        <text x="{{ chart.w - chart.pad }}" y="{{ chart.h - 6 }}" class="chart-lbl" text-anchor="end">{{ chart.last_ts }}</text>
-      </svg>
-
-      <div style="display:flex; gap:22px; margin-top:12px; flex-wrap:wrap">
+      <div style="display:flex; gap:22px; margin-top:8px; flex-wrap:wrap">
+        <div><div class="lbl" style="margin:0">Paid</div>
+          <b class="num">{{ band.baseline }} {{ trip.currency }}</b></div>
         <div><div class="lbl" style="margin:0">Latest market</div>
-          <b class="num">{{ chart.last }} {{ trip.currency }}</b></div>
-        <div><div class="lbl" style="margin:0">Lowest seen</div>
-          <b class="num">{{ chart.low }} {{ trip.currency }}</b></div>
+          <b class="num">{{ band.latest }} {{ trip.currency }}</b></div>
         <div><div class="lbl" style="margin:0">Checks</div>
-          <b class="num">{{ chart.n }}</b></div>
+          <b class="num">{{ band.n }}</b></div>
       </div>
       <p class="hint" style="margin-top:10px">
         Market price is what the same flight sells for now. It is not the exchange
@@ -149,6 +156,32 @@
   <aside>
     <div class="card" style="position:sticky; top:84px">
       <h3 style="margin-bottom:14px">Fare monitoring</h3>
+
+      {% if trip.fare_conditions %}
+      {% set refund = trip.fare_conditions.refund_before_departure %}
+      {% set change = trip.fare_conditions.change_before_departure %}
+      <div class="tag {{ 'tag-sage' if trip.refundable else ('tag-mute' if trip.refundable is none else 'tag-danger') }}"
+           style="margin-bottom:10px">
+        {% if trip.refundable is none %}Refund terms not disclosed
+        {% elif trip.refundable %}Refundable before departure
+        {% else %}Non-refundable{% endif %}
+      </div>
+      <div class="card-flat" style="margin-bottom:14px">
+        <div class="lbl" style="margin-bottom:7px">What this fare permits</div>
+        <dl class="meta" style="margin-top:0">
+          <div><dt>Refund</dt><dd>
+            {% if refund and refund.allowed %}Allowed{% if refund.penalty_amount %} · {{ refund.penalty_amount }} {{ refund.penalty_currency }} fee{% else %} · no fee{% endif %}
+            {% elif refund %}Not allowed
+            {% else %}Not disclosed{% endif %}
+          </dd></div>
+          <div><dt>Change</dt><dd>
+            {% if change and change.allowed %}Allowed{% if change.penalty_amount %} · {{ change.penalty_amount }} {{ change.penalty_currency }} fee{% else %} · no fee{% endif %}
+            {% elif change %}Not allowed
+            {% else %}Not disclosed{% endif %}
+          </dd></div>
+        </dl>
+      </div>
+      {% endif %}
 
       {% set el = trip.eligibility %}
       {% if not trip.eligible %}
@@ -219,7 +252,7 @@
           {% if d.recovered %}
           <div class="split">
             <div><span>Recovered</span><b>{{ d.recovered }} {{ trip.currency }}</b></div>
-            <div><span>Our fee (25%)</span><b>−{{ d.service_fee }} {{ trip.currency }}</b></div>
+            <div><span>Our fee ({{ (commission_rate * 100)|round(1) }}%)</span><b>−{{ d.service_fee }} {{ trip.currency }}</b></div>
             <div class="split-net"><span>Net to you</span><b>{{ d.net_to_customer }} {{ trip.currency }}</b></div>
           </div>
           {% endif %}
@@ -246,9 +279,16 @@
   .trip-grid { display:grid; grid-template-columns:1fr 320px; gap:24px; align-items:start; }
   @media (max-width:900px){ .trip-grid { grid-template-columns:1fr; } }
 
-  .chart { width:100%; height:150px; display:block; overflow:visible; }
   .mask-panel { text-align:center; padding:36px 0; }
-  .chart-lbl { font-size:10px; fill:var(--ink-faint); font-family:'Inter',sans-serif; }
+
+  .band-wrap { margin:0 0 4px; }
+  .band-legend { display:flex; gap:16px; padding:0 0 4px; flex-wrap:wrap; }
+  .lg { display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--muted); }
+  .sw { width:14px; height:9px; border-radius:2px; flex:0 0 14px; }
+  .sw.paid { background:transparent; border-top:1.5px dashed var(--muted-2); height:0; border-radius:0; }
+  .sw.mkt { background:transparent; border-top:1.5px solid var(--text); height:0; border-radius:0; }
+  .sw.below { background:rgba(61,122,83,.20); }
+  .sw.above { background:rgba(47,93,138,.10); }
 
   .watch-row {
     display:flex; align-items:center; justify-content:space-between; gap:12px;

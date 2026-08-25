@@ -1145,3 +1145,127 @@ def invoice_lines_for(invoice_id, account_id):
                WHERE il.invoice_id = %s AND i.account_id = %s
                ORDER BY il.id""",
              (invoice_id, account_id), fetch="all")
+
+
+def invoices_for_account(account_id, limit=24):
+    return q("""SELECT * FROM invoices WHERE account_id = %s
+               ORDER BY period_start DESC LIMIT %s""",
+             (account_id, limit), fetch="all")
+
+
+# ---------------------------------------------------------------------------
+# cost centers
+# ---------------------------------------------------------------------------
+
+def cost_centers_for_account(account_id, active_only=False):
+    clause = "AND active" if active_only else ""
+    return q(f"""SELECT * FROM cost_centers WHERE account_id = %s {clause}
+               ORDER BY code""", (account_id,), fetch="all")
+
+
+def cost_center(cost_center_id, account_id):
+    return q("SELECT * FROM cost_centers WHERE id = %s AND account_id = %s",
+             (cost_center_id, account_id), fetch="one")
+
+
+def cost_center_create(account_id, *, code, name, budget_amount=None, budget_period=None):
+    return q("""INSERT INTO cost_centers (account_id, code, name, budget_amount, budget_period)
+               VALUES (%s, %s, %s, %s, %s) RETURNING *""",
+             (account_id, code, name, _num(budget_amount), budget_period or None), fetch="one")
+
+
+def cost_center_update(cost_center_id, account_id, *, code, name, budget_amount,
+                       budget_period, active):
+    return q("""UPDATE cost_centers SET code = %s, name = %s, budget_amount = %s,
+                                       budget_period = %s, active = %s
+               WHERE id = %s AND account_id = %s RETURNING *""",
+             (code, name, _num(budget_amount), budget_period or None, bool(active),
+              cost_center_id, account_id), fetch="one")
+
+
+# ---------------------------------------------------------------------------
+# company profile (accounts) — the fields Phase 1 added with no write path
+# ---------------------------------------------------------------------------
+
+def account_company_fields(account_id):
+    return q("""SELECT name, legal_name, employee_count, billing_address_line1,
+                      billing_address_line2, billing_city, billing_state,
+                      billing_postal_code, billing_country, subscription_fee, commission_rate
+               FROM accounts WHERE id = %s""", (account_id,), fetch="one")
+
+
+def account_company_update(account_id, *, legal_name, employee_count, billing_address_line1,
+                           billing_address_line2, billing_city, billing_state,
+                           billing_postal_code, billing_country):
+    q("""UPDATE accounts SET legal_name = %s, employee_count = %s,
+                             billing_address_line1 = %s, billing_address_line2 = %s,
+                             billing_city = %s, billing_state = %s,
+                             billing_postal_code = %s, billing_country = %s
+        WHERE id = %s""",
+      (legal_name or "", employee_count or None, billing_address_line1 or "",
+       billing_address_line2 or "", billing_city or "", billing_state or "",
+       billing_postal_code or "", billing_country or "", account_id))
+
+
+# ---------------------------------------------------------------------------
+# savings screen — recovery events and the airline-credit liability register
+# ---------------------------------------------------------------------------
+
+def savings_events_for_account(account_id, limit=200):
+    return q("""SELECT se.*, o.route, o.carrier, o.booking_reference
+               FROM savings_events se
+               JOIN orders o ON o.order_id = se.order_id
+              WHERE o.account_id = %s
+              ORDER BY se.created_at DESC LIMIT %s""",
+             (account_id, limit), fetch="all")
+
+
+def savings_totals_for_account(account_id):
+    """Cash and credit are kept apart throughout — different currencies in
+    the literal sense (one is money, one is a claim on a specific airline)
+    and merging them into one 'Total Saved' number was the exact mistake
+    the SOW called out to avoid."""
+    row = q("""SELECT
+                 COALESCE(sum(realized_savings) FILTER (WHERE delivery_type = 'refund_to_card'), 0)
+                     AS cash_recovered,
+                 COALESCE(sum(commission_amount) FILTER (WHERE delivery_type = 'refund_to_card'), 0)
+                     AS cash_fee,
+                 COALESCE(sum(realized_savings) FILTER (WHERE delivery_type = 'airline_credit'), 0)
+                     AS credit_recovered,
+                 COALESCE(sum(commission_amount) FILTER (WHERE delivery_type = 'airline_credit'), 0)
+                     AS credit_fee
+               FROM savings_events se JOIN orders o ON o.order_id = se.order_id
+              WHERE o.account_id = %s""", (account_id,), fetch="one")
+    out = dict(row)
+    out["cash_net"] = out["cash_recovered"] - out["cash_fee"]
+    return out
+
+
+def airline_credits_for_account(account_id):
+    return q("""SELECT ac.*, o.route, o.carrier AS order_carrier
+               FROM airline_credits ac
+               LEFT JOIN orders o ON o.order_id = ac.order_id
+              WHERE ac.account_id = %s
+              ORDER BY (ac.status = 'active') DESC, ac.expires_at NULLS LAST, ac.issued_at DESC""",
+             (account_id,), fetch="all")
+
+
+# ---------------------------------------------------------------------------
+# the difference band — real price history, never a fabricated curve
+# ---------------------------------------------------------------------------
+
+def monitored_orders_with_history(account_id):
+    """Every currently-monitored order, each with its own market_best time
+    series (oldest first) — the raw material for the difference band.
+    Orders with no checks yet still appear, with an empty points list, so
+    the caller can tell 'nothing to show' from 'not monitoring anything'."""
+    orders = q("""SELECT order_id, paid, original_paid, currency, route, carrier
+               FROM orders WHERE account_id = %s AND monitoring""",
+             (account_id,), fetch="all")
+    out = []
+    for o in orders:
+        rows = q("""SELECT ts, market_best FROM audit_events
+                   WHERE order_id = %s AND market_best IS NOT NULL
+                   ORDER BY ts""", (o["order_id"],), fetch="all")
+        out.append({**o, "points": [(r["ts"], r["market_best"]) for r in rows]})
+    return out

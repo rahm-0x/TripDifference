@@ -10,6 +10,68 @@
 <div class="settings-grid">
   <div class="card">
     <div class="chart-head" style="margin-bottom:14px">
+      <h3>Company profile</h3>
+    </div>
+    <form method="post">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="form_section" value="company">
+      <div class="grid2">
+        <div class="field">
+          <label for="legal_name">Legal name</label>
+          <input id="legal_name" name="legal_name" value="{{ company.legal_name or '' }}"
+                 placeholder="{{ company.name }}">
+        </div>
+        <div class="field">
+          <label for="employee_count">Employees</label>
+          <input id="employee_count" name="employee_count" type="number" min="1"
+                 value="{{ company.employee_count or '' }}" placeholder="180">
+        </div>
+      </div>
+      <div class="field">
+        <label for="billing_address_line1">Billing address</label>
+        <input id="billing_address_line1" name="billing_address_line1" style="margin-bottom:8px"
+               value="{{ company.billing_address_line1 or '' }}" placeholder="Address line 1">
+        <input name="billing_address_line2" style="margin-bottom:8px"
+               value="{{ company.billing_address_line2 or '' }}" placeholder="Address line 2 (optional)">
+        <div class="grid3">
+          <input name="billing_city" value="{{ company.billing_city or '' }}" placeholder="City">
+          <input name="billing_state" value="{{ company.billing_state or '' }}" placeholder="State / region">
+          <input name="billing_postal_code" value="{{ company.billing_postal_code or '' }}" placeholder="Postal code">
+        </div>
+        <input name="billing_country" style="margin-top:8px"
+               value="{{ company.billing_country or '' }}" placeholder="Country">
+      </div>
+      <button type="submit" class="btn">Save company profile</button>
+    </form>
+
+    <div class="grid2" style="margin-top:18px; padding-top:16px; border-top:1px solid var(--line-soft)">
+      <div>
+        <label style="margin-bottom:2px">Monthly subscription</label>
+        <div class="static-value mono">
+          {% if company.subscription_fee %}{{ company.subscription_fee }} USD{% else %}Not set — contact your account manager{% endif %}
+        </div>
+      </div>
+      <div>
+        <label style="margin-bottom:2px">Commission rate</label>
+        <div class="static-value mono">{{ (company.commission_rate * 100)|round(2) }}% of realized savings</div>
+      </div>
+    </div>
+    <p class="hint">Commercial terms — set by Trip Difference, not editable here.</p>
+  </div>
+
+  <div class="card">
+    <div class="chart-head" style="margin-bottom:14px">
+      <h3>Cost centers</h3>
+    </div>
+    <p class="muted" style="margin:0 0 14px">
+      {{ cost_centers|length }} cost center{{ 's' if cost_centers|length != 1 }} —
+      attribute bookings to a department for spend reporting.
+    </p>
+    <a href="{{ url_for('cost_centers_page') }}" class="btn btn-ghost btn-sm">Manage cost centers</a>
+  </div>
+
+  <div class="card" style="grid-column:1 / -1">
+    <div class="chart-head" style="margin-bottom:14px">
       <h3>General information</h3>
     </div>
     <form method="post">
@@ -89,7 +151,6 @@
 
 <style>
   .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-  .settings-grid > .card:first-child { grid-column:1 / -1; }
   .static-value { padding:9px 0; font-size:14px; }
   .pm-row { display:flex; flex-direction:column; gap:3px; padding:12px 0; }
   .disabled-panel { opacity:.85; }

@@ -19,73 +19,51 @@
     <form method="post" action="{{ url_for('book') }}" id="payForm">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <input type="hidden" name="offer_id" value="{{ offer.id }}">
+      <input type="hidden" name="cost_center_id" value="{{ cost_center_id or '' }}">
       {# Repeated names, same order as the passenger cards, so getlist on the
          other side still lines up with the offer's passenger ids. #}
       {% for person in people %}{% for k, v in person.items() %}
       <input type="hidden" name="{{ k }}" value="{{ v }}">
       {% endfor %}{% endfor %}
 
+      {% if card %}
       <div class="card" style="padding:0; overflow:hidden;">
-        <label class="pay-opt on" for="pm_card">
-          <input type="radio" id="pm_card" name="payment_method" value="on_file" checked>
-          <span class="radio"></span>
+        <div class="pay-opt on">
+          <span class="radio" style="border-color:var(--terra)"><span style="position:absolute;inset:3px;border-radius:50%;background:var(--terra)"></span></span>
           <span class="pay-body">
             <span class="pay-title">
               <b>{{ card.brand }} ending {{ card.last4 }}</b>
               <span class="tag tag-sage">Company card</span>
             </span>
-            <span class="pay-sub">{{ card.holder }} · expires {{ card.expiry }}</span>
+            <span class="pay-sub">Expires {{ card.expiry }} · <a href="{{ url_for('settings') }}">change card</a></span>
           </span>
-        </label>
-
-        <label class="pay-opt" for="pm_new">
-          <input type="radio" id="pm_new" name="payment_method" value="new">
-          <span class="radio"></span>
-          <span class="pay-body">
-            <span class="pay-title"><b>Use a different card</b></span>
-            <span class="pay-sub">Entered securely with our payment provider.</span>
-          </span>
-        </label>
-
-        <div id="newCard" class="hosted" hidden>
-          <div class="hosted-bar">
-            <span class="lock">🔒</span>
-            <span>Secure fields hosted by <b>Duffel Payments</b></span>
-            <span class="hosted-tag">iframe</span>
-          </div>
-          <div class="hosted-body">
-            <div class="field">
-              <label>Card number</label>
-              <input inputmode="numeric" placeholder="4242 4242 4242 4242" class="hosted-input" disabled>
-            </div>
-            <div class="grid3">
-              <div class="field"><label>Expiry</label>
-                <input placeholder="MM / YY" class="hosted-input" disabled></div>
-              <div class="field"><label>CVC</label>
-                <input placeholder="123" class="hosted-input" disabled></div>
-              <div class="field"><label>Postcode</label>
-                <input placeholder="SW1A 1AA" class="hosted-input" disabled></div>
-            </div>
-            <div class="hint" style="margin:0">
-              These inputs are rendered by the payment processor. Card data never reaches
-              the Trip Difference server, so they are inert in this build.
-            </div>
-          </div>
         </div>
       </div>
-
       <div class="notice" style="margin-top:16px">
         <span>ℹ</span>
         <div>
-          Booking is immediate and ticketed on confirmation. Refunds and changes
-          follow the fare rules shown with your flight.
+          Booking is immediate and ticketed on confirmation. The card above is
+          authorized now and charged once the ticket is issued. Refunds and
+          changes follow the fare rules shown with your flight.
         </div>
       </div>
-
       <div style="display:flex; gap:12px; margin-top:20px; align-items:center;">
         <a href="{{ url_for('index') }}" class="btn btn-ghost">Back</a>
         <button type="submit" id="payBtn">Pay {{ offer.amount }} {{ offer.currency }} &amp; book</button>
       </div>
+      {% else %}
+      <div class="notice notice-err">
+        <span>!</span>
+        <div>
+          No payment method on file. <a href="{{ url_for('settings') }}">Link a company card</a>
+          before booking — this can't be completed without one.
+        </div>
+      </div>
+      <div style="display:flex; gap:12px; margin-top:20px; align-items:center;">
+        <a href="{{ url_for('index') }}" class="btn btn-ghost">Back</a>
+        <a href="{{ url_for('settings') }}" class="btn">Link a card</a>
+      </div>
+      {% endif %}
     </form>
   </div>
 
@@ -114,35 +92,10 @@
   .pay-body { display:block; }
   .pay-title { display:flex; align-items:center; gap:9px; }
   .pay-sub { display:block; font-size:13px; color:var(--ink-faint); margin-top:3px; }
-
-  /* Deliberately reads as a third-party embed, not a native form. */
-  .hosted { border-top:1px solid var(--line); background:#F9FAFB; }
-  .hosted-bar {
-    display:flex; align-items:center; gap:9px; padding:9px 16px;
-    background:#F3F4F6; border-bottom:1px dashed #D1D5DB;
-    font-size:12px; color:var(--muted);
-  }
-  .hosted-tag {
-    margin-left:auto; font:11px ui-monospace,Menlo,monospace; color:var(--muted-2);
-    border:1px solid #D1D5DB; border-radius:5px; padding:1px 6px;
-  }
-  .hosted-body { padding:18px 16px; border:1px dashed #D1D5DB; margin:12px; border-radius:10px;
-                 background:var(--surface); }
-  .hosted-input { border-radius:6px; border-color:#D1D5DB; background:var(--surface-2);
-                  font:13.5px ui-monospace,Menlo,monospace; }
 </style>
 
 <script>
-  const box = document.getElementById('newCard');
-  document.querySelectorAll('input[name=payment_method]').forEach(r =>
-    r.addEventListener('change', () => {
-      const isNew = document.getElementById('pm_new').checked;
-      box.hidden = !isNew;
-      document.querySelectorAll('.pay-opt').forEach(o =>
-        o.classList.toggle('on', o.contains(document.querySelector('input[name=payment_method]:checked'))));
-    }));
-
-  document.getElementById('payForm').addEventListener('submit', e => {
+  document.getElementById('payForm')?.addEventListener('submit', e => {
     const b = document.getElementById('payBtn');
     b.disabled = true; b.textContent = 'Booking…';
   });

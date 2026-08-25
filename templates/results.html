@@ -106,8 +106,9 @@
 
 <div class="card" style="padding:0" id="results">
   {% for o in offers %}
-  <div class="fl" data-price="{{ o.amount }}" data-depart="{{ o.depart_sort }}" data-duration="{{ o.duration_min }}">
+  <div class="fl {{ 'fl-rec' if o.best_value }}" data-price="{{ o.amount }}" data-depart="{{ o.depart_sort }}" data-duration="{{ o.duration_min }}">
     <div class="fl-carrier">
+      {% if o.best_value %}<div class="rec-flag" style="margin-bottom:3px">Best value after reshop</div>{% endif %}
       <b>{{ o.carrier }}</b>
       <div class="mono muted">{{ o.flight_numbers }}</div>
       {% if o.fare_brand %}<div class="fl-meta">{{ o.fare_brand }}</div>{% endif %}
@@ -126,11 +127,18 @@
       </div>
     </div>
 
-    <div>
+    <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start">
       {% if o.monitorable %}
         <span class="tag tag-sage"><span class="dot"></span>Monitored</span>
       {% else %}
         <span class="tag tag-mute">Not monitored</span>
+      {% endif %}
+      {% if o.policy_enforcement == 'block' %}
+        <span class="tag tag-alert">Blocked by policy</span>
+      {% elif o.policy_enforcement == 'require_approval' %}
+        <span class="tag tag-credit">Needs approval</span>
+      {% elif o.policy_enforcement == 'advise' %}
+        <span class="tag tag-terra">Policy note</span>
       {% endif %}
     </div>
 
@@ -141,7 +149,7 @@
       <form method="post" action="{{ url_for('passenger_step') }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <input type="hidden" name="offer_id" value="{{ o.id }}">
-        <button type="submit" class="btn-sm">Select</button>
+        <button type="submit" class="btn-sm" {{ 'disabled title="Blocked by travel policy"' | safe if o.policy_enforcement == 'block' }}>Select</button>
       </form>
     </div>
   </div>
@@ -176,6 +184,7 @@
           background:transparent; color:var(--ink-soft); }
   .sort:hover { background:transparent; color:var(--ink); }
   .sort.on { background:var(--surface); color:var(--terra-dark); box-shadow:var(--shadow); }
+  .fl-rec { border-color:var(--gold); box-shadow:inset 0 0 0 1px var(--gold); background:var(--surface); }
 </style>
 
 <script>

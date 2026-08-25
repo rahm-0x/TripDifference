@@ -277,6 +277,92 @@ def test_upsert_order_round_trips_every_writable_value(acct):
 
 
 # ---------------------------------------------------------------------------
+# cost centres (item 3)
+# ---------------------------------------------------------------------------
+
+def test_cost_center_create_list_update(acct):
+    account_id = acct["account_id"]
+    created = db.cost_center_create(account_id, code="ENG", name="Engineering",
+                                    budget_amount="5000.00", budget_period="monthly")
+    assert created["code"] == "ENG"
+    assert created["active"] is True
+
+    listed = db.cost_centers_for_account(account_id)
+    assert [c["id"] for c in listed] == [created["id"]]
+
+    updated = db.cost_center_update(created["id"], account_id, code="ENG", name="Engineering & IT",
+                                    budget_amount="6000.00", budget_period="quarterly", active=False)
+    assert updated["name"] == "Engineering & IT"
+    assert updated["budget_period"] == "quarterly"
+    assert updated["active"] is False
+
+    # active_only excludes it once deactivated, same query the booking-flow
+    # picker uses — a stale/retired cost centre should stop showing up there.
+    assert db.cost_centers_for_account(account_id, active_only=True) == []
+
+    db.q("DELETE FROM cost_centers WHERE id = %s", (created["id"],))
+
+
+def test_cost_center_update_scoped_to_account(acct):
+    """cost_center_update() takes account_id for the same reason
+    audit_rows()/invoice_lines_for() do — a bare id from a URL/form must not
+    let one account edit another's row."""
+    other = db.create_account(f"other-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    theirs = db.cost_center_create(other["account_id"], code="ENG", name="Engineering")
+    try:
+        assert db.cost_center(theirs["id"], acct["account_id"]) is None
+        result = db.cost_center_update(theirs["id"], acct["account_id"], code="HACKED",
+                                       name="Hacked", budget_amount=None, budget_period=None,
+                                       active=True)
+        assert result is None
+        untouched = db.cost_center(theirs["id"], other["account_id"])
+        assert untouched["code"] == "ENG"
+    finally:
+        db.q("DELETE FROM cost_centers WHERE id = %s", (theirs["id"],))
+        db.q("DELETE FROM accounts WHERE id = %s", (other["account_id"],))
+
+
+def test_book_attaches_cost_center_from_same_account(logged_in_carded):
+    client, account = logged_in_carded
+    cc = db.cost_center_create(account["account_id"], code="ENG", name="Engineering")
+    offer = fake_offer()
+    order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"])
+    try:
+        with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
+             patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_cc1")), \
+             patch("billing.capture_authorization"):
+            resp = client.post("/book", data=book_form(offer["id"], cost_center_id=str(cc["id"])))
+        assert resp.status_code == 302
+        row = db.find_order(order["id"], account["account_id"])
+        assert str(row["cost_center_id"]) == str(cc["id"])
+    finally:
+        db.q("DELETE FROM cost_centers WHERE id = %s", (cc["id"],))
+
+
+def test_book_ignores_cost_center_from_another_account(logged_in_carded):
+    """Same shape as the account-scoping bugs fixed elsewhere: a
+    cost_center_id is a bare id from a form field, and book() must not
+    trust it just because it looks well-formed. One belonging to a
+    different account must be dropped, not attached."""
+    client, account = logged_in_carded
+    other = db.create_account(f"other-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    theirs = db.cost_center_create(other["account_id"], code="ENG", name="Engineering")
+    offer = fake_offer()
+    order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"])
+    try:
+        with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
+             patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_cc2")), \
+             patch("billing.capture_authorization"):
+            resp = client.post("/book", data=book_form(offer["id"], cost_center_id=str(theirs["id"])))
+        assert resp.status_code == 302
+        row = db.find_order(order["id"], account["account_id"])
+        assert row["cost_center_id"] is None
+    finally:
+        db.q("DELETE FROM cost_centers WHERE id = %s", (theirs["id"],))
+        db.q("DELETE FROM accounts WHERE id = %s", (other["account_id"],))
+
+
+# ---------------------------------------------------------------------------
 # the card gate
 # ---------------------------------------------------------------------------
 

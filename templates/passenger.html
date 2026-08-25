@@ -88,6 +88,20 @@
       </div>
       {% endfor %}
 
+      {% if cost_centers %}
+      <div class="card" style="margin-bottom:14px">
+        <div class="field" style="margin:0">
+          <label for="cost_center_id">Cost center</label>
+          <select id="cost_center_id" name="cost_center_id">
+            <option value="">No cost center</option>
+            {% for c in cost_centers %}
+            <option value="{{ c.id }}">{{ c.code }} — {{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      {% endif %}
+
       <div style="display:flex; gap:12px; margin-top:20px; align-items:center;">
         <a href="{{ url_for('index') }}" class="btn btn-ghost">Back to results</a>
         <button type="submit">Continue to payment</button>
@@ -114,6 +128,7 @@
 
   // Each card has its own picker, so fields are found within that card —
   // document.getElementById would always hit the first traveler.
+  const costCenterSelect = document.getElementById('cost_center_id');
   document.querySelectorAll('.savedPick').forEach(sel => {
     sel.addEventListener('change', () => {
       const t = SAVED[sel.value];
@@ -123,8 +138,15 @@
         const el = card.querySelector('[data-f="' + f + '"]');
         if (el) el.value = t[f] || '';
       }
+      // Default the booking's cost center to this traveler's own, if one
+      // is set on their profile — only ever a default, never overridden
+      // once the booker has touched the dropdown themselves.
+      if (costCenterSelect && !costCenterSelect.dataset.touched && t.default_cost_center_id) {
+        costCenterSelect.value = t.default_cost_center_id;
+      }
     });
   });
+  costCenterSelect?.addEventListener('change', () => { costCenterSelect.dataset.touched = '1'; });
 </script>
 
 {% endblock %}

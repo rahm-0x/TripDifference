@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Statement — Trip Difference{% endblock %}
+{% block body %}
+
+<div style="margin-bottom:14px">
+  <a href="{{ url_for('invoices') }}" class="muted" style="font-size:13.5px">← All statements</a>
+</div>
+
+<div class="page-head" style="display:flex; align-items:flex-start; gap:18px; flex-wrap:wrap">
+  <div>
+    <h1>{{ invoice.period_start }} – {{ invoice.period_end }}</h1>
+    <p>
+      {% if invoice.issued_at %}Issued {{ invoice.issued_at }}{% endif %}
+      {% if invoice.due_at %} · due {{ invoice.due_at }}{% endif %}
+    </p>
+  </div>
+  <div style="margin-left:auto; text-align:right">
+    <div class="lbl" style="margin:0">Total charged</div>
+    <div class="price" style="font-size:24px">{{ invoice.total }}<span class="cur">USD</span></div>
+    <span class="tag {{ 'tag-sage' if invoice.status == 'paid' else ('tag-mute' if invoice.status == 'draft' else 'tag-alert') }}"
+          style="margin-top:6px; display:inline-block">{{ invoice.status|capitalize }}</span>
+  </div>
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  <div style="padding:16px 18px 0"><h3>Charges</h3></div>
+  {% if lines %}
+  <table style="margin-top:10px">
+    <thead><tr><th>Line</th><th>Basis</th><th class="num">Amount</th></tr></thead>
+    <tbody>
+      {% for l in lines %}
+      <tr>
+        <td>
+          {% if l.line_type == 'subscription' %}Platform subscription
+          {% elif l.line_type == 'commission_cash' %}Commission — cash recoveries
+          {% else %}Commission — credit recoveries{% endif %}
+          {% if l.description %}<br><span class="muted" style="font-size:12px">{{ l.description }}</span>{% endif %}
+        </td>
+        <td class="muted" style="font-size:12.5px">
+          {% if l.basis_amount %}{{ (l.rate * 100)|round(1) }}% of {{ l.basis_amount }}{% else %}—{% endif %}
+        </td>
+        <td class="num">{{ l.amount }} USD</td>
+      </tr>
+      {% endfor %}
+      <tr style="background:var(--surface-2)">
+        <td colspan="2" style="text-align:right; font-weight:600">Total due</td>
+        <td class="num" style="font-size:16px; font-weight:600">{{ invoice.total }} USD</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="hint" style="padding:0 18px 16px">
+    Airline credit is not cash and does not reduce this invoice — commission on a
+    credit recovery is billed the same as commission on a cash one, even though
+    the credit itself is held in an employee's loyalty account, redeemable with
+    that airline only. See the credit ledger under Savings.
+  </p>
+  {% else %}
+  <div style="text-align:center; padding:36px 24px">
+    <p class="muted" style="margin:0">No line items on this statement.</p>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

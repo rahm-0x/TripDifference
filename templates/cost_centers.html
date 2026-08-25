@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Cost centers — Trip Difference{% endblock %}
+{% block body %}
+
+{% with msgs = get_flashed_messages(category_filter=['reservation_error']) %}
+{% if msgs %}
+<div class="notice" style="margin-bottom:16px; border-color:rgba(192,57,43,.3)">
+  <span>!</span><div>{{ msgs[0] }}</div>
+</div>
+{% endif %}
+{% endwith %}
+
+<div class="page-head">
+  <h1>Cost centers</h1>
+  <p>Attribute travel spend to a department. Bookings and travelers can each carry a default.</p>
+</div>
+
+<div class="trav-grid">
+  <div>
+    {% if cost_centers %}
+    <div class="card" style="padding:0; overflow-x:auto">
+      <table>
+        <thead><tr><th>Code</th><th>Name</th><th>Budget</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for c in cost_centers %}
+          <tr>
+            <td class="mono">{{ c.code }}</td>
+            <td>{{ c.name }}</td>
+            <td class="num">{% if c.budget_amount %}{{ c.budget_amount }} / {{ c.budget_period or 'period' }}{% else %}—{% endif %}</td>
+            <td>{% if c.active %}<span class="tag tag-sage">Active</span>{% else %}<span class="tag tag-mute">Inactive</span>{% endif %}</td>
+            <td style="text-align:right"><a href="{{ url_for('cost_centers_page', edit=c.id) }}" class="btn btn-ghost btn-sm">Edit</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="card" style="text-align:center; padding:44px 24px">
+      <p class="muted" style="margin:0">No cost centers yet. Add one on the right.</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <aside>
+    <div class="card" style="position:sticky; top:84px">
+      <h3 style="margin-bottom:14px">{{ 'Edit cost center' if editing else 'Add a cost center' }}</h3>
+      <form method="post" action="{{ url_for('cost_center_edit', cost_center_id=editing.id) if editing
+                                     else url_for('cost_center_new') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <label>Code</label>
+          <input name="code" value="{{ editing.code if editing else '' }}" placeholder="ENG" required>
+        </div>
+        <div class="field">
+          <label>Name</label>
+          <input name="name" value="{{ editing.name if editing else '' }}" placeholder="Engineering" required>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>Budget amount</label>
+            <input name="budget_amount" type="number" step="0.01"
+                   value="{{ editing.budget_amount if editing and editing.budget_amount else '' }}"
+                   placeholder="Optional">
+          </div>
+          <div class="field">
+            <label>Budget period</label>
+            <select name="budget_period">
+              <option value="">—</option>
+              {% for p in ('monthly','quarterly','annual') %}
+              <option value="{{ p }}" {{ 'selected' if editing and editing.budget_period == p }}>{{ p|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        {% if editing %}
+        <label style="display:flex; align-items:center; gap:8px; margin:14px 0; text-transform:none; font-size:13.5px; color:var(--text)">
+          <input type="checkbox" name="active" style="width:auto" {{ 'checked' if editing.active }}> Active
+        </label>
+        {% endif %}
+        <button type="submit" class="btn-block">{{ 'Save changes' if editing else 'Add cost center' }}</button>
+        {% if editing %}
+        <a href="{{ url_for('cost_centers_page') }}" class="btn btn-ghost btn-block" style="margin-top:8px">Cancel</a>
+        {% endif %}
+      </form>
+    </div>
+  </aside>
+</div>
+
+<style>
+  .trav-grid { display:grid; grid-template-columns:1fr 320px; gap:24px; align-items:start; }
+  @media (max-width:900px){ .trav-grid { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}

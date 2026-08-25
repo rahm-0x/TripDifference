@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Invoices — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Invoices</h1>
+  <p>Subscription plus commission on recovered fares. Cash refunds never appear here —
+     the airline sends that straight back to your card.</p>
+</div>
+
+<div class="card" style="margin-bottom:18px">
+  <div class="chart-head" style="margin-bottom:14px">
+    <h3>Recovered so far, not yet billed</h3>
+  </div>
+  <p class="muted" style="margin:0 0 16px; font-size:12.5px">
+    All-time totals. The next statement bills whatever has accumulated since the last one.
+  </p>
+  <div class="grid2">
+    <div style="border-left:3px solid var(--green); padding-left:14px">
+      <div class="lbl" style="margin:0">Cash returned to your card</div>
+      <div class="price" style="font-size:22px; color:var(--green)">{{ '%.2f'|format(savings.cash_recovered) }}</div>
+      <p class="hint">Already refunded by the airline — commission owed on it: {{ '%.2f'|format(savings.cash_fee) }}.</p>
+    </div>
+    <div style="border-left:3px solid var(--credit); padding-left:14px">
+      <div class="lbl" style="margin:0">Airline credit issued</div>
+      <div class="price" style="font-size:22px; color:var(--credit)">{{ '%.2f'|format(savings.credit_recovered) }}</div>
+      <p class="hint">Held in employees' loyalty accounts, never touches your card — commission owed on it: {{ '%.2f'|format(savings.credit_fee) }}.</p>
+    </div>
+  </div>
+  <p class="hint" style="margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft)">
+    Commission rate: {{ (commission_rate * 100)|round(1) }}% of realized savings, cash and credit alike.
+  </p>
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  <div class="chart-head" style="padding:16px 18px 0"><h3>Statements</h3></div>
+  {% if invoices %}
+  <table style="margin-top:10px">
+    <thead>
+      <tr><th>Period</th><th>Status</th><th class="num">Total charged</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for inv in invoices %}
+      <tr>
+        <td>{{ inv.period_start }} – {{ inv.period_end }}</td>
+        <td>
+          <span class="tag {{ 'tag-sage' if inv.status == 'paid' else ('tag-mute' if inv.status == 'draft' else 'tag-alert') }}">
+            {{ inv.status|capitalize }}
+          </span>
+        </td>
+        <td class="num">{{ inv.total }} USD</td>
+        <td style="text-align:right">
+          <a href="{{ url_for('invoice_detail', invoice_id=inv.id) }}" class="btn btn-ghost btn-sm">View</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="text-align:center; padding:48px 24px">
+    <p class="muted" style="margin:0">No statements yet. Your first invoice is issued at the end of the billing period.</p>
+  </div>
+  {% endif %}
+</div>
+
+<style>
+  .chart-head { display:flex; align-items:baseline; justify-content:space-between; }
+</style>
+
+{% endblock %}

@@ -346,6 +346,14 @@ def trip_view(record):
         # on /orders instead; a customer doesn't need Stripe's own wording
         # for something they aren't being asked to act on.
         "payment_capture_failed": bool(record.get("payment_capture_failed_at")),
+        # Was invisible outside the internal /orders ops console — the
+        # worst instance of "our main feature is invisible" in the app: a
+        # cancelled order's own detail page gave the customer no
+        # indication it was cancelled.
+        "executed": record.get("executed"),
+        "refundable": record.get("refundable"),
+        "fare_conditions": record.get("fare_conditions"),
+        "cost_center_id": record.get("cost_center_id"),
         # A simulated rebooking shows alongside the real figures, never as one.
         "simulated": bool(record.get("simulated")),
         "sim_refunded": record.get("sim_refunded"),
@@ -564,31 +572,86 @@ def carrier_chart(rows, w=720, row_h=30):
             "saved_total": f"{saved_total:,.2f}"}
 
 
-def build_chart(order_id, paid):
-    """Tiny inline-SVG line chart. Coordinates computed here, drawn in the template."""
-    pts = price_history(order_id)
-    if len(pts) < 2:
+# --- the difference band (Item 3's signature element) -----------------------
+#
+# Paid as a dashed baseline, market checks as a solid line, the gap shaded
+# green below the baseline (cheaper than paid — recoverable) and slate above
+# it (bought well). Computed server-side into static paths, same convention
+# as every other chart in this app — no client-side data generation.
+#
+# Real points only. Fewer than 2 checks is "nothing to plot yet", returned
+# as None so the caller renders an honest empty state rather than stretching
+# one dot into a line. Baseline is flat (paid, as it stands today) rather
+# than stepped at each exchange — no real exchange has moved real money yet
+# to justify the extra complexity of a genuinely stepped baseline; see the
+# writeup.
+BAND_W, BAND_H = 720, 180
+BAND_PAD_T, BAND_PAD_B = 16, 20
+
+
+def difference_band(points, baseline, currency):
+    """points: [(ts, Decimal), ...] market_best checks, oldest first.
+    baseline: a single Decimal, flat across the whole window."""
+    if len(points) < 2:
         return None
+    n = len(points)
+    xs = [i / (n - 1) * BAND_W for i in range(n)]
+    series_vals = [float(v) for _, v in points]
+    base_val = float(baseline)
+    all_vals = series_vals + [base_val]
+    lo, hi = min(all_vals), max(all_vals)
+    pad = (hi - lo) * 0.35 or max(hi * 0.1, 10)
+    lo, hi = lo - pad, hi + pad
+    span = hi - lo or 1
 
-    w, h, pad = 640, 150, 26
-    values = [v for _, v in pts] + [Decimal(paid)]
-    lo, hi = min(values), max(values)
-    span = hi - lo or Decimal("1")
+    def y(v):
+        return BAND_PAD_T + (1 - (v - lo) / span) * (BAND_H - BAND_PAD_T - BAND_PAD_B)
 
-    def y_of(v):
-        return round(float(h - pad - (Decimal(v) - lo) / span * (h - 2 * pad)), 1)
+    line_pts = [(round(xs[i], 1), round(y(series_vals[i]), 1)) for i in range(n)]
+    base_pts = [(round(xs[i], 1), round(y(base_val), 1)) for i in range(n)]
 
-    step = (w - 2 * pad) / (len(pts) - 1)
-    dots = [{"x": round(pad + i * step, 1), "y": y_of(v)} for i, (_, v) in enumerate(pts)]
+    line_path = "M" + " L".join(f"{x},{yy}" for x, yy in line_pts)
+    base_path = "M" + " L".join(f"{x},{yy}" for x, yy in base_pts)
+    area_path = line_path + " L" + " L".join(f"{x},{yy}" for x, yy in reversed(base_pts)) + " Z"
+    below_clip = base_path + f" L{BAND_W},{BAND_H} L0,{BAND_H} Z"
+    above_clip = base_path + f" L{BAND_W},0 L0,0 Z"
+
     return {
-        "w": w, "h": h, "pad": pad,
-        "points": " ".join(f"{d['x']},{d['y']}" for d in dots),
-        "dots": dots,
-        "paid_y": y_of(paid),
-        "first_ts": pts[0][0][5:16].replace("T", " "),
-        "last_ts": pts[-1][0][5:16].replace("T", " "),
-        "last": str(pts[-1][1]), "low": str(min(v for _, v in pts)), "n": len(pts),
+        "w": BAND_W, "h": BAND_H, "currency": currency, "has_data": True,
+        "line_path": line_path, "base_path": base_path, "area_path": area_path,
+        "below_clip": below_clip, "above_clip": above_clip,
+        "baseline": f"{base_val:,.2f}", "latest": f"{series_vals[-1]:,.2f}",
+        "n": n,
     }
+
+
+def aggregate_difference_band(monitored, currency="USD"):
+    """Home's band: sum of market_best across every currently-monitored
+    order, at every distinct timestamp any of them was checked, against
+    the flat sum of what was paid for them. An order with zero checks yet
+    contributes its own `paid` as its stand-in for "no signal", so one
+    fresh order doesn't collapse the whole aggregate — but if not one
+    order has ever had a real check, there is nothing to plot, and this
+    returns None rather than a flat, fabricated "you've saved nothing" line.
+
+    Bucketed by exact timestamp, not calendar date — a burst of real
+    checks run minutes apart during the same session is still real,
+    plottable data, not "not enough history yet".
+    """
+    if not any(o["points"] for o in monitored):
+        return None
+    all_ts = sorted({p[0] for o in monitored for p in o["points"]})
+    if len(all_ts) < 2:
+        return None
+    series = []
+    for t in all_ts:
+        total = Decimal("0")
+        for o in monitored:
+            known = [v for (ts, v) in o["points"] if ts <= t]
+            total += known[-1] if known else Decimal(str(o["paid"] or 0))
+        series.append((t, total))
+    paid_total = sum((Decimal(str(o["paid"] or 0)) for o in monitored), Decimal("0"))
+    return difference_band(series, paid_total, currency)
 
 
 # ---------------------------------------------------------------------------
@@ -850,11 +913,27 @@ def search():
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form=form, error=str(exc))
 
-    raw = sorted(data.get("offers", []), key=lambda x: Decimal(x["total_amount"]))
+    raw = data.get("offers", [])
     rules = db.policy_rules_active(_account())
-    offers = [offer_view(o, policy_rules=rules) for o in raw[:20]]
+    offers = [offer_view(o, policy_rules=rules) for o in raw]
+    # Sort by value after reshop, not raw price: a fare that can never be
+    # recovered (not monitorable — Basic Economy and similar) ranks below
+    # one that can, even when it's cheaper up front. should_poll already
+    # reflects genuine fare-condition eligibility, not a guess — but there
+    # is no real historical per-route recovery-rate data yet (nothing polls
+    # on a schedule until the scheduler phase), so "monitorable, then
+    # cheapest" is the honest proxy available today, not the richer
+    # "recovers $94 on average on this fare" ranking the mockup shows.
+    offers.sort(key=lambda o: (not o["monitorable"], Decimal(o["amount"])))
+    total = len(offers)
+    offers = offers[:20]
+    # The single best-value offer, flagged for display — the cheapest one
+    # that can actually be monitored, if any can be.
+    best_id = next((o["id"] for o in offers if o["monitorable"]), None)
+    for o in offers:
+        o["best_value"] = (o["id"] == best_id)
     return render_template("results.html", nav="search", offers=offers, form=form,
-                           total=len(raw),
+                           total=total,
                            unmonitorable=sum(1 for o in offers if not o["monitorable"]))
 
 
@@ -971,6 +1050,14 @@ def fetch_offer_view(offer_id):
     return offer_view(duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer"))
 
 
+def _saved_travelers_for_picker(account_id):
+    """Passenger-form fields plus default_cost_center_id, so picking a saved
+    traveler can default the booking's cost center to theirs — the rest of
+    a Traveler's profile has no business on this page."""
+    return [{**{k: t[k] for k in db.TRAVELER_FIELDS}, "default_cost_center_id": t["default_cost_center_id"]}
+            for t in db.travelers(account_id)]
+
+
 @app.route("/book/passenger", methods=["POST"])
 @auth.login_required
 def passenger_step():
@@ -984,8 +1071,8 @@ def passenger_step():
                                people=people,
                                # only the passenger fields reach the page —
                                # internal ids and timestamps have no business there
-                               saved=[{k: t[k] for k in db.TRAVELER_FIELDS}
-                                      for t in db.travelers(_account())])
+                               saved=_saved_travelers_for_picker(_account()),
+                               cost_centers=db.cost_centers_for_account(_account(), active_only=True))
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form={},
                                error=f"{exc} — offers expire; search again.")
@@ -995,17 +1082,19 @@ def passenger_step():
 @auth.login_required
 def payment_step():
     offer_id = request.form["offer_id"]
+    cost_center_id = request.form.get("cost_center_id", "").strip()
     people = passengers_from_form()
     problems = passenger_problems(people)
     if problems:
         return render_template("passenger.html", nav="search",
                                offer=fetch_offer_view(offer_id), people=people,
-                               saved=[{k: t[k] for k in db.TRAVELER_FIELDS}
-                                      for t in db.travelers(_account())],
+                               saved=_saved_travelers_for_picker(_account()),
+                               cost_centers=db.cost_centers_for_account(_account(), active_only=True),
                                error=" · ".join(problems)), 400
     try:
         return render_template("payment.html", nav="search",
-                               offer=fetch_offer_view(offer_id), people=people)
+                               offer=fetch_offer_view(offer_id), people=people,
+                               cost_center_id=cost_center_id)
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form={},
                                error=f"{exc} — offers expire; search again.")
@@ -1036,6 +1125,12 @@ def _fare_disposition(order):
 def book():
     offer_id = request.form["offer_id"]
     account_id = _account()
+    # Validated against the account, not trusted as-is — a raw id from a
+    # form field is exactly the shape of mistake this codebase has spent
+    # a lot of effort closing elsewhere (see /decisions, invoice_lines_for).
+    cost_center_id = request.form.get("cost_center_id", "").strip() or None
+    if cost_center_id and not db.cost_center(cost_center_id, account_id):
+        cost_center_id = None
     try:
         offer = duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer")
     except (DuffelError, RuntimeError) as exc:
@@ -1044,7 +1139,7 @@ def book():
 
     seats = offer.get("passengers", []) or [{}]
     people = passengers_from_form(len(seats))
-    saved = [{k: t[k] for k in db.TRAVELER_FIELDS} for t in db.travelers(account_id)]
+    saved = _saved_travelers_for_picker(account_id)
     problems = passenger_problems(people)
     if problems:
         return render_template("passenger.html", nav="search", offer=offer_view(offer),
@@ -1176,6 +1271,7 @@ def book():
         "refundable": refundable,
         "fare_conditions": fare_conditions,
         "stripe_payment_intent_id": intent.id,
+        "cost_center_id": cost_center_id,
     })
 
     # Seed the simulated scenario from reality, so simulation starts at the
@@ -1271,39 +1367,43 @@ def _activity_label(row):
 @app.route("/overview")
 @auth.login_required
 def overview():
-    """Account numbers, all of them derived from db.account_summary so this
-    page can never disagree with the pages it summarises."""
+    """Account numbers, all of them derived from db.account_summary /
+    db.savings_totals_for_account so this page can never disagree with the
+    pages it summarises.
+
+    Cash and credit recovered are kept as two separate figures throughout —
+    never merged into one "Total Saved". They're different things: one is
+    money back on the card, the other is value locked to one employee's
+    name at one airline.
+    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     trips_ = [trip_view(r) for r in load_orders()]
     upcoming = sorted((t for t in trips_ if (t["depart_iso"][:10] or "9999") >= today),
                       key=lambda t: t["depart_iso"])
     acct = _account()
-    months = db.monthly_series(acct)
-    carriers = db.spend_by_carrier(acct)
+    s = db.account_summary(acct)
+    savings = db.savings_totals_for_account(acct)
     activity = [{**r, **_activity_label(r)} for r in db.audit_rows_for_account(acct, limit=12)]
-    # Total Saved is the net figure (after our fee) — same computation
-    # wallet.html's "Net back to you" tile uses, reused rather than
-    # reimplemented, and restricted to real executions by wallet_totals'
-    # own kind == 'recovery' filter (execution = 'executed' rows only).
-    wallet_rows = db.wallet_transactions(acct)
-    totals = db.wallet_totals(wallet_rows)
+
+    monitored = db.monitored_orders_with_history(acct)
+    band = aggregate_difference_band(monitored, currency=s["currency"]) if monitored else None
+    band_paid = sum((Decimal(str(o["paid"] or 0)) for o in monitored), Decimal("0"))
+    # "Worth today" from each monitored order's own latest known check,
+    # falling back to what was paid when no check has run yet — the same
+    # forward-fill aggregate_difference_band uses, so the KPI headline and
+    # the band it sits above can never disagree.
+    band_worth = Decimal("0")
+    for o in monitored:
+        band_worth += o["points"][-1][1] if o["points"] else Decimal(str(o["paid"] or 0))
+
     return render_template("overview.html", nav="overview",
                            now_hour=datetime.now(timezone.utc).hour,
-                           s=db.account_summary(acct),
-                           net_saved=totals["net_back"], wallet_currency=totals["currency"],
-                           upcoming=upcoming[:4],
-                           months=months,
-                           saved_chart=saved_chart(months),
+                           s=s, savings=savings,
+                           upcoming=upcoming[:5],
                            activity=activity,
-                           travelers=db.travelers(acct),
-                           carriers=carriers,
-                           # Default the Airline Breakdown toggle to whichever
-                           # metric actually has data — an all-zero "Saved"
-                           # view on a brand-new account reads as broken.
-                           carrier_default_metric=("saved" if any(
-                               float(c["saved"]) > 0 for c in carriers) else "spend"),
-                           carrier_chart=carrier_chart(carriers) if carriers else None,
-                           c_spend=SERIES_SPEND, c_saved=SERIES_SAVED)
+                           band=band, band_paid=band_paid, band_worth=band_worth,
+                           band_recoverable=band_paid - band_worth,
+                           monitored_count=len(monitored))
 
 
 @app.route("/wallet")
@@ -1314,13 +1414,43 @@ def wallet():
     Recovered fares go back to the card that paid, so there is no float being
     held here — the page shows what moved and where it went, and says so.
     """
-    rows = db.wallet_transactions(_account())
+    account_id = _account()
+    rows = db.wallet_transactions(account_id)
     return render_template("wallet.html", nav="wallet", rows=rows,
-                           totals=db.wallet_totals(rows))
+                           totals=db.wallet_totals(rows),
+                           commission_rate=db.account_commission_rate(account_id),
+                           airline_credits=db.airline_credits_for_account(account_id))
 
 
 def _json_safe(row):
     return {k: (str(v) if isinstance(v, Decimal) else v) for k, v in dict(row).items()}
+
+
+@app.route("/invoices")
+@auth.login_required
+def invoices():
+    """Customer-facing statements list. Generation itself stays a manual,
+    ops-triggered action (generate_invoice_route below) — Phase 4's job is
+    the real review/approval flow; customers don't self-generate their own
+    bill. Real rows only: most accounts have none yet, so the honest state
+    is an empty table, not a fabricated sample statement."""
+    account_id = _account()
+    return render_template("invoices.html", nav="invoices",
+                           invoices=db.invoices_for_account(account_id),
+                           savings=db.savings_totals_for_account(account_id),
+                           commission_rate=db.account_commission_rate(account_id))
+
+
+@app.route("/invoices/<invoice_id>")
+@auth.login_required
+def invoice_detail(invoice_id):
+    account_id = _account()
+    rows = db.invoices_for_account(account_id)
+    invoice = next((i for i in rows if str(i["id"]) == invoice_id), None)
+    if not invoice:
+        return redirect(url_for("invoices"))
+    return render_template("invoice_detail.html", nav="invoices", invoice=invoice,
+                           lines=db.invoice_lines_for(invoice_id, account_id))
 
 
 @app.route("/accounts/invoice/generate", methods=["POST"])
@@ -1350,21 +1480,84 @@ def generate_invoice_route():
 @app.route("/settings", methods=["GET", "POST"])
 @auth.login_required
 def settings():
-    """Account-level fields only (name/phone/nickname) — per-Traveler data
-    (loyalty, trusted traveler, preferences) lives on travelers and is
-    edited from Travelers, not here. Payment method and reservation-import
-    connections render below from existing/stub data; both get real
-    backends in later passes (Stripe, the Email Capture Layer)."""
+    """Account-level fields (name/phone/nickname) plus, now, the company's
+    own profile — legal_name/billing address/employee_count, added in
+    Phase 1 with no write path until this pass. Per-Traveler data (loyalty,
+    trusted traveler, preferences) lives on travelers and is edited from
+    Travelers, not here. Two independent forms on one page, told apart by
+    `form_section` rather than guessing from which fields showed up."""
     user = auth.current_user()
-    if request.method == "POST":
-        db.account_settings_update(user["id"],
-                                   nickname=request.form.get("nickname", "").strip(),
-                                   phone_number=request.form.get("phone_number", "").strip())
-        return redirect(url_for("settings"))
     acct = _account()
+    if request.method == "POST":
+        if request.form.get("form_section") == "company":
+            db.account_company_update(
+                acct,
+                legal_name=request.form.get("legal_name", "").strip(),
+                employee_count=request.form.get("employee_count", "").strip() or None,
+                billing_address_line1=request.form.get("billing_address_line1", "").strip(),
+                billing_address_line2=request.form.get("billing_address_line2", "").strip(),
+                billing_city=request.form.get("billing_city", "").strip(),
+                billing_state=request.form.get("billing_state", "").strip(),
+                billing_postal_code=request.form.get("billing_postal_code", "").strip(),
+                billing_country=request.form.get("billing_country", "").strip())
+        else:
+            db.account_settings_update(user["id"],
+                                       nickname=request.form.get("nickname", "").strip(),
+                                       phone_number=request.form.get("phone_number", "").strip())
+        return redirect(url_for("settings"))
     return render_template("settings.html", nav="settings", account_user=user,
                            forward_to=_forward_to_address(acct),
-                           sources=db.email_import_sources(acct))
+                           sources=db.email_import_sources(acct),
+                           company=db.account_company_fields(acct),
+                           cost_centers=db.cost_centers_for_account(acct))
+
+
+@app.route("/settings/cost-centers")
+@auth.login_required
+def cost_centers_page():
+    """List + create + edit, matching Travelers' own combined list-and-form
+    treatment rather than a separate page per action."""
+    editing_id = request.args.get("edit")
+    editing = db.cost_center(editing_id, _account()) if editing_id else None
+    return render_template("cost_centers.html", nav="settings",
+                           cost_centers=db.cost_centers_for_account(_account()),
+                           editing=editing, form={})
+
+
+@app.route("/settings/cost-centers/new", methods=["POST"])
+@auth.login_required
+def cost_center_new():
+    code = request.form.get("code", "").strip().upper()
+    name = request.form.get("name", "").strip()
+    budget_amount = request.form.get("budget_amount", "").strip() or None
+    budget_period = request.form.get("budget_period") or None
+    if not (code and name):
+        flash("Code and name are required.", "reservation_error")
+        return redirect(url_for("cost_centers_page"))
+    try:
+        db.cost_center_create(_account(), code=code, name=name,
+                              budget_amount=budget_amount, budget_period=budget_period)
+    except Exception:
+        # UNIQUE(account_id, code) — a duplicate code is the only realistic
+        # failure here, and the honest message is more useful than a 500.
+        flash(f"A cost center with code '{code}' already exists.", "reservation_error")
+    return redirect(url_for("cost_centers_page"))
+
+
+@app.route("/settings/cost-centers/<cost_center_id>/edit", methods=["POST"])
+@auth.login_required
+def cost_center_edit(cost_center_id):
+    existing = db.cost_center(cost_center_id, _account())
+    if not existing:
+        return redirect(url_for("cost_centers_page"))
+    db.cost_center_update(
+        cost_center_id, _account(),
+        code=request.form.get("code", "").strip().upper() or existing["code"],
+        name=request.form.get("name", "").strip() or existing["name"],
+        budget_amount=request.form.get("budget_amount", "").strip() or None,
+        budget_period=request.form.get("budget_period") or None,
+        active=request.form.get("active") == "on")
+    return redirect(url_for("cost_centers_page"))
 
 
 @app.route("/settings/email-sources", methods=["POST"])
@@ -1616,8 +1809,13 @@ def trip_detail(order_id):
     if not record:
         return redirect(url_for("trips"))
     trip = trip_view(record)
-    return render_template("trip.html", nav="trips", trip=trip,
-                           chart=build_chart(order_id, trip["paid"]),
+    points = price_history(order_id)
+    # Flat baseline at the current `paid` amount — not stepped at each
+    # exchange. No real exchange has moved real money yet to justify a
+    # genuinely stepped baseline; see the writeup.
+    band = difference_band(points, Decimal(str(trip["paid"] or 0)), trip["currency"]) if points else None
+    return render_template("trip.html", nav="trips", trip=trip, band=band,
+                           commission_rate=db.account_commission_rate(record["account_id"]),
                            savings_events=db.savings_events_for_order(order_id))
 
 

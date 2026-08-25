@@ -11,8 +11,8 @@
   <span>ℹ</span>
   <div>
     We don't hold a balance. Recovered fares go straight back to
-    {{ card.brand }} ending {{ card.last4 }} — the card that paid — so this is a
-    record of what moved, not a pot you can spend from.
+    {% if card %}{{ card.brand }} ending {{ card.last4 }} — the card that paid{% else %}the card that paid{% endif %}
+    — so this is a record of what moved, not a pot you can spend from.
   </div>
 </div>
 
@@ -30,7 +30,7 @@
   <div class="tile">
     <div class="lbl">Service fees</div>
     <div class="v">{{ totals.fees }}<span class="cur">{{ totals.currency }}</span></div>
-    <div class="sub">25% of what we recover</div>
+    <div class="sub">{{ (commission_rate * 100)|round(1) }}% of what we recover</div>
   </div>
   <div class="tile">
     <div class="lbl">Net back to you</div>
@@ -92,6 +92,41 @@
 <div class="card" style="text-align:center; padding:48px 24px">
   <p class="muted" style="margin:0 0 16px">No transactions yet.</p>
   <a href="{{ url_for('search') }}" class="btn">Search flights</a>
+</div>
+{% endif %}
+
+<h2 style="margin:28px 0 12px">Airline credit ledger</h2>
+{% if airline_credits %}
+<div class="card" style="padding:0; overflow-x:auto">
+  <table class="ledger">
+    <thead>
+      <tr><th>Issued</th><th>Airline</th><th>Loyalty account</th><th>Status</th>
+          <th class="r">Remaining</th></tr>
+    </thead>
+    <tbody>
+      {% for c in airline_credits %}
+      <tr>
+        <td class="muted mono nw">{{ c.issued_at.strftime('%Y-%m-%d') if c.issued_at else '—' }}</td>
+        <td>{{ c.airline }}{% if c.expires_at %}<div class="hint" style="margin-top:2px">expires {{ c.expires_at.strftime('%Y-%m-%d') }}</div>{% endif %}</td>
+        <td class="mono">{{ c.loyalty_account_reference or '—' }}</td>
+        <td>
+          <span class="tag {{ 'tag-credit' if c.status == 'active' else ('tag-sage' if c.status == 'redeemed' else 'tag-mute') }}">
+            {{ c.status|capitalize }}
+          </span>
+        </td>
+        <td class="r num">{{ c.amount_remaining }} <span class="cur">{{ c.currency }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="hint" style="margin-top:12px">
+  Airline credit is not cash — it's held in an individual employee's loyalty
+  account, redeemable with that airline only, and can expire unused.
+</p>
+{% else %}
+<div class="card" style="text-align:center; padding:36px 24px">
+  <p class="muted" style="margin:0">No airline credit issued yet.</p>
 </div>
 {% endif %}
 
