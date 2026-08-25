@@ -1216,6 +1216,16 @@ def _activity_label(row):
             title = "Lower fare found (simulated)"
         elif execution == "failed":
             title = "Recovery attempt failed"
+        elif execution == "executed":
+            # Newly reachable — execute() now actually writes this. A bare
+            # "Recovery executed" doesn't distinguish a forfeited exchange
+            # (nothing came back) from a real one, so it reads the same
+            # delivery_type distinction the wallet already surfaces.
+            title = {
+                "refund_to_card": "Recovery executed — refunded to card",
+                "airline_credit": "Recovery executed — airline credit issued",
+                "forfeited": "Recovery executed — value forfeited, nothing recovered",
+            }.get(row.get("delivery_type"), "Recovery executed")
         else:
             title = "Recovery executed"
         return {"title": title, "detail": row.get("detail", "")}
@@ -1749,6 +1759,9 @@ def confirm_action(order_id, action):
         # book-new-before-cancel-old (the mechanism that would recover
         # savings on an imported reservation) isn't built yet.
         return redirect(url_for("orders"))
+    if record.get("executed"):
+        # Already in a terminal state — nothing left to confirm.
+        return redirect(url_for("trip_detail", order_id=order_id))
     return render_template("confirm_action.html", nav="ops", order=record, action=action)
 
 
@@ -1761,6 +1774,10 @@ def execute(order_id, action):
         return redirect(url_for("orders"))
     if record.get("source") != "td_rebook":
         return redirect(url_for("orders"))
+    if record.get("executed"):
+        # Already in a terminal state — refuse rather than let a second
+        # exchange or cancel reach Duffel for an order that's done.
+        return redirect(url_for("trip_detail", order_id=order_id))
 
     def refuse(msg):
         return render_template("confirm_action.html", nav="ops", order=record,
@@ -1786,8 +1803,17 @@ def execute(order_id, action):
     # Reserve the right to call Duffel exactly once for this (order, action,
     # offer). A double submit loses the INSERT race and stops here rather than
     # exchanging the same ticket twice.
+    #
+    # Cancel is never keyed on offer_id: there's no offer involved in
+    # cancelling an order at all, and change_offer_id is purely an exchange
+    # artifact — using it here meant a reshop cycle running between two
+    # cancel attempts (which can change last_decision, and with it
+    # change_offer_id) could change this key out from under the guard,
+    # letting a second cancel reach Duffel. A cancel's claim key is always
+    # the empty string instead: fixed, and untouched by anything a cycle does.
+    claim_key = offer_id if action == "exchange" else ""
     try:
-        attempt = db.claim_execution(order_id, action, offer_id)
+        attempt = db.claim_execution(order_id, action, claim_key)
     except db.AlreadyAttempted as dup:
         prior = dup.attempt
         if prior["status"] == "succeeded":
@@ -1863,6 +1889,11 @@ def execute(order_id, action):
                 # old `if refunded > 0` gate used to skip this entirely.
                 delivery_type = "forfeited"
                 delivery_detail = "no refund or credit issued — fare rules forfeit the residual value"
+            # Unlike exchange, this branch always reaches here once Duffel
+            # confirms — 0.00 included, so a forfeited cancellation records
+            # an explicit zero rather than leaving orders.refunded NULL the
+            # way "no execution happened at all" would read.
+            extra = {"refunded": str(refunded), "original_paid": record.get("paid")}
             savings = {"old_amount": str(paid), "new_amount": str(paid - refunded),
                       "realized_savings": str(refunded),
                       "delivery_type": delivery_type, "delivery_detail": delivery_detail}
@@ -1875,10 +1906,27 @@ def execute(order_id, action):
         else:
             db.finish_execution(attempt["id"], "failed", note=str(exc),
                                 duffel_change_id=duffel_change_id)
+        # The audit trail gets a row even on failure — an attempted
+        # execution that didn't land is exactly as audit-worthy as one
+        # that did, maybe more so.
+        db.audit_append({
+            "kind": "execution", "order_id": order_id, "action": action,
+            "source": last.get("source") or "operator",
+            "execution": "failed", "detail": str(exc),
+            "currency": record.get("currency") or "",
+        })
         return refuse(str(exc))
 
     db.finish_execution(attempt["id"], "succeeded", note=note,
                         duffel_change_id=duffel_change_id, result=result)
+
+    audit_payload = {
+        "kind": "execution", "order_id": order_id, "action": action,
+        "source": last.get("source") or "operator",
+        "execution": "executed", "detail": note,
+        "currency": record.get("currency") or "",
+    }
+
     if savings:
         # The account's real rate, never the module-level 0.25 constant —
         # savings_events.commission_rate exists precisely so a per-account
@@ -1892,6 +1940,10 @@ def execute(order_id, action):
         event = db.savings_event_create(order_id, execution_attempt_id=attempt["id"],
                                         currency=record.get("currency") or "",
                                         commission_rate=rate, **savings)
+        audit_payload["delivery_type"] = savings["delivery_type"]
+        audit_payload["recovered"] = savings["realized_savings"]
+        audit_payload["service_fee"] = str(event["commission_amount"])
+
         if savings["delivery_type"] == "airline_credit":
             # The liability register: credit sits in the traveler's own
             # loyalty account and leaves with them if they quit. Duffel's
@@ -1899,13 +1951,26 @@ def execute(order_id, action):
             # credit expiry to attach (FINDINGS.md's verified response
             # shape) — left blank/None, editable later once a booking is
             # linked to a traveler's own loyalty_programs.
-            db.airline_credit_create(
+            credit = db.airline_credit_create(
                 record["account_id"], traveler_id=record.get("traveler_id"),
                 airline=record.get("carrier") or "",
                 loyalty_account_reference="",
                 order_id=order_id, savings_event_id=event["id"],
                 amount_issued=savings["realized_savings"],
                 currency=record.get("currency") or "", expires_at=None)
+            # Bidirectional: airline_credits already points back at the
+            # savings_event that created it; this closes the other
+            # direction so a recovery traces forward to the credit it
+            # produced without a separate lookup by order_id.
+            db.savings_event_link_credit(event["id"], credit["id"])
+
+    # The audit trail — an execution is the single most audit-worthy thing
+    # this system does, and until now it left no trace here at all.
+    # Written once, after the fact; distinct from the
+    # 'awaiting_confirmation'/'blocked_simulated' rows the decision cycle
+    # already logs before a human ever confirms anything.
+    db.audit_append(audit_payload)
+
     fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
     upsert_order({"order_id": order_id, "raw": fresh, "monitoring": False,
                   "executed": note, "paid": fresh["total_amount"], **extra})

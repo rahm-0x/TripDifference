@@ -696,17 +696,22 @@ def account_summary(account_id):
     Computed here, once, so Overview and the pages it summarises cannot drift
     apart — a dashboard claiming 184 travelers over a roster of 8 is the
     failure mode this exists to prevent.
+
+    Deliberately carries no recovered/rebooked figure of its own: those used
+    to sum orders.refunded, which only execute()'s exchange branch ever set
+    — a real cancellation-driven recovery (cash or credit) left it NULL, so
+    the figure silently undercounted and was, on inspection, rendered in no
+    template anyway. savings_events is the canonical source for recovery
+    reporting now (see spend_by_carrier); nothing here duplicates it.
     """
     row = q("""SELECT
                  count(*)                                        AS bookings,
                  count(*) FILTER (WHERE monitoring)               AS monitoring,
                  count(*) FILTER (WHERE departure_date >= current_date)
                                                                   AS upcoming,
-                 count(*) FILTER (WHERE refunded IS NOT NULL)     AS rebooked,
                  count(*) FILTER (WHERE simulated)                 AS simulated,
                  COALESCE(sum(sim_refunded) FILTER (WHERE simulated), 0) AS sim_recovered,
                  COALESCE(sum(paid), 0)                           AS spend,
-                 COALESCE(sum(refunded), 0)                       AS recovered,
                  max(currency) FILTER (WHERE currency <> '')      AS currency
                FROM orders WHERE account_id = %s""", (account_id,), fetch="one")
     out = dict(row)
@@ -800,13 +805,26 @@ def spend_by_carrier(account_id, top=5):
 
     Folded rather than cycled: past a handful of slots the categories stop
     being tellable apart, and this is one measure across categories anyway.
+
+    "saved" sums savings_events.realized_savings, not orders.refunded —
+    that column is only ever written by execute()'s exchange branch, so a
+    cancellation-driven recovery (cash or credit) used to be invisible
+    here. savings_events is the canonical source for recovery reporting;
+    orders.refunded is a convenience field on the order itself, not a
+    reporting source. Pre-aggregated per order before joining so an order
+    with more than one savings_event doesn't multiply its own `paid` in
+    the sum.
     """
-    rows = q("""SELECT COALESCE(NULLIF(carrier, ''), 'Unknown') AS carrier,
-                       sum(paid)               AS spend,
-                       COALESCE(sum(refunded), 0) AS saved,
-                       count(*)                AS bookings
-                  FROM orders
-                 WHERE account_id = %s AND paid IS NOT NULL
+    rows = q("""WITH per_order_savings AS (
+                  SELECT order_id, sum(realized_savings) AS saved
+                    FROM savings_events GROUP BY order_id)
+                SELECT COALESCE(NULLIF(o.carrier, ''), 'Unknown') AS carrier,
+                       sum(o.paid)                  AS spend,
+                       COALESCE(sum(pos.saved), 0)  AS saved,
+                       count(*)                     AS bookings
+                  FROM orders o
+                  LEFT JOIN per_order_savings pos ON pos.order_id = o.order_id
+                 WHERE o.account_id = %s AND o.paid IS NOT NULL
                  GROUP BY 1 ORDER BY 2 DESC""", (account_id,), fetch="all")
     rows = [dict(r) for r in rows]
     if len(rows) <= top:
@@ -1016,6 +1034,14 @@ def airline_credit_create(account_id, *, traveler_id, airline, loyalty_account_r
             (account_id, traveler_id, airline, loyalty_account_reference or "",
              order_id, savings_event_id, _num(amount_issued), _num(amount_issued),
              currency, expires_at), fetch="one")
+
+
+def savings_event_link_credit(savings_event_id, airline_credit_id):
+    """The other direction of the link airline_credit_create's own
+    savings_event_id already provides — a bidirectional pointer on a
+    liability register is worth the extra statement."""
+    q("UPDATE savings_events SET airline_credit_id = %s WHERE id = %s",
+      (airline_credit_id, savings_event_id))
 
 
 # ---------------------------------------------------------------------------
