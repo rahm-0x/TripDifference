@@ -173,50 +173,6 @@ def audit_rows_for_account(account_id, limit=20):
     return [_audit_payload(r) for r in rows]
 
 
-def price_history_by_flight(account_id, query, limit_orders=8):
-    """Every one of this account's own orders matching a flight-number/
-    carrier/route search, each with its own market_best price-check
-    history — the only real historical-price source that exists today.
-
-    A shared, cross-account, flight-number-keyed table (so a brand-new
-    booking could show history from *other* customers' watches of the
-    same flight) was discussed and deliberately deferred — see
-    docs/bolt-on-pivot.md. This only ever shows the signed-in account's
-    own monitoring history, never fabricated or borrowed data.
-    """
-    like = f"%{query}%"
-    orders = q("""SELECT order_id, booking_reference, route, itinerary, carrier,
-                        departure_date, paid, currency
-                    FROM orders
-                   WHERE account_id = %s
-                     AND (itinerary ILIKE %s OR carrier ILIKE %s OR route ILIKE %s)
-                   ORDER BY departure_date DESC NULLS LAST
-                   LIMIT %s""",
-             (account_id, like, like, like, limit_orders), fetch="all")
-
-    # Matched orders are kept even with zero price checks — the caller needs
-    # to tell "nothing matched this search" apart from "matched, but
-    # monitoring hasn't produced a check yet," which collapsing empty
-    # series here would otherwise hide.
-    series = []
-    for o in orders:
-        rows = q("""SELECT ts, market_best FROM audit_events
-                     WHERE order_id = %s AND market_best IS NOT NULL
-                     ORDER BY ts""", (o["order_id"],), fetch="all")
-        points = []
-        for r in rows:
-            days_out = (o["departure_date"] - r["ts"].date()).days if o["departure_date"] else None
-            points.append({"ts": r["ts"].isoformat(), "days_out": days_out,
-                           "price": float(r["market_best"])})
-        series.append({
-            "order_id": o["order_id"], "carrier": o["carrier"],
-            "label": f"{o['route']} · {o['itinerary'] or o['booking_reference']}"
-                    f"{' · ' + o['departure_date'].isoformat() if o['departure_date'] else ''}",
-            "currency": o["currency"], "points": points,
-        })
-    return series
-
-
 # ---------------------------------------------------------------------------
 # orders
 # ---------------------------------------------------------------------------

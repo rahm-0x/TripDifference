@@ -436,66 +436,6 @@ def spend_chart(rows):
             "has_data": any(float(r["spend"]) or float(r["recovered"]) for r in rows)}
 
 
-HISTORICAL_SERIES_COLORS = ("#3987e5", "#C98500", "#12897F", "#B23A79", "#5B6ABF", "#8A6D3B")
-
-
-def historical_chart(series, w=760, h=320):
-    """Overlapping price-history lines, one per matched order, aligned on
-    days-before-departure so different bookings of the same flight number
-    (different departure dates) sit on one comparable timeline instead of
-    real calendar dates that would never line up."""
-    pad_l, pad_r, pad_t, pad_b = 52, 20, 16, 34
-    inner_w, inner_h = w - pad_l - pad_r, h - pad_t - pad_b
-
-    plottable = [{**s, "points": [p for p in s["points"] if p["days_out"] is not None]}
-                for s in series]
-    plottable = [s for s in plottable if s["points"]]
-    all_points = [p for s in plottable for p in s["points"]]
-    if not all_points:
-        return {"lines": [], "grid": [], "w": w, "h": h, "has_data": False}
-
-    max_days = max(p["days_out"] for p in all_points) or 1
-    prices = [p["price"] for p in all_points]
-    lo, hi = min(prices), max(prices)
-    if lo == hi:
-        lo, hi = lo * 0.9, hi * 1.1 or 1
-
-    def xy(p):
-        x = pad_l + inner_w * (1 - p["days_out"] / max_days)
-        y = pad_t + inner_h * (1 - (p["price"] - lo) / (hi - lo))
-        return round(x, 1), round(y, 1)
-
-    lines = []
-    for i, s in enumerate(plottable):
-        colour = HISTORICAL_SERIES_COLORS[i % len(HISTORICAL_SERIES_COLORS)]
-        pts = [{"x": xy(p)[0], "y": xy(p)[1], "days_out": p["days_out"],
-               "price": f"{p['price']:,.2f}"} for p in s["points"]]
-        lines.append({"label": s["label"], "colour": colour, "points": pts,
-                      "currency": s["currency"]})
-
-    grid = [{"y": round(pad_t + inner_h * f, 1), "label": f"{hi - (hi - lo) * f:,.0f}"}
-            for f in (0, .5, 1)]
-    x_grid = [{"x": round(pad_l + inner_w * (1 - d / max_days), 1), "label": str(d)}
-              for d in sorted({0, max_days, max_days // 2} if max_days else {0})]
-    return {"lines": lines, "grid": grid, "x_grid": x_grid, "w": w, "h": h, "has_data": True}
-
-
-def cheapest_window(series):
-    """The days-before-departure window the lowest observed prices actually
-    fell in — not a prediction or a fitted model, just where the cheapest
-    real checks landed. Needs a real spread of data before it means
-    anything, so it stays None below a floor rather than reporting noise
-    as a range."""
-    points = [p for s in series for p in s["points"] if p["days_out"] is not None]
-    if len(points) < 5:
-        return None
-    points.sort(key=lambda p: p["price"])
-    cheapest = points[:max(1, len(points) // 4)]
-    days = [p["days_out"] for p in cheapest]
-    return {"low": min(days), "high": max(days), "n": len(points),
-            "price": f"{cheapest[0]['price']:,.2f}"}
-
-
 def saved_chart(rows, w=720, h=170):
     """Home's headline trend — total saved over time, one dashed line.
     Same geometry as spend_chart but isolated to the 'recovered' series;
@@ -935,21 +875,6 @@ def search():
     return render_template("results.html", nav="search", offers=offers, form=form,
                            total=total,
                            unmonitorable=sum(1 for o in offers if not o["monitorable"]))
-
-
-@app.route("/historical", methods=["GET"])
-@auth.login_required
-def historical():
-    """Overlapping price history by flight number/carrier/route, scoped to
-    this account's own monitored orders — the only real source that exists
-    (see db.price_history_by_flight's docstring on the deferred shared
-    table). No fabricated 'cheapest time to buy' claim: cheapest_window()
-    returns None below a real data floor rather than reporting noise."""
-    flight_query = request.args.get("q", "").strip()
-    series = db.price_history_by_flight(_account(), flight_query) if flight_query else []
-    return render_template("historical.html", nav="historical", q=flight_query, series=series,
-                           chart=historical_chart(series) if series else None,
-                           window=cheapest_window(series) if series else None)
 
 
 # ---------------------------------------------------------------------------

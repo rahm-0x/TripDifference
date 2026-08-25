@@ -428,10 +428,10 @@ def evaluate(order, source, policy=None, now=None, log=True):
 
     # A manual/imported reservation has no real Duffel order to quote a
     # change against — order.id isn't a Duffel order_id at all. The market
-    # search above still ran and still gets recorded (that's the only
-    # price-history source Historical has for these), but there is no
-    # order-change mechanism to call yet — see docs/bolt-on-pivot.md on
-    # book-new-before-cancel-old not being built.
+    # search above still ran and still gets recorded as market_best on this
+    # order's audit trail, but there is no order-change mechanism to call
+    # yet — see docs/bolt-on-pivot.md on book-new-before-cancel-old not
+    # being built.
     if not order.has_duffel_order:
         return decide(Outcome.SKIP, Reason.NO_EXECUTION_MECHANISM,
                       "no Duffel order behind this reservation — market price "
