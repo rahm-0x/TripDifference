@@ -1132,6 +1132,16 @@ def generate_invoice(account_id, period_start, period_end):
         return cur.fetchone()
 
 
-def invoice_lines_for(invoice_id):
-    return q("SELECT * FROM invoice_lines WHERE invoice_id = %s ORDER BY id",
-             (invoice_id,), fetch="all")
+def invoice_lines_for(invoice_id, account_id):
+    """account_id is required, not optional — same reasoning as
+    audit_rows()'s order_id: this was previously safe only because its one
+    caller always passed an invoice id it had just created itself, never
+    one from user input. The next route that fetches an existing invoice
+    by id (from a URL) would otherwise read straight across accounts.
+    Joined through invoices rather than trusting a stored account_id on
+    invoice_lines itself, since it doesn't carry one."""
+    return q("""SELECT il.* FROM invoice_lines il
+                JOIN invoices i ON i.id = il.invoice_id
+               WHERE il.invoice_id = %s AND i.account_id = %s
+               ORDER BY il.id""",
+             (invoice_id, account_id), fetch="all")

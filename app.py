@@ -341,6 +341,11 @@ def trip_view(record):
         "changeable": bool(snap.changeable) if snap else False,
         "refunded": record.get("refunded"),
         "original_paid": record.get("original_paid"),
+        # Customer-facing flag only — a boolean, not the Stripe error text
+        # itself. The detail (payment_capture_error) is ops-facing, shown
+        # on /orders instead; a customer doesn't need Stripe's own wording
+        # for something they aren't being asked to act on.
+        "payment_capture_failed": bool(record.get("payment_capture_failed_at")),
         # A simulated rebooking shows alongside the real figures, never as one.
         "simulated": bool(record.get("simulated")),
         "sim_refunded": record.get("sim_refunded"),
@@ -1334,7 +1339,7 @@ def generate_invoice_route():
     period_end = request.form.get("period_end") or default_end.isoformat()
 
     invoice = db.generate_invoice(_account(), period_start, period_end)
-    lines = db.invoice_lines_for(invoice["id"])
+    lines = db.invoice_lines_for(invoice["id"], _account())
     return {"invoice": _json_safe(invoice), "lines": [_json_safe(l) for l in lines]}
 
 

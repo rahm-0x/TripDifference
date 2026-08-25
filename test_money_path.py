@@ -673,13 +673,13 @@ def test_invoice_generation_is_idempotent_per_period(logged_in_carded):
 
     today = date.today()
     invoice1 = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
-    lines1 = db.invoice_lines_for(invoice1["id"])
+    lines1 = db.invoice_lines_for(invoice1["id"], account["account_id"])
     assert len(lines1) == 1
     assert lines1[0]["line_type"] == "commission_cash"
     assert invoice1["total"] == Decimal("50.00")
 
     invoice2 = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
-    lines2 = db.invoice_lines_for(invoice2["id"])
+    lines2 = db.invoice_lines_for(invoice2["id"], account["account_id"])
     assert lines2 == [], "a second run over the same period must not re-bill the same event"
     assert invoice2["total"] == Decimal("0.00")
 
@@ -691,6 +691,29 @@ def test_forfeited_events_produce_no_invoice_line(logged_in_carded):
 
     today = date.today()
     invoice = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
-    lines = db.invoice_lines_for(invoice["id"])
+    lines = db.invoice_lines_for(invoice["id"], account["account_id"])
     assert lines == []
     assert invoice["total"] == Decimal("0.00")
+
+
+def test_invoice_lines_for_refuses_a_foreign_account():
+    """The same shape /decisions leaked: a lookup safe only because its one
+    caller happened to pass a trusted id. Proves the fix, not just that it
+    compiles -- account B must get nothing back for account A's invoice,
+    even though the invoice_id itself is valid."""
+    email_a = f"test-{uuid.uuid4().hex[:12]}@example.com"
+    email_b = f"test-{uuid.uuid4().hex[:12]}@example.com"
+    a = db.create_account(email_a, password_hash="x")
+    b = db.create_account(email_b, password_hash="x")
+    try:
+        order = make_real_order(a["account_id"])
+        today = date.today()
+        invoice = db.generate_invoice(a["account_id"], today, today + timedelta(days=1))
+        db.q("""INSERT INTO invoice_lines (invoice_id, line_type, description, amount)
+               VALUES (%s, 'subscription', 'test', 10.00)""", (invoice["id"],))
+
+        assert len(db.invoice_lines_for(invoice["id"], a["account_id"])) == 1
+        assert db.invoice_lines_for(invoice["id"], b["account_id"]) == []
+    finally:
+        db.q("DELETE FROM accounts WHERE id = %s", (a["account_id"],))
+        db.q("DELETE FROM accounts WHERE id = %s", (b["account_id"],))

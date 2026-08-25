@@ -17,6 +17,16 @@
   </div>
 </div>
 
+{% if trip.payment_capture_failed %}
+<div class="notice notice-terra" style="margin-bottom:16px">
+  <span>i</span>
+  <div>
+    <b>Your ticket is issued and valid.</b>
+    We're resolving a billing detail on this booking — no action is needed from you.
+  </div>
+</div>
+{% endif %}
+
 {% for ev in savings_events %}
 <div class="notice" style="background:var(--sage-wash); border-color:rgba(22,163,74,.22); color:var(--green); margin-bottom:16px">
   <span>↓</span>
