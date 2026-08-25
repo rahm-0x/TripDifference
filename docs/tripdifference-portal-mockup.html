@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TripDifference — Corporate Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fbfbfa;
+  --sidebar:#f4f5f6;
+  --card:#ffffff;
+  --line:#e2e4e7;
+  --line-soft:#eceef0;
+  --ink:#1a1d21;
+  --ink-2:#6b7078;
+  --ink-3:#8a8f96;
+  --accent:#2f5d8a;
+  --accent-hover:#1f4666;
+  --accent-wash:#e4eaf1;
+  --cash:#3d7a53;
+  --cash-wash:#e8f0ea;
+  --credit:#8a6d3b;
+  --credit-wash:#f4eee2;
+  --alert:#a04a3c;
+  --alert-wash:#f6eae7;
+  --sans:'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --mono:'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--sans);
+  background:var(--bg);
+  color:var(--ink);
+  font-size:14px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+/* ---------- shell ---------- */
+.shell{display:flex;min-height:100vh}
+.sidebar{
+  width:236px;flex:0 0 236px;background:var(--sidebar);
+  border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:22px 14px 16px;
+  position:sticky;top:0;height:100vh;
+}
+.wordmark{display:flex;align-items:baseline;gap:1px;padding:0 8px 2px;font-size:17px;font-weight:600;letter-spacing:-.02em}
+.wordmark .b{color:var(--accent)}
+.wordmark-sub{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);padding:0 8px;margin-bottom:22px;
+}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nav button{
+  all:unset;display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:6px;
+  font-family:var(--sans);font-size:13.5px;color:var(--ink-2);cursor:pointer;
+}
+.nav button:hover{background:#eceef0;color:var(--ink)}
+.nav button[aria-current="true"]{background:var(--accent-wash);color:var(--accent);font-weight:500}
+.nav svg{width:15px;height:15px;flex:0 0 15px;stroke:currentColor;fill:none;stroke-width:1.5}
+.side-spacer{flex:1}
+.policy-card{
+  background:var(--card);border:1px solid var(--line);border-radius:8px;padding:11px 12px;margin-bottom:12px;
+}
+.policy-card h4{font-size:12px;font-weight:600;margin-bottom:3px}
+.policy-card p{font-size:11.5px;color:var(--ink-2);line-height:1.45;margin-bottom:9px}
+.bar{height:3px;background:var(--line);border-radius:99px;overflow:hidden;margin-bottom:8px}
+.bar i{display:block;height:100%;width:62%;background:var(--accent);border-radius:99px}
+.acct{
+  display:flex;align-items:center;gap:9px;padding:8px;border-radius:6px;cursor:pointer;border:1px solid transparent;
+}
+.acct:hover{background:#eceef0}
+.avatar{
+  width:26px;height:26px;border-radius:999px;background:var(--accent);color:#fff;
+  display:grid;place-items:center;font-family:var(--mono);font-size:10.5px;font-weight:600;flex:0 0 26px;
+}
+.acct-name{font-size:12.5px;font-weight:500;line-height:1.2}
+.acct-org{font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.02em}
+
+.main{flex:1;min-width:0;padding:30px 36px 64px;max-width:1240px}
+.view{display:none}
+.view.on{display:block}
+
+/* ---------- type utilities ---------- */
+.eyebrow{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;
+}
+h1{font-size:23px;font-weight:600;letter-spacing:-.02em;line-height:1.25}
+h2{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.sub{color:var(--ink-2);font-size:13.5px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.pagehead{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:24px;flex-wrap:wrap}
+
+/* ---------- buttons ---------- */
+.btn{
+  all:unset;display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:6px;
+  font-size:13px;font-weight:500;cursor:pointer;background:var(--accent);color:#fff;
+}
+.btn:hover{background:var(--accent-hover)}
+.btn.ghost{background:transparent;color:var(--ink-2);border:1px solid var(--line)}
+.btn.ghost:hover{background:#f4f5f6;color:var(--ink)}
+
+/* ---------- cards ---------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px}
+.card-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line-soft)}
+.card-body{padding:16px}
+
+/* ---------- the difference band (signature) ---------- */
+.band-panel{margin-bottom:22px;overflow:hidden}
+.band-head{padding:16px 18px 12px;display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap}
+.band-figs{display:flex;gap:30px;align-items:flex-end}
+.fig-label{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);display:block;margin-bottom:3px}
+.fig{font-family:var(--mono);font-size:21px;font-weight:500;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.fig.cash{color:var(--cash)}
+.fig.credit{color:var(--credit)}
+.band-wrap{padding:0 18px 14px}
+.band-legend{display:flex;gap:16px;padding:0 18px 14px;flex-wrap:wrap}
+.lg{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2)}
+.sw{width:14px;height:9px;border-radius:2px;flex:0 0 14px}
+.sw.paid{background:transparent;border-top:1.5px dashed var(--ink-3);height:0;border-radius:0}
+.sw.mkt{background:transparent;border-top:1.5px solid var(--ink);height:0;border-radius:0}
+.sw.below{background:rgba(61,122,83,.20)}
+.sw.above{background:rgba(47,93,138,.10)}
+
+/* ---------- kpi ---------- */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.kpi{padding:14px 16px}
+.kpi .k-label{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);display:block;margin-bottom:7px}
+.kpi .k-val{font-family:var(--mono);font-size:22px;font-weight:500;letter-spacing:-.025em;font-variant-numeric:tabular-nums;line-height:1}
+.kpi .k-note{font-size:11.5px;color:var(--ink-3);margin-top:6px}
+.kpi .k-split{display:flex;gap:14px;margin-top:7px}
+.kpi .k-split div{font-size:11px;color:var(--ink-2)}
+.kpi .k-split b{font-family:var(--mono);font-weight:500;display:block;font-size:13px}
+.k-split .c1 b{color:var(--cash)}
+.k-split .c2 b{color:var(--credit)}
+
+/* ---------- grid ---------- */
+.cols{display:grid;grid-template-columns:1.75fr 1fr;gap:18px;align-items:start}
+
+/* ---------- tables ---------- */
+table{width:100%;border-collapse:collapse}
+th{
+  text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:500;padding:9px 16px;border-bottom:1px solid var(--line-soft);white-space:nowrap;
+}
+td{padding:11px 16px;border-bottom:1px solid var(--line-soft);font-size:13px;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:#fafbfb;cursor:pointer}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+th.n{text-align:right}
+.route{font-weight:500;letter-spacing:-.01em}
+.route small{display:block;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);font-weight:400;letter-spacing:0;margin-top:1px}
+
+/* ---------- chips ---------- */
+.chip{
+  display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.02em;white-space:nowrap;border:1px solid;
+}
+.chip.ok{color:var(--cash);border-color:#c3dcca;background:var(--cash-wash)}
+.chip.warn{color:var(--credit);border-color:#e0d0ae;background:var(--credit-wash)}
+.chip.bad{color:var(--alert);border-color:#e8c9c2;background:var(--alert-wash)}
+.chip.neutral{color:var(--ink-2);border-color:var(--line);background:var(--sidebar)}
+.chip.live{color:var(--accent);border-color:#c5d6e6;background:var(--accent-wash)}
+.dot{width:5px;height:5px;border-radius:999px;background:currentColor;flex:0 0 5px}
+.pulse{animation:p 2.4s ease-in-out infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ---------- attention list ---------- */
+.att{display:flex;gap:11px;padding:12px 16px;border-bottom:1px solid var(--line-soft);align-items:flex-start}
+.att:last-child{border-bottom:none}
+.att .mark{width:3px;align-self:stretch;border-radius:99px;flex:0 0 3px;background:var(--ink-3)}
+.att.a-alert .mark{background:var(--alert)}
+.att.a-warn .mark{background:var(--credit)}
+.att h5{font-size:12.5px;font-weight:600;margin-bottom:2px}
+.att p{font-size:11.5px;color:var(--ink-2);line-height:1.45}
+.att .when{font-family:var(--mono);font-size:10px;color:var(--ink-3);margin-left:auto;white-space:nowrap;padding-top:1px}
+
+/* ---------- fare cards (book) ---------- */
+.searchbar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:10px;padding:14px 16px;margin-bottom:20px;align-items:end}
+.field label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
+.field .val{border:1px solid var(--line);border-radius:6px;padding:7px 10px;font-size:13px;background:var(--bg)}
+.field .val.mono{font-family:var(--mono)}
+.flight-row{padding:15px 18px;border-bottom:1px solid var(--line-soft)}
+.flight-row:last-child{border-bottom:none}
+.fl-top{display:flex;gap:22px;align-items:center;margin-bottom:13px}
+.fl-time{font-family:var(--mono);font-size:16px;font-weight:500;letter-spacing:-.02em}
+.fl-time span{color:var(--ink-3);font-size:13px;font-weight:400}
+.fl-dur{font-size:11.5px;color:var(--ink-2);text-align:center;flex:0 0 92px}
+.fl-dur .l{height:1px;background:var(--line);margin:5px 0;position:relative}
+.fl-dur .l::after{content:"";position:absolute;right:0;top:-1.5px;width:4px;height:4px;border-radius:99px;background:var(--ink-3)}
+.fl-carrier{font-size:12.5px;color:var(--ink-2)}
+.fl-carrier b{display:block;color:var(--ink);font-weight:500;font-size:13px}
+.fares{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.fare{
+  border:1px solid var(--line);border-radius:7px;padding:11px 12px;cursor:pointer;background:var(--bg);
+  display:flex;flex-direction:column;gap:8px;
+}
+.fare:hover{border-color:var(--ink-3)}
+.fare.rec{border-color:var(--accent);background:#fff;box-shadow:0 0 0 1px var(--accent)}
+.fare-name{font-size:12px;font-weight:600;letter-spacing:-.01em}
+.fare-price{font-family:var(--mono);font-size:18px;font-weight:500;letter-spacing:-.02em}
+.fare-chips{display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+.fare-note{font-size:11px;color:var(--ink-2);line-height:1.4;padding-top:6px;border-top:1px solid var(--line-soft)}
+.fare-note b{color:var(--cash);font-family:var(--mono);font-weight:500}
+.rec-flag{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
+
+/* ---------- timeline ---------- */
+.tl{position:relative;padding-left:20px}
+.tl::before{content:"";position:absolute;left:4.5px;top:6px;bottom:6px;width:1px;background:var(--line)}
+.tl-item{position:relative;padding-bottom:17px}
+.tl-item:last-child{padding-bottom:0}
+.tl-item::before{
+  content:"";position:absolute;left:-20px;top:4.5px;width:9px;height:9px;border-radius:99px;
+  background:var(--bg);border:1.5px solid var(--ink-3);
+}
+.tl-item.t-exec::before{background:var(--cash);border-color:var(--cash)}
+.tl-item.t-block::before{background:var(--credit);border-color:var(--credit)}
+.tl-item.t-hold::before{background:var(--bg);border-color:var(--accent)}
+.tl-head{display:flex;align-items:baseline;gap:9px;margin-bottom:2px;flex-wrap:wrap}
+.tl-title{font-size:12.5px;font-weight:600}
+.tl-time{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.tl-body{font-size:12px;color:var(--ink-2);line-height:1.5}
+.tl-body .num{color:var(--ink);font-weight:500}
+
+/* ---------- segments ---------- */
+.seg{display:flex;gap:18px;padding:13px 0;border-bottom:1px solid var(--line-soft);align-items:center}
+.seg:last-child{border-bottom:none}
+.seg-code{font-family:var(--mono);font-size:11.5px;color:var(--accent);flex:0 0 76px;font-weight:500}
+.seg-main{flex:1}
+.seg-route{font-size:13.5px;font-weight:500;letter-spacing:-.01em}
+.seg-meta{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:2px}
+
+/* ---------- savings ---------- */
+.split-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px}
+.sc{padding:16px 18px;border-left:3px solid}
+.sc.cash{border-left-color:var(--cash)}
+.sc.credit{border-left-color:var(--credit)}
+.sc .sc-val{font-family:var(--mono);font-size:26px;font-weight:500;letter-spacing:-.03em;line-height:1;margin:8px 0 6px}
+.sc.cash .sc-val{color:var(--cash)}
+.sc.credit .sc-val{color:var(--credit)}
+.sc p{font-size:12px;color:var(--ink-2);line-height:1.5}
+.ledger{display:flex;gap:0;margin-top:11px;border-top:1px solid var(--line-soft);padding-top:10px}
+.ledger div{flex:1}
+.ledger .l-lab{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3)}
+.ledger .l-val{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;margin-top:2px}
+
+.empty{padding:34px 18px;text-align:center}
+.empty p{font-size:12.5px;color:var(--ink-2);margin-bottom:12px}
+
+@media (max-width:1080px){
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .cols{grid-template-columns:1fr}
+  .split-cards{grid-template-columns:1fr}
+  .fares{grid-template-columns:1fr}
+  .searchbar{grid-template-columns:1fr 1fr}
+}
+@media (max-width:760px){
+  .shell{flex-direction:column}
+  .sidebar{width:100%;flex:none;height:auto;position:static;flex-direction:row;align-items:center;gap:12px;overflow-x:auto;padding:12px}
+  .wordmark-sub,.policy-card,.side-spacer{display:none}
+  .nav{flex-direction:row}
+  .main{padding:20px 16px 48px}
+  .kpis{grid-template-columns:1fr}
+  .band-figs{gap:20px}
+  table{font-size:12px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="wordmark">trip<span class="b">difference</span></div>
+    <div class="wordmark-sub">Kestrel Logistics</div>
+    <nav class="nav">
+      <button data-v="home" aria-current="true">
+        <svg viewBox="0 0 24 24"><path d="M3 10.5 12 4l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+      <button data-v="book">
+        <svg viewBox="0 0 24 24"><path d="M2 12h20M12 2c3 3 3 17 0 20M12 2c-3 3-3 17 0 20"/></svg>Book travel</button>
+      <button data-v="trips">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Trips</button>
+      <button data-v="savings">
+        <svg viewBox="0 0 24 24"><path d="M4 17l5-6 4 4 7-8"/></svg>Savings</button>
+      <button data-v="invoice">
+        <svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg>Invoices</button>
+      <button data-v="travelers">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M17 11a3 3 0 1 0 0-6M21 20c0-2.6-1.7-4.8-4-5.6"/></svg>Travelers</button>
+      <button data-v="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6l1.4 1.4m10 10 1.4 1.4m0-12.8-1.4 1.4m-10 10-1.4 1.4"/></svg>Settings</button>
+    </nav>
+    <div class="side-spacer"></div>
+    <div class="policy-card">
+      <h4>Traveler profiles</h4>
+      <p>112 of 180 employees have complete passport and DOB records.</p>
+      <div class="bar"><i></i></div>
+      <button class="btn ghost" style="width:100%;justify-content:center;font-size:12px;padding:5px">Complete profiles</button>
+    </div>
+    <div class="acct">
+      <div class="avatar">DW</div>
+      <div><div class="acct-name">Dana Whitfield</div><div class="acct-org">Travel manager</div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+
+  <!-- ============ HOME ============ -->
+  <section class="view on" id="v-home">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow" style="margin-bottom:6px">Tuesday, 25 August</div>
+        <h1>Good afternoon, Dana.</h1>
+        <p class="sub" style="margin-top:4px">Reshop ran on 24 live tickets overnight. Two exchanges cleared.</p>
+      </div>
+      <button class="btn">Book travel</button>
+    </div>
+
+    <!-- SIGNATURE: the difference band -->
+    <div class="card band-panel">
+      <div class="band-head">
+        <div>
+          <div class="eyebrow">The difference · 24 live tickets</div>
+          <p class="sub" style="font-size:12.5px;margin-top:4px;max-width:400px">What you paid, against what those same seats cost today.</p>
+        </div>
+        <div class="band-figs">
+          <div><span class="fig-label">Paid</span><span class="fig">$86,412</span></div>
+          <div><span class="fig-label">Worth today</span><span class="fig">$79,988</span></div>
+          <div><span class="fig-label">Recoverable now</span><span class="fig cash">$6,424</span></div>
+        </div>
+      </div>
+      <div class="band-wrap"><svg id="band-home" viewBox="0 0 1000 180" preserveAspectRatio="none" style="width:100%;height:180px;display:block"></svg></div>
+      <div class="band-legend">
+        <span class="lg"><i class="sw paid"></i>What you paid</span>
+        <span class="lg"><i class="sw mkt"></i>Market price today</span>
+        <span class="lg"><i class="sw below"></i>Cheaper than you paid — recoverable</span>
+        <span class="lg"><i class="sw above"></i>More expensive — you bought well</span>
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="card kpi">
+        <span class="k-label">Live tickets</span>
+        <div class="k-val">24</div>
+        <div class="k-note">Across 6 cost centers</div>
+      </div>
+      <div class="card kpi">
+        <span class="k-label">Spent this quarter</span>
+        <div class="k-val">$148,320</div>
+        <div class="k-note">Q3 budget: $195,000</div>
+      </div>
+      <div class="card kpi" style="border-left:3px solid var(--cash)">
+        <span class="k-label">Recovered as cash</span>
+        <div class="k-val" style="color:var(--cash)">$8,320</div>
+        <div class="k-note">Refunded to card ····4417</div>
+      </div>
+      <div class="card kpi" style="border-left:3px solid var(--credit)">
+        <span class="k-label">Recovered as airline credit</span>
+        <div class="k-val" style="color:var(--credit)">$2,520</div>
+        <div class="k-note">In 9 employee loyalty accounts · not cash</div>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div class="card">
+        <div class="card-head"><h2>Upcoming departures</h2><button class="btn ghost">View all trips</button></div>
+        <table>
+          <thead><tr><th>Traveler</th><th>Trip</th><th>Departs</th><th>Status</th><th class="n">Paid</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Marcus Rennick<br><span class="acct-org">Field Ops</span></td>
+              <td class="route">SFO → ORD<small>UA 2286 · PNR K4QW7L</small></td>
+              <td class="num" style="font-size:12px">28 Aug · 07:15</td>
+              <td><span class="chip live"><i class="dot pulse"></i>Watching</span></td>
+              <td class="n">$498.20</td>
+            </tr>
+            <tr>
+              <td>Priya Raman<br><span class="acct-org">Sales</span></td>
+              <td class="route">JFK → LHR<small>AA 100 · PNR RT8MQZ</small></td>
+              <td class="num" style="font-size:12px">29 Aug · 18:40</td>
+              <td><span class="chip live"><i class="dot pulse"></i>Watching</span></td>
+              <td class="n">$1,842.00</td>
+            </tr>
+            <tr>
+              <td>Theo Alcorn<br><span class="acct-org">Engineering</span></td>
+              <td class="route">SEA → AUS<small>AS 512 · PNR JJ2XPD</small></td>
+              <td class="num" style="font-size:12px">02 Sep · 09:05</td>
+              <td><span class="chip warn">Exchange pending</span></td>
+              <td class="n">$386.40</td>
+            </tr>
+            <tr>
+              <td>Nadia Okonjo<br><span class="acct-org">Field Ops</span></td>
+              <td class="route">DEN → PHX<small>UA 1533 · PNR B9YHKN</small></td>
+              <td class="num" style="font-size:12px">03 Sep · 14:20</td>
+              <td><span class="chip neutral">Not eligible</span></td>
+              <td class="n">$214.90</td>
+            </tr>
+            <tr>
+              <td>Marcus Rennick<br><span class="acct-org">Field Ops</span></td>
+              <td class="route">ORD → SFO<small>UA 2287 · PNR K4QW7L</small></td>
+              <td class="num" style="font-size:12px">05 Sep · 16:50</td>
+              <td><span class="chip live"><i class="dot pulse"></i>Watching</span></td>
+              <td class="n">$512.60</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Needs your attention</h2></div>
+        <div class="att a-warn">
+          <i class="mark"></i>
+          <div>
+            <h5>Exchange blocked — SEA → AUS</h5>
+            <p>Fare rules block a second exchange within 24 hours of the last one. Retrying tomorrow at 06:00.</p>
+          </div>
+          <span class="when">2h ago</span>
+        </div>
+        <div class="att a-alert">
+          <i class="mark"></i>
+          <div>
+            <h5>Passport missing — Priya Raman</h5>
+            <p>JFK → LHR departs in 4 days and can't be ticketed without a passport number.</p>
+          </div>
+          <span class="when">1d ago</span>
+        </div>
+        <div class="att">
+          <i class="mark"></i>
+          <div>
+            <h5>Above cabin policy — 1 booking</h5>
+            <p>Theo Alcorn booked premium economy on a 3h flight. Policy caps economy under 6h.</p>
+          </div>
+          <span class="when">2d ago</span>
+        </div>
+        <div class="att">
+          <i class="mark"></i>
+          <div>
+            <h5>Recovery paid as credit, not cash</h5>
+            <p>$310 from AA 100 landed as an airline credit in Priya's AAdvantage account. It won't hit your card.</p>
+          </div>
+          <span class="when">3d ago</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ BOOK ============ -->
+  <section class="view" id="v-book">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow" style="margin-bottom:6px">Book travel</div>
+        <h1>SFO → ORD, 28 August</h1>
+        <p class="sub" style="margin-top:4px">Booking for Marcus Rennick · Field Ops · cost center FO-204</p>
+      </div>
+      <button class="btn ghost">Change traveler</button>
+    </div>
+
+    <div class="card searchbar">
+      <div class="field"><label>From</label><div class="val mono">SFO — San Francisco</div></div>
+      <div class="field"><label>To</label><div class="val mono">ORD — Chicago O'Hare</div></div>
+      <div class="field"><label>Depart</label><div class="val mono">28 Aug 2026</div></div>
+      <div class="field"><label>Traveler</label><div class="val">Marcus Rennick</div></div>
+      <button class="btn">Search</button>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head">
+        <h2>14 flights · sorted by best value after reshop</h2>
+        <span class="eyebrow">Prices include taxes</span>
+      </div>
+
+      <div class="flight-row">
+        <div class="fl-top">
+          <div class="fl-time">07:15 <span>SFO</span></div>
+          <div class="fl-dur">4h 22m<div class="l"></div>Nonstop</div>
+          <div class="fl-time">13:37 <span>ORD</span></div>
+          <div class="fl-carrier"><b>United 2286</b>Boeing 737-900</div>
+        </div>
+        <div class="fares">
+          <div class="fare">
+            <div>
+              <div class="fare-name">Basic Economy</div>
+              <div class="fare-price">$460</div>
+            </div>
+            <div class="fare-chips">
+              <span class="chip ok">In policy</span>
+              <span class="chip bad">Reshop: none</span>
+            </div>
+            <div class="fare-note">Non-changeable. We can't recover a price drop on this fare.</div>
+          </div>
+          <div class="fare rec">
+            <div>
+              <div class="rec-flag">Best value after reshop</div>
+              <div class="fare-name" style="margin-top:3px">Economy</div>
+              <div class="fare-price">$498</div>
+            </div>
+            <div class="fare-chips">
+              <span class="chip ok">In policy</span>
+              <span class="chip ok">Reshop: strong</span>
+            </div>
+            <div class="fare-note">$38 more up front. On SFO → ORD we've recovered an average of <b>$94</b> per ticket on this fare.</div>
+          </div>
+          <div class="fare">
+            <div>
+              <div class="fare-name">Economy Plus</div>
+              <div class="fare-price">$641</div>
+            </div>
+            <div class="fare-chips">
+              <span class="chip warn">$180 over cabin cap</span>
+              <span class="chip warn">Reshop: limited</span>
+            </div>
+            <div class="fare-note">$75 change penalty eats most of a typical drop. Needs approval from Ellen Vasquez.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flight-row">
+        <div class="fl-top">
+          <div class="fl-time">10:40 <span>SFO</span></div>
+          <div class="fl-dur">4h 15m<div class="l"></div>Nonstop</div>
+          <div class="fl-time">16:55 <span>ORD</span></div>
+          <div class="fl-carrier"><b>American 1178</b>Airbus A321</div>
+        </div>
+        <div class="fares">
+          <div class="fare">
+            <div><div class="fare-name">Basic Economy</div><div class="fare-price">$472</div></div>
+            <div class="fare-chips"><span class="chip ok">In policy</span><span class="chip bad">Reshop: none</span></div>
+            <div class="fare-note">Non-changeable. We can't recover a price drop on this fare.</div>
+          </div>
+          <div class="fare">
+            <div><div class="fare-name">Main Cabin</div><div class="fare-price">$531</div></div>
+            <div class="fare-chips"><span class="chip ok">In policy</span><span class="chip ok">Reshop: strong</span></div>
+            <div class="fare-note">Recovers as airline credit on American, not cash to your card.</div>
+          </div>
+          <div class="fare">
+            <div><div class="fare-name">Main Cabin Extra</div><div class="fare-price">$688</div></div>
+            <div class="fare-chips"><span class="chip warn">$227 over cabin cap</span><span class="chip ok">Reshop: strong</span></div>
+            <div class="fare-note">Needs approval from Ellen Vasquez before ticketing.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TRIPS ============ -->
+  <section class="view" id="v-trips">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow" style="margin-bottom:6px">Trips</div>
+        <h1>All company travel</h1>
+        <p class="sub" style="margin-top:4px">86 tickets issued this quarter across 6 cost centers.</p>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost">Export CSV</button>
+        <button class="btn">Book travel</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div style="display:flex;gap:7px;flex-wrap:wrap">
+          <span class="chip live">All · 86</span>
+          <span class="chip neutral">Watching · 24</span>
+          <span class="chip neutral">Recovered · 31</span>
+          <span class="chip neutral">Not eligible · 9</span>
+          <span class="chip neutral">Flown · 22</span>
+        </div>
+        <span class="eyebrow">Q3 2026</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Traveler</th><th>Trip</th><th>Cost center</th><th>Departs</th>
+            <th>Status</th><th class="n">Paid</th><th class="n">Market now</th><th class="n">Recovered</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Marcus Rennick</td>
+            <td class="route">SFO → ORD<small>UA 2286 · K4QW7L</small></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">FO-204</td>
+            <td class="num" style="font-size:12px">28 Aug</td>
+            <td><span class="chip live"><i class="dot pulse"></i>Watching</span></td>
+            <td class="n">$498.20</td>
+            <td class="n" style="color:var(--cash)">$471.00</td>
+            <td class="n" style="color:var(--cash)">$114.20</td>
+          </tr>
+          <tr>
+            <td>Priya Raman</td>
+            <td class="route">JFK → LHR<small>AA 100 · RT8MQZ</small></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">SL-101</td>
+            <td class="num" style="font-size:12px">29 Aug</td>
+            <td><span class="chip live"><i class="dot pulse"></i>Watching</span></td>
+            <td class="n">$1,842.00</td>
+            <td class="n">$1,910.00</td>
+            <td class="n" style="color:var(--credit)">$310.00 cr</td>
+          </tr>
+          <tr>
+            <td>Theo Alcorn</td>
+            <td class="route">SEA → AUS<small>AS 512 · JJ2XPD</small></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">EN-330</td>
+            <td class="num" style="font-size:12px">02 Sep</td>
+            <td><span class="chip warn">Exchange pending</span></td>
+            <td class="n">$386.40</td>
+            <td class="n" style="color:var(--cash)">$341.00</td>
+            <td class="n" style="color:var(--ink-3)">—</td>
+          </tr>
+          <tr>
+            <td>Nadia Okonjo</td>
+            <td class="route">DEN → PHX<small>UA 1533 · B9YHKN</small></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">FO-204</td>
+            <td class="num" style="font-size:12px">03 Sep</td>
+            <td><span class="chip neutral">Not eligible</span></td>
+            <td class="n">$214.90</td>
+            <td class="n" style="color:var(--ink-3)">—</td>
+            <td class="n" style="color:var(--ink-3)">—</td>
+          </tr>
+          <tr>
+            <td>Marcus Rennick</td>
+            <td class="route">ORD → SFO<small>UA 2287 · K4QW7L</small></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">FO-204</td>
+            <td class="num" style="font-size:12px">05 Sep</td>
+            <td><span class="chip live"><i class="dot pulse"></i>Watching</span></td>
+            <td class="n">$512.60</td>
+            <td class="n">$528.00</td>
+            <td class="n" style="color:var(--ink-3)">—</td>
+          </tr>
+          <tr>
+            <td>Ellen Vasquez</td>
+            <td class="route">BOS → SFO<small>AS 1290 · P7WQMR</small></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">EX-001</td>
+            <td class="num" style="font-size:12px">09 Sep</td>
+            <td><span class="chip ok">Recovered</span></td>
+            <td class="n">$604.00</td>
+            <td class="n">$611.00</td>
+            <td class="n" style="color:var(--cash)">$186.50</td>
+          </tr>
+          <tr>
+            <td>Jonah Freed</td>
+            <td class="route">LAX → JFK<small>DL 424 · N3KLVB</small></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">SL-101</td>
+            <td class="num" style="font-size:12px">11 Sep</td>
+            <td><span class="chip ok">Recovered</span></td>
+            <td class="n">$389.00</td>
+            <td class="n">$402.00</td>
+            <td class="n" style="color:var(--credit)">$76.00 cr</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Trip detail preview -->
+    <div class="pagehead" style="margin-top:34px">
+      <div>
+        <div class="eyebrow" style="margin-bottom:6px">Trip detail</div>
+        <h1>SFO → ORD · Marcus Rennick</h1>
+        <p class="sub" style="margin-top:4px">Booked 14 Aug · PNR K4QW7L · cost center FO-204</p>
+      </div>
+      <span class="chip live" style="padding:5px 11px"><i class="dot pulse"></i>Reshop active · checked 41 min ago</span>
+    </div>
+
+    <div class="card band-panel">
+      <div class="band-head">
+        <div>
+          <div class="eyebrow">The difference · this ticket</div>
+          <p class="sub" style="font-size:12.5px;margin-top:4px;max-width:400px">The dashed line steps down each time we exchange the ticket at a lower fare.</p>
+        </div>
+        <div class="band-figs">
+          <div><span class="fig-label">Originally paid</span><span class="fig">$612.40</span></div>
+          <div><span class="fig-label">Now holding</span><span class="fig">$498.20</span></div>
+          <div><span class="fig-label">Recovered</span><span class="fig cash">$114.20</span></div>
+        </div>
+      </div>
+      <div class="band-wrap"><svg id="band-trip" viewBox="0 0 1000 180" preserveAspectRatio="none" style="width:100%;height:180px;display:block"></svg></div>
+      <div class="band-legend">
+        <span class="lg"><i class="sw paid"></i>What you're holding</span>
+        <span class="lg"><i class="sw mkt"></i>Market price</span>
+        <span class="lg"><i class="sw below"></i>Recoverable</span>
+        <span class="lg" style="color:var(--cash)"><b style="font-family:var(--mono);font-size:11px">◆</b> Exchange executed</span>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div class="card">
+        <div class="card-head"><h2>Reshop activity</h2><span class="eyebrow">Every check, logged</span></div>
+        <div class="card-body">
+          <div class="tl">
+            <div class="tl-item t-block">
+              <div class="tl-head"><span class="tl-title">Exchange decided — execution blocked</span><span class="tl-time">25 Aug · 06:12</span></div>
+              <p class="tl-body">Market fell to <span class="num">$471.00</span>. We decided to exchange and were blocked: fare rules on the reissued ticket prevent a second exchange within 24 hours. Retrying 26 Aug at 06:00.</p>
+            </div>
+            <div class="tl-item t-hold">
+              <div class="tl-head"><span class="tl-title">Drop found — held, no action</span><span class="tl-time">24 Aug · 18:44</span></div>
+              <p class="tl-body">Market at <span class="num">$482.10</span>, a <span class="num">$16.10</span> saving. Below the <span class="num">$35</span> action threshold for this route, and inside the normal daily swing. Left alone deliberately.</p>
+            </div>
+            <div class="tl-item t-exec">
+              <div class="tl-head"><span class="tl-title">Exchange executed</span><span class="tl-time">21 Aug · 09:03</span></div>
+              <p class="tl-body">Rebooked UA 2286 — same flight, same seat — at <span class="num">$498.20</span>. <span class="num">$114.20</span> refunded to card ending 4417. Our fee: <span class="num">$28.55</span>. Net to Kestrel: <span class="num">$85.65</span>.</p>
+            </div>
+            <div class="tl-item">
+              <div class="tl-head"><span class="tl-title">Checked — no action</span><span class="tl-time">20 Aug · 06:00</span></div>
+              <p class="tl-body">Market at <span class="num">$627.00</span>, above the <span class="num">$612.40</span> paid. Nothing to recover.</p>
+            </div>
+            <div class="tl-item">
+              <div class="tl-head"><span class="tl-title">Monitoring started</span><span class="tl-time">14 Aug · 11:26</span></div>
+              <p class="tl-body">Ticket issued at <span class="num">$612.40</span> and added to reshop. Fare rules allow same-carrier exchange with no penalty.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card" style="margin-bottom:18px">
+          <div class="card-head"><h2>Itinerary</h2></div>
+          <div class="card-body" style="padding-top:4px">
+            <div class="seg">
+              <div class="seg-code">UA 2286</div>
+              <div class="seg-main">
+                <div class="seg-route">SFO → ORD</div>
+                <div class="seg-meta">28 Aug · 07:15 – 13:37 · 4h 22m · Nonstop</div>
+              </div>
+              <span class="chip neutral">Economy</span>
+            </div>
+            <div class="seg">
+              <div class="seg-code">UA 2287</div>
+              <div class="seg-main">
+                <div class="seg-route">ORD → SFO</div>
+                <div class="seg-meta">05 Sep · 16:50 – 19:42 · 4h 52m · Nonstop</div>
+              </div>
+              <span class="chip neutral">Economy</span>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Traveler</h2></div>
+          <div class="card-body">
+            <div style="display:flex;gap:11px;align-items:center;margin-bottom:13px">
+              <div class="avatar" style="width:34px;height:34px;flex:0 0 34px;font-size:12px">MR</div>
+              <div>
+                <div style="font-weight:600;font-size:13.5px">Marcus Rennick</div>
+                <div class="acct-org">Field Ops · FO-204</div>
+              </div>
+            </div>
+            <div class="ledger" style="border-top:none;padding-top:0">
+              <div><div class="l-lab">MileagePlus</div><div class="l-val">UA·5518904</div></div>
+              <div><div class="l-lab">Known Traveler</div><div class="l-val">98212440</div></div>
+            </div>
+            <div class="ledger">
+              <div><div class="l-lab">Trips this year</div><div class="l-val">11</div></div>
+              <div><div class="l-lab">Recovered</div><div class="l-val" style="color:var(--cash)">$641.30</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SAVINGS ============ -->
+  <section class="view" id="v-savings">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow" style="margin-bottom:6px">Savings</div>
+        <h1>What reshop recovered</h1>
+        <p class="sub" style="margin-top:4px">Q3 2026 · every recovery traced to a ticket and an exchange.</p>
+      </div>
+      <button class="btn ghost">Export for finance</button>
+    </div>
+
+    <div class="split-cards">
+      <div class="card sc cash">
+        <div class="eyebrow">Refunded to card</div>
+        <div class="sc-val">$6,240.00</div>
+        <p>Real cash, returned to the card ending 4417. This reduces your travel spend.</p>
+        <div class="ledger">
+          <div><div class="l-lab">Found</div><div class="l-val">$8,320.00</div></div>
+          <div><div class="l-lab">Our fee (25%)</div><div class="l-val">−$2,080.00</div></div>
+          <div><div class="l-lab">Net to you</div><div class="l-val" style="color:var(--cash)">$6,240.00</div></div>
+        </div>
+      </div>
+      <div class="card sc credit">
+        <div class="eyebrow">Held as airline credit</div>
+        <div class="sc-val">$2,520.00</div>
+        <p>Issued into 9 employees' own loyalty accounts. Usable with that airline only, and it expires. <b style="color:var(--credit)">These two figures are different currencies — they don't net.</b></p>
+        <div class="ledger">
+          <div><div class="l-lab">Credit issued</div><div class="l-val" style="color:var(--credit)">$2,520.00</div></div>
+          <div><div class="l-lab">Our fee, payable in cash</div><div class="l-val">$630.00</div></div>
+        </div>
+        <p style="margin-top:10px;padding-top:9px;border-top:1px solid var(--line-soft);font-size:11.5px">The $630 is invoiced in cash and does not come out of the credit. $410 of this credit expires within 90 days.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Recovery events</h2><span class="eyebrow">31 this quarter</span></div>
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Traveler</th><th>Trip</th><th>Recovered as</th><th class="n">Recovered</th><th class="n">Our fee</th><th>How it settles</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="num" style="font-size:12px">21 Aug</td><td>Marcus Rennick</td>
+            <td class="route">SFO → ORD<small>UA 2286</small></td>
+            <td><span class="chip ok">Cash · card ····4417</span></td>
+            <td class="n" style="color:var(--cash)">$114.20</td><td class="n">$28.55</td>
+            <td style="font-size:11.5px;color:var(--ink-2)">Refunded to card. Fee on August invoice.</td>
+          </tr>
+          <tr>
+            <td class="num" style="font-size:12px">19 Aug</td><td>Priya Raman</td>
+            <td class="route">JFK → LHR<small>AA 100</small></td>
+            <td><span class="chip warn">Credit · P. Raman AAdvantage</span></td>
+            <td class="n" style="color:var(--credit)">$310.00</td><td class="n">$77.50</td>
+            <td style="font-size:11.5px;color:var(--ink-2)">No cash received. Fee billed in cash.</td>
+          </tr>
+          <tr>
+            <td class="num" style="font-size:12px">17 Aug</td><td>Ellen Vasquez</td>
+            <td class="route">BOS → SFO<small>AS 1290</small></td>
+            <td><span class="chip ok">Cash · card ····4417</span></td>
+            <td class="n" style="color:var(--cash)">$186.50</td><td class="n">$46.63</td>
+            <td style="font-size:11.5px;color:var(--ink-2)">Refunded to card. Fee on August invoice.</td>
+          </tr>
+          <tr>
+            <td class="num" style="font-size:12px">15 Aug</td><td>Jonah Freed</td>
+            <td class="route">LAX → JFK<small>DL 424</small></td>
+            <td><span class="chip warn">Credit · J. Freed SkyMiles</span></td>
+            <td class="n" style="color:var(--credit)">$76.00</td><td class="n">$19.00</td>
+            <td style="font-size:11.5px;color:var(--ink-2)">No cash received. Fee billed in cash.</td>
+          </tr>
+          <tr>
+            <td class="num" style="font-size:12px">12 Aug</td><td>Nadia Okonjo</td>
+            <td class="route">DEN → SEA<small>AS 618</small></td>
+            <td><span class="chip ok">Cash · card ····4417</span></td>
+            <td class="n" style="color:var(--cash)">$243.10</td><td class="n">$60.78</td>
+            <td style="font-size:11.5px;color:var(--ink-2)">Refunded to card. Fee on August invoice.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- CREDIT LEDGER -->
+    <div class="card" style="margin-top:18px">
+      <div class="card-head">
+        <div>
+          <h2>Airline credit ledger</h2>
+          <p class="sub" style="font-size:12px;margin-top:2px">Credit sits in each employee's own account. If they leave, it goes with them.</p>
+        </div>
+        <span class="chip bad">$410 expiring within 90 days</span>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Airline</th><th>Held in</th><th>From</th><th class="n">Issued</th><th class="n">Remaining</th><th>Expires</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>American</td><td>Priya Raman<br><span class="acct-org">AAdvantage ····8821</span></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">JFK → LHR · 19 Aug</td>
+            <td class="n">$310.00</td><td class="n" style="color:var(--credit)">$310.00</td>
+            <td class="num" style="font-size:12px">19 Aug 2027</td>
+          </tr>
+          <tr>
+            <td>Delta</td><td>Jonah Freed<br><span class="acct-org">SkyMiles ····4402</span></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">LAX → JFK · 15 Aug</td>
+            <td class="n">$76.00</td><td class="n" style="color:var(--credit)">$76.00</td>
+            <td class="num" style="font-size:12px">15 Aug 2027</td>
+          </tr>
+          <tr>
+            <td>American</td><td>Theo Alcorn<br><span class="acct-org">AAdvantage ····1190</span></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">SEA → DFW · 04 Jun</td>
+            <td class="n">$264.00</td><td class="n" style="color:var(--credit)">$264.00</td>
+            <td class="num" style="font-size:12px;color:var(--alert)">04 Sep 2026</td>
+          </tr>
+          <tr>
+            <td>Delta</td><td>Marcus Rennick<br><span class="acct-org">SkyMiles ····7734</span></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">SFO → ATL · 22 May</td>
+            <td class="n">$188.00</td><td class="n" style="color:var(--ink-3)">$0.00 · redeemed</td>
+            <td class="num" style="font-size:12px;color:var(--ink-3)">—</td>
+          </tr>
+          <tr>
+            <td>American</td><td>Nadia Okonjo<br><span class="acct-org">AAdvantage ····6015</span></td>
+            <td class="num" style="font-size:11.5px;color:var(--ink-2)">DEN → MIA · 11 Jun</td>
+            <td class="n">$146.00</td><td class="n" style="color:var(--credit)">$146.00</td>
+            <td class="num" style="font-size:12px;color:var(--alert)">11 Sep 2026</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ INVOICE ============ -->
+  <section class="view" id="v-invoice">
+    <div class="pagehead">
+      <div>
+        <div class="eyebrow" style="margin-bottom:6px">Invoices</div>
+        <h1>August 2026 statement</h1>
+        <p class="sub" style="margin-top:4px">Kestrel Logistics · issued 01 Sep · due 15 Sep</p>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost">Download PDF</button>
+        <button class="btn">Pay $3,910.00</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+      <div class="card-head"><h2>What we recovered for you in August</h2><span class="eyebrow">Context, not charges</span></div>
+      <div class="card-body" style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div style="border-left:3px solid var(--cash);padding-left:14px">
+          <span class="fig-label">Cash returned to your card</span>
+          <div class="fig cash" style="font-size:23px">$8,320.00</div>
+          <p class="sub" style="font-size:11.5px;margin-top:5px">Already refunded to card ····4417 by the airline. Not billed here.</p>
+        </div>
+        <div style="border-left:3px solid var(--credit);padding-left:14px">
+          <span class="fig-label">Airline credit issued</span>
+          <div class="fig credit" style="font-size:23px">$2,520.00</div>
+          <p class="sub" style="font-size:11.5px;margin-top:5px">Held in employees' loyalty accounts. Never touches your card.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Charges</h2><span class="eyebrow">All amounts payable in cash</span></div>
+      <table>
+        <thead><tr><th>Line</th><th>Basis</th><th class="n">Amount</th></tr></thead>
+        <tbody>
+          <tr style="cursor:default">
+            <td><b style="font-weight:600">Platform subscription</b><br><span class="acct-org">August 2026 · up to 250 travelers</span></td>
+            <td style="font-size:12px;color:var(--ink-2)">Monthly fee</td>
+            <td class="n">$1,200.00</td>
+          </tr>
+          <tr style="cursor:default">
+            <td><b style="font-weight:600">Commission — cash recoveries</b><br><span class="acct-org">22 exchanges</span></td>
+            <td style="font-size:12px;color:var(--ink-2)">25% of <span class="num">$8,320.00</span> refunded to your card</td>
+            <td class="n">$2,080.00</td>
+          </tr>
+          <tr style="cursor:default">
+            <td><b style="font-weight:600">Commission — credit recoveries</b><br><span class="acct-org">9 exchanges</span></td>
+            <td style="font-size:12px;color:var(--ink-2)">25% of <span class="num">$2,520.00</span> issued as airline credit</td>
+            <td class="n">$630.00</td>
+          </tr>
+          <tr style="cursor:default;background:#fafbfb">
+            <td colspan="2" style="text-align:right;font-weight:600">Total due</td>
+            <td class="n" style="font-size:16px;font-weight:600">$3,910.00</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="padding:13px 16px;border-top:1px solid var(--line-soft);background:var(--credit-wash)">
+        <p style="font-size:12px;color:var(--ink-2);line-height:1.55">
+          <b style="color:var(--credit);font-weight:600">On the $630 credit commission —</b>
+          airline credit is not cash and does not reduce this invoice. You are paying $630 for $2,520 of credit held in individual employees' loyalty accounts, redeemable with that airline only, subject to expiry. Two of those credits, totalling $410, expire within 90 days. See the credit ledger under Savings.
+        </p>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <div class="card-head"><h2>Past statements</h2></div>
+      <table>
+        <thead><tr><th>Period</th><th class="n">Recovered (cash)</th><th class="n">Recovered (credit)</th><th class="n">Total charged</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="num" style="font-size:12.5px">July 2026</td>
+            <td class="n" style="color:var(--cash)">$6,140.00</td><td class="n" style="color:var(--credit)">$1,880.00</td>
+            <td class="n">$3,205.00</td><td><span class="chip ok">Paid</span></td>
+          </tr>
+          <tr>
+            <td class="num" style="font-size:12.5px">June 2026</td>
+            <td class="n" style="color:var(--cash)">$4,910.00</td><td class="n" style="color:var(--credit)">$2,410.00</td><td class="n">$3,030.00</td><td><span class="chip ok">Paid</span></td>
+          </tr>
+          <tr>
+            <td class="num" style="font-size:12.5px">May 2026</td>
+            <td class="n" style="color:var(--cash)">$3,280.00</td><td class="n" style="color:var(--credit)">$640.00</td>
+            <td class="n">$2,180.00</td><td><span class="chip ok">Paid</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ PLACEHOLDER VIEWS ============ -->
+  <section class="view" id="v-travelers">
+    <div class="pagehead"><div><div class="eyebrow" style="margin-bottom:6px">Travelers</div><h1>Employee roster</h1></div></div>
+    <div class="card empty"><p>Not designed in this pass. Roster of 180 employees, cost centers, passport and loyalty details, bulk import.</p></div>
+  </section>
+  <section class="view" id="v-settings">
+    <div class="pagehead"><div><div class="eyebrow" style="margin-bottom:6px">Settings</div><h1>Company account</h1></div></div>
+    <div class="card empty"><p>Not designed in this pass. Travel policy rules, approvers, payment method, invoices, permissions.</p></div>
+  </section>
+
+  </main>
+</div>
+
+<script>
+/* ---------- nav ---------- */
+document.querySelectorAll('.nav button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('.nav button').forEach(x=>x.setAttribute('aria-current','false'));
+    b.setAttribute('aria-current','true');
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+    document.getElementById('v-'+b.dataset.v).classList.add('on');
+    window.scrollTo(0,0);
+  });
+});
+
+/* ---------- seeded noise ---------- */
+function rng(seed){return()=>{seed=(seed*1664525+1013904223)%4294967296;return seed/4294967296}}
+
+/* ---------- THE DIFFERENCE BAND ---------- */
+function band(id,{series,baseline,marks=[]}){
+  const svg=document.getElementById(id);
+  const W=1000,H=180,PT=16,PB=16;
+  const all=series.concat(baseline);
+  const lo=Math.min(...all),hi=Math.max(...all);
+  const pad=(hi-lo)*0.35||10;
+  const min=lo-pad,max=hi+pad;
+  const X=i=>i/(series.length-1)*W;
+  const Y=v=>PT+(1-(v-min)/(max-min))*(H-PT-PB);
+
+  const linePts=series.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
+  const basePts=baseline.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`);
+  const area=`M${linePts.join(' L')} L${basePts.slice().reverse().join(' L')} Z`;
+  const baseLine=`M${basePts.join(' L')}`;
+  const mktLine=`M${linePts.join(' L')}`;
+
+  // clip regions: split at the baseline itself
+  const belowClip=`M${basePts.join(' L')} L${W},${H} L0,${H} Z`;
+  const aboveClip=`M${basePts.join(' L')} L${W},0 L0,0 Z`;
+
+  const markEls=marks.map(m=>{
+    const x=X(m.i),y=Y(baseline[m.i]);
+    return `<path d="M${x},${y-5} L${x+5},${y} L${x},${y+5} L${x-5},${y} Z" fill="#3d7a53" stroke="#fbfbfa" stroke-width="1.5"/>`;
+  }).join('');
+
+  // sparse gridlines
+  let grid='';
+  for(let g=1;g<4;g++){const y=PT+(g/4)*(H-PT-PB);grid+=`<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="#eceef0" stroke-width="1"/>`;}
+
+  svg.innerHTML=`
+    <defs>
+      <clipPath id="${id}-below"><path d="${belowClip}"/></clipPath>
+      <clipPath id="${id}-above"><path d="${aboveClip}"/></clipPath>
+    </defs>
+    ${grid}
+    <g clip-path="url(#${id}-above)"><path d="${area}" fill="rgba(47,93,138,0.10)"/></g>
+    <g clip-path="url(#${id}-below)"><path d="${area}" fill="rgba(61,122,83,0.20)"/></g>
+    <path d="${baseLine}" fill="none" stroke="#8a8f96" stroke-width="1.25" stroke-dasharray="4 3"/>
+    <path d="${mktLine}" fill="none" stroke="#1a1d21" stroke-width="1.4" stroke-linejoin="round"/>
+    ${markEls}
+  `;
+}
+
+/* --- home: aggregate of 24 live tickets, 60 days --- */
+(function(){
+  const r=rng(20260825);
+  const N=60,paid=86412;
+  let v=91000,s=[];
+  for(let i=0;i<N;i++){
+    const drift=-90+ (r()-0.5)*2600;
+    v=Math.max(74000,Math.min(99000,v+drift));
+    s.push(v);
+  }
+  s[N-1]=79988;
+  band('band-home',{series:s,baseline:new Array(N).fill(paid)});
+})();
+
+/* --- trip: one ticket, baseline steps down on exchange --- */
+(function(){
+  const r=rng(778811);
+  const N=44;
+  let v=628,s=[],b=[];
+  const exchangeAt=26; // index where exchange executed
+  for(let i=0;i<N;i++){
+    const drift=(r()-0.52)*34;
+    v=Math.max(462,Math.min(668,v+drift));
+    if(i>N-8) v=Math.min(v,500);
+    s.push(v);
+    b.push(i<exchangeAt?612.40:498.20);
+  }
+  s[N-1]=471;
+  band('band-trip',{series:s,baseline:b,marks:[{i:exchangeAt}]});
+})();
+</script>
+</body>
+</html>
