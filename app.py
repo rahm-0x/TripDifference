@@ -20,7 +20,7 @@ import hmac
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -36,9 +36,10 @@ import duffel_http
 import eligibility
 import parsing
 import paths
+import policy
 import supabase_auth
 from duffel_http import DuffelError
-from engine import (OrderSnapshot, Outcome, ReshopPolicy, SERVICE_FEE_RATE,
+from engine import (OrderSnapshot, Outcome, ReshopPolicy,
                     evaluate, log_decision, log_eligibility)
 from prices import (DuffelPriceSource, Route, SimulatedPriceSource,
                     get_price_source)
@@ -190,7 +191,7 @@ def slice_view(sl):
     }
 
 
-def offer_view(offer):
+def offer_view(offer, policy_rules=None):
     """
     Duffel offer → view model.
 
@@ -199,9 +200,17 @@ def offer_view(offer):
     monitored at search time either. Offers carry no available_actions, so that
     gate is skipped here and re-checked once the order exists (FINDINGS.md §8) —
     treat the search-time tag as a prediction, not a guarantee.
+
+    policy_rules lets a caller checking many offers (search()) fetch the
+    account's active rules once rather than once per offer; a single-offer
+    caller (fetch_offer_view) leaves it None and this fetches for itself.
+    Advisory only here — nothing renders policy_enforcement/policy_result
+    yet (Phase 4 UI); the hard gate lives in book().
     """
     slices = [v for v in (slice_view(s) for s in offer.get("slices", [])) if v]
     a = eligibility.assess(offer)
+    rules = policy_rules if policy_rules is not None else db.policy_rules_active(_account())
+    decision = policy.evaluate_with_rules(rules, offer)
     first = slices[0] if slices else {}
     return {
         "id": offer["id"],
@@ -213,6 +222,8 @@ def offer_view(offer):
         "monitorable": a.should_poll,
         "eligibility_label": a.label,
         "eligibility_copy": a.customer_copy,
+        "policy_enforcement": decision.enforcement,
+        "policy_result": decision.to_json(),
         # flattened, for the results row
         "origin": first.get("origin", ""), "destination": first.get("destination", ""),
         "depart": first.get("depart", ""), "arrive": first.get("arrive", ""),
@@ -835,7 +846,8 @@ def search():
         return render_template("results.html", nav="search", offers=None, form=form, error=str(exc))
 
     raw = sorted(data.get("offers", []), key=lambda x: Decimal(x["total_amount"]))
-    offers = [offer_view(o) for o in raw[:20]]
+    rules = db.policy_rules_active(_account())
+    offers = [offer_view(o, policy_rules=rules) for o in raw[:20]]
     return render_template("results.html", nav="search", offers=offers, form=form,
                            total=len(raw),
                            unmonitorable=sum(1 for o in offers if not o["monitorable"]))
@@ -994,21 +1006,100 @@ def payment_step():
                                error=f"{exc} — offers expire; search again.")
 
 
+def _fare_disposition(order):
+    """orders.refundable/fare_conditions, frozen at purchase time from the
+    same `conditions` object eligibility.assess() already reads off an
+    order. `refundable` is a fast derived flag for filtering; the full
+    object is kept so a later assessment can reason over penalties and
+    currency, not just a yes/no. None (not False) when the airline hasn't
+    published refund conditions at all — matches how eligibility.py treats
+    an unknown penalty as unknown, never as a silent no.
+
+    This is the data eligibility.assess() would need to stop recommending
+    an exchange that forfeits value instead of returning it — capturing it
+    is this phase's job; teaching the decision engine to read it is not
+    (out of scope here, flagged in the writeup).
+    """
+    conditions = order.get("conditions") or {}
+    refund = conditions.get("refund_before_departure")
+    refundable = bool(refund.get("allowed")) if isinstance(refund, dict) else None
+    return refundable, conditions
+
+
 @app.route("/book", methods=["POST"])
 @auth.login_required
 def book():
     offer_id = request.form["offer_id"]
+    account_id = _account()
     try:
         offer = duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer")
-        seats = offer.get("passengers", []) or [{}]
-        people = passengers_from_form(len(seats))
-        problems = passenger_problems(people)
-        if problems:
-            return render_template("passenger.html", nav="search",
-                                   offer=offer_view(offer), people=people,
-                                   saved=[{k: t[k] for k in db.TRAVELER_FIELDS}
-                                          for t in db.travelers(_account())],
-                                   error=" · ".join(problems)), 400
+    except (DuffelError, RuntimeError) as exc:
+        return render_template("results.html", nav="search", offers=None, form={},
+                               error=f"{exc} — offers expire; search again.")
+
+    seats = offer.get("passengers", []) or [{}]
+    people = passengers_from_form(len(seats))
+    saved = [{k: t[k] for k in db.TRAVELER_FIELDS} for t in db.travelers(account_id)]
+    problems = passenger_problems(people)
+    if problems:
+        return render_template("passenger.html", nav="search", offer=offer_view(offer),
+                               people=people, saved=saved,
+                               error=" · ".join(problems)), 400
+
+    # --- gates: everything that can stop a booking outright, checked here
+    # before anything is created anywhere — same position passenger_problems()
+    # already occupies, extended rather than bolted on beside it.
+
+    card = db.account_card(account_id)
+    if not card:
+        return render_template("payment.html", nav="search", offer=offer_view(offer),
+                               people=people,
+                               error="No payment method on file — link a company card "
+                                     "before booking."), 402
+
+    decision = policy.evaluate(account_id, offer)
+    if decision.blocked:
+        detail = "; ".join(r.detail for r in decision.results if r.enforcement == "block")
+        return render_template("payment.html", nav="search", offer=offer_view(offer),
+                               people=people,
+                               error=f"Blocked by travel policy: {detail}"), 403
+
+    if decision.requires_approval:
+        # Duffel is never called. Offer requests are single-use and offers
+        # expire (FINDINGS.md §4), so an approval that sits overnight can't
+        # hold a live offer to purchase later — the snapshot and the
+        # offer's current price (the ceiling) are what a later purchase
+        # step re-searches and matches against, not this offer_id.
+        facts = policy.extract_itinerary_facts(offer)
+        db.booking_request_create(
+            account_id, requested_by=auth.current_user()["id"],
+            itinerary_snapshot={"slices": offer.get("slices", []), **facts},
+            amount=facts["amount"], currency=facts["currency"],
+            policy_result=decision.to_json())
+        flash("This booking needs manager approval before it can be purchased — "
+              "you'll be notified once it's reviewed.", "reservation_error")
+        return redirect(url_for("trips"))
+
+    # A double-submitted Pay button, recovered before spending anything new.
+    # The offer_request_already_booked handler below is the backstop for
+    # the narrower race between this check and the Duffel call itself.
+    existing = db.order_for_offer(account_id, offer_id)
+    if existing:
+        return redirect(url_for("trip_booked", order_id=existing["order_id"]))
+
+    # --- payment: authorize now, capture only once Duffel confirms the
+    # order exists. idempotency_key means a retried request (network blip,
+    # double click) returns the same authorization rather than creating a
+    # second hold on the company's card.
+    try:
+        intent = billing.authorize_fare(
+            account_id, amount=offer["total_amount"], currency=offer["total_currency"],
+            idempotency_key=f"book-{offer_id}")
+    except billing.CardError as exc:
+        return render_template("payment.html", nav="search", offer=offer_view(offer),
+                               people=people, error=f"Payment failed: {exc}"), 402
+
+    try:
         order = duffel_http.request("POST", "/air/orders", body={
             "data": {
                 "type": "instant",
@@ -1018,16 +1109,26 @@ def book():
                 # single-passenger version did, books several copies of one person.
                 "passengers": [{"id": seat["id"], **person}
                                for seat, person in zip(seats, people)],
+                # TD's own Duffel balance still funds the actual purchase — a
+                # working buffer topped up separately, not a float extended
+                # to the customer. The company's card is charged above, in
+                # the same request; this call is unchanged from before.
                 "payments": [{"type": "balance", "currency": offer["total_currency"],
                               "amount": offer["total_amount"]}],
             }
         }, label="ui_book")
     except (DuffelError, RuntimeError) as exc:
+        # The hold must never become a charge for a ticket that doesn't
+        # exist. Cancel, don't capture-then-refund: an authorization that
+        # never captures never appears on the customer's statement; a
+        # charge-then-refund is two lines and a support ticket for a
+        # ticket that was never issued.
+        billing.cancel_authorization(intent.id)
         if isinstance(exc, DuffelError) and "offer_request_already_booked" in (exc.codes or []):
             # Almost always a double-submitted Pay button. The first attempt
             # succeeded, so show that booking rather than an error implying the
             # customer was not booked at all.
-            existing = db.order_for_offer(_account(), offer_id)
+            existing = db.order_for_offer(account_id, offer_id)
             if existing:
                 return redirect(url_for("trip_booked", order_id=existing["order_id"]))
             return render_template("results.html", nav="search", offers=None, form={},
@@ -1037,12 +1138,16 @@ def book():
         return render_template("results.html", nav="search", offers=None, form={},
                                error=str(exc))
 
-    has_card = bool(db.account_card(_account()))
+    billing.capture_authorization(intent.id)
+
+    has_card = True  # gated above; this line never reaches here without one
     snap = OrderSnapshot.from_duffel(order, has_card=has_card)
 
     # Gate monitoring on fare conditions at booking time. Never default to on.
     assessment = snap.eligibility
     log_eligibility(order["id"], assessment)
+
+    refundable, fare_conditions = _fare_disposition(order)
 
     upsert_order({
         "order_id": order["id"],
@@ -1055,12 +1160,14 @@ def book():
         "booked_at": datetime.now(timezone.utc).isoformat(),
         "last_decision": None, "raw": order,
         # This route purchases via Duffel on TD's own balance — under the
-        # bolt-on model that only ever happens as the internal rebook step,
-        # never as a customer-facing "book with us" flow.
+        # corporate model that's every booking, always, not an internal-only step.
         "source": "td_rebook",
         # Duffel's cash-offer search is the only thing this route can book —
         # there is no points/award path through it.
         "fare_type": "cash",
+        "refundable": refundable,
+        "fare_conditions": fare_conditions,
+        "stripe_payment_intent_id": intent.id,
     })
 
     # Seed the simulated scenario from reality, so simulation starts at the
@@ -1167,6 +1274,30 @@ def wallet():
     rows = db.wallet_transactions(_account())
     return render_template("wallet.html", nav="wallet", rows=rows,
                            totals=db.wallet_totals(rows))
+
+
+def _json_safe(row):
+    return {k: (str(v) if isinstance(v, Decimal) else v) for k, v in dict(row).items()}
+
+
+@app.route("/accounts/invoice/generate", methods=["POST"])
+@auth.login_required
+def generate_invoice_route():
+    """Minimal proof this phase's invoice generation works end to end — no
+    UI, no draft/review step, no approval; Phase 4 builds the real screen.
+    Defaults to last full calendar month; period_start/period_end (YYYY-MM-DD)
+    in the form override it. Returns the generated invoice and its lines as
+    JSON, since there is nothing to render this phase.
+    """
+    today = datetime.now(timezone.utc).date()
+    default_end = today.replace(day=1)
+    default_start = (default_end - timedelta(days=1)).replace(day=1)
+    period_start = request.form.get("period_start") or default_start.isoformat()
+    period_end = request.form.get("period_end") or default_end.isoformat()
+
+    invoice = db.generate_invoice(_account(), period_start, period_end)
+    lines = db.invoice_lines_for(invoice["id"])
+    return {"invoice": _json_safe(invoice), "lines": [_json_safe(l) for l in lines]}
 
 
 # ---------------------------------------------------------------------------
@@ -1686,14 +1817,27 @@ def execute(order_id, action):
             if delta < 0:
                 extra = {"refunded": str(-delta), "original_paid": record.get("paid")}
                 paid = Decimal(record.get("paid") or 0)
-                # An exchange settles the price difference in cash either
-                # direction (never as an airline credit) — Duffel's
-                # order-change payment object only ever takes a card/balance
-                # payment or nothing, there is no credit branch here.
+                # refund_to is Duffel's own signal for which path fired, the
+                # same field the cancel branch below already reads — Duffel
+                # confirmed in writing that an exchange's residual value may
+                # be forfeited, refunded to the original payment method, or
+                # issued as a future travel credit depending on the original
+                # fare's rules. Assuming cash-refund unconditionally (the
+                # prior belief here) was wrong; a negative change_total this
+                # engine only ever reaches after deciding to reshop always
+                # means *something* comes back, so airline_credit is the
+                # only other branch reachable at this point — forfeiture
+                # would mean nothing was quoted to return in the first
+                # place, which the engine's own gate (change_total >= 0 =
+                # skip) already refuses to act on before execution.
+                is_credit = (result.get("refund_to") or "").replace("_", "") \
+                    in ("airlinecredit", "airlinecredits")
+                delivery_type = "airline_credit" if is_credit else "refund_to_card"
+                delivery_detail = (f"{record.get('carrier')} account" if is_credit
+                                   else f"card ending in {card['last4']}")
                 savings = {"old_amount": str(paid), "new_amount": str(paid + delta),
                           "realized_savings": str(-delta),
-                          "delivery_type": "refund_to_card",
-                          "delivery_detail": f"card ending in {card['last4']}"}
+                          "delivery_type": delivery_type, "delivery_detail": delivery_detail}
         else:
             quote = duffel_http.request("POST", "/air/order_cancellations", body={
                 "data": {"order_id": order_id}}, label="ui_cancel_quote")
@@ -1702,20 +1846,26 @@ def execute(order_id, action):
                 body={"data": {}}, label="ui_cancel_confirm")
             note = (f"cancelled at {result.get('confirmed_at')}, "
                     f"refunded {result.get('refund_amount')} {result.get('refund_currency')}")
-            savings = None
+            paid = Decimal(record.get("paid") or 0)
             refunded = Decimal(result.get("refund_amount") or 0)
+            is_credit = (result.get("refund_to") or "").replace("_", "") \
+                in ("airlinecredit", "airlinecredits")
             if refunded > 0:
-                paid = Decimal(record.get("paid") or 0)
-                # refund_to is Duffel's own signal for which path fired —
-                # 'airline_credit'/'airline_credits' means the airline's
-                # policy paid out as a loyalty-account credit, not cash back.
-                is_credit = (result.get("refund_to") or "").replace("_", "") \
-                    in ("airlinecredit", "airlinecredits")
-                savings = {"old_amount": str(paid), "new_amount": str(paid - refunded),
-                          "realized_savings": str(refunded),
-                          "delivery_type": "airline_credit" if is_credit else "refund_to_card",
-                          "delivery_detail": (f"{record.get('carrier')} account" if is_credit
-                                              else f"card ending in {card['last4']}")}
+                delivery_type = "airline_credit" if is_credit else "refund_to_card"
+                delivery_detail = (f"{record.get('carrier')} account" if is_credit
+                                   else f"card ending in {card['last4']}")
+            else:
+                # Duffel confirmed the cancellation but nothing came back —
+                # this fare's rules forfeit the residual value rather than
+                # refunding or crediting it. A real, recordable event
+                # (the ticket is gone and nothing was recovered for it),
+                # not silently dropped just because no cash moved — the
+                # old `if refunded > 0` gate used to skip this entirely.
+                delivery_type = "forfeited"
+                delivery_detail = "no refund or credit issued — fare rules forfeit the residual value"
+            savings = {"old_amount": str(paid), "new_amount": str(paid - refunded),
+                      "realized_savings": str(refunded),
+                      "delivery_type": delivery_type, "delivery_detail": delivery_detail}
     except (DuffelError, RuntimeError) as exc:
         # The order-change *create* call is safe to retry; a failed confirm is
         # not, because the exchange may have landed anyway. Only release the
@@ -1730,9 +1880,32 @@ def execute(order_id, action):
     db.finish_execution(attempt["id"], "succeeded", note=note,
                         duffel_change_id=duffel_change_id, result=result)
     if savings:
-        db.savings_event_create(order_id, execution_attempt_id=attempt["id"],
-                                currency=record.get("currency") or "",
-                                commission_rate=SERVICE_FEE_RATE, **savings)
+        # The account's real rate, never the module-level 0.25 constant —
+        # savings_events.commission_rate exists precisely so a per-account
+        # rate (Phase 1's accounts.commission_rate) doesn't have to fight
+        # a single global default. fee_split()'s own preview math during
+        # the decision/cycle step still uses SERVICE_FEE_RATE — threading
+        # a per-account rate through the decision engine's preview text is
+        # a separate change from what actually gets billed, out of scope
+        # here (the engine's tested decision logic is untouched).
+        rate = db.account_commission_rate(record["account_id"])
+        event = db.savings_event_create(order_id, execution_attempt_id=attempt["id"],
+                                        currency=record.get("currency") or "",
+                                        commission_rate=rate, **savings)
+        if savings["delivery_type"] == "airline_credit":
+            # The liability register: credit sits in the traveler's own
+            # loyalty account and leaves with them if they quit. Duffel's
+            # cancellation response carries no loyalty account number or
+            # credit expiry to attach (FINDINGS.md's verified response
+            # shape) — left blank/None, editable later once a booking is
+            # linked to a traveler's own loyalty_programs.
+            db.airline_credit_create(
+                record["account_id"], traveler_id=record.get("traveler_id"),
+                airline=record.get("carrier") or "",
+                loyalty_account_reference="",
+                order_id=order_id, savings_event_id=event["id"],
+                amount_issued=savings["realized_savings"],
+                currency=record.get("currency") or "", expires_at=None)
     fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
     upsert_order({"order_id": order_id, "raw": fresh, "monitoring": False,
                   "executed": note, "paid": fresh["total_amount"], **extra})

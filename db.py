@@ -223,9 +223,11 @@ _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "currency", "monitoring", "executed", "raw", "last_decision",
                "sim_scenario", "simulated", "sim_paid", "sim_refunded",
                "offer_id", "source", "fare_type", "traveler_id",
-               "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin")
+               "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin",
+               "cost_center_id", "refundable", "fare_conditions",
+               "stripe_payment_intent_id")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
-_JSON = {"raw", "last_decision", "sim_scenario"}
+_JSON = {"raw", "last_decision", "sim_scenario", "fare_conditions"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
 # DEFAULT never fires — the coercion has to happen here instead.
 _TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currency",
@@ -236,7 +238,11 @@ _TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currenc
 _ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash"}
 # Nullable uuid FK — a blank string must stay NULL, not become '' (invalid
 # uuid input), unlike the plain text fields above.
-_NULLABLE_UUID = {"traveler_id"}
+_NULLABLE_UUID = {"traveler_id", "cost_center_id"}
+# refundable (nullable boolean) and stripe_payment_intent_id (nullable
+# text) need no coercion at all — None must stay None (unknown disposition,
+# no charge yet), not become False/''. They fall through the loop below
+# untouched, same as any column not named in one of these sets.
 
 
 def _to_record(row):
@@ -823,12 +829,28 @@ def wallet_transactions(account_id, limit=100):
     Two sources, deliberately:
 
       charges     one per booking, from `orders`
-      recoveries  one per *executed* exchange, from the audit trail, split into
-                  the amount recovered and our share of it
+      recoveries  one per real execution, from `savings_events` — the
+                  actual customer/commission-facing fact table a real
+                  execution populates, not the decision/audit trail
 
-    Only execution = 'executed' counts. A simulated or blocked exchange is a
-    decision the engine reached, not money that moved, and putting one in a
-    ledger would be a lie about the balance.
+    Real recoveries come from `savings_events`, not `audit_events`: no code
+    path in this app has ever set `audit_events.execution = 'executed'`
+    (only 'awaiting_confirmation'/'blocked_simulated' are ever logged, at
+    decision time, before an execute route runs) — the old query's
+    `a.execution = 'executed'` branch was dead code, so a real recovery
+    could never have appeared here before this fix, only a simulated one.
+    Simulated recoveries still come from `audit_events` (savings_events is
+    never populated for them, by design) and are included so the flow can
+    be demonstrated, but arrive flagged and are never added into a real
+    total — only the most recent run per order shows, since the audit
+    trail keeps every attempt but a ledger showing five superseded
+    what-ifs is noise.
+
+    A 'forfeited' delivery — the ticket got cheaper and nothing came
+    back — is a real, visible row, not silently absent: it renders as a
+    recovery of the account's own commission_rate-based zero (nothing was
+    realized, so nothing is owed on it either) rather than being dropped
+    because no cash moved.
     """
     charges = q("""SELECT created_at AS ts, order_id, booking_reference, route,
                           paid AS amount, currency, source
@@ -836,30 +858,43 @@ def wallet_transactions(account_id, limit=100):
                     WHERE account_id = %s AND paid IS NOT NULL""",
                 (account_id,), fetch="all")
 
-    # Simulated recoveries are included so the flow can be demonstrated, but
-    # they arrive flagged and every view that shows them says so. They are
-    # never added into a real total.
-    # Executed rows are history and always show. Simulated ones reflect current
-    # state instead: only while the order is still flagged, and only the most
-    # recent run — the audit trail keeps every attempt, but a ledger showing
-    # five superseded what-ifs, and still showing them after a reset, is noise.
-    execs = q("""SELECT * FROM (
-                   SELECT DISTINCT ON (a.order_id, a.execution)
-                          a.ts, a.order_id, o.booking_reference, o.route,
-                          a.execution,
-                          a.payload->>'recovered'   AS recovered,
-                          a.payload->>'service_fee' AS service_fee,
-                          COALESCE(NULLIF(a.currency, ''), o.currency) AS currency
-                     FROM audit_events a
-                     JOIN orders o ON o.order_id = a.order_id
-                    WHERE o.account_id = %s
-                      AND a.kind = 'execution'
-                      AND a.payload->>'recovered' IS NOT NULL
-                      AND (a.execution = 'executed'
-                           OR (a.execution = 'blocked_simulated' AND o.simulated))
-                    ORDER BY a.order_id, a.execution, a.ts DESC) x
-                 ORDER BY x.ts DESC""",
-              (account_id,), fetch="all")
+    real_execs = q("""SELECT se.created_at AS ts, se.order_id, o.booking_reference, o.route,
+                             se.realized_savings, se.commission_amount, se.delivery_type,
+                             COALESCE(NULLIF(se.currency, ''), o.currency) AS currency
+                        FROM savings_events se
+                        JOIN orders o ON o.order_id = se.order_id
+                       WHERE o.account_id = %s
+                       ORDER BY se.created_at DESC""",
+                   (account_id,), fetch="all")
+
+    sim_execs = q("""SELECT * FROM (
+                       SELECT DISTINCT ON (a.order_id, a.execution)
+                              a.ts, a.order_id, o.booking_reference, o.route,
+                              a.payload->>'recovered'   AS recovered,
+                              a.payload->>'service_fee' AS service_fee,
+                              COALESCE(NULLIF(a.currency, ''), o.currency) AS currency
+                         FROM audit_events a
+                         JOIN orders o ON o.order_id = a.order_id
+                        WHERE o.account_id = %s
+                          AND a.kind = 'execution'
+                          AND a.execution = 'blocked_simulated'
+                          AND o.simulated
+                          AND a.payload->>'recovered' IS NOT NULL
+                        ORDER BY a.order_id, a.execution, a.ts DESC) x
+                     ORDER BY x.ts DESC""",
+                  (account_id,), fetch="all")
+
+    _DELIVERY_LABEL = {
+        "refund_to_card": "Fare drop recovered — refunded to card",
+        "airline_credit": "Fare drop recovered — airline credit issued",
+        "forfeited": "Fare drop found — value forfeited, nothing recovered",
+    }
+    # Real, not yet moved by us: the commission is billed on the account's
+    # next invoice (see generate_invoice), not deducted here — this ledger
+    # must not read as a completed deduction against money that already
+    # moved, since under the merchant-of-record model the full recovery
+    # goes straight to the company's card via Duffel, untouched by TD.
+    FEE_LABEL = "Service fee — billed on your next invoice, not yet charged"
 
     rows = []
     for c in charges:
@@ -874,18 +909,31 @@ def wallet_transactions(account_id, limit=100):
                      "reference": c["booking_reference"], "route": c["route"],
                      "amount": -Decimal(c["amount"]) if td_funded else Decimal("0"),
                      "currency": c["currency"]})
-    for e in execs:
+    for e in real_execs:
+        recovered = Decimal(e["realized_savings"])
+        fee = Decimal(e["commission_amount"] or 0)
+        rows.append({"ts": e["ts"], "kind": "recovery", "simulated": False,
+                     "delivery_type": e["delivery_type"],
+                     "label": _DELIVERY_LABEL[e["delivery_type"]],
+                     "order_id": e["order_id"],
+                     "reference": e["booking_reference"], "route": e["route"],
+                     "amount": recovered, "currency": e["currency"]})
+        if fee:
+            rows.append({"ts": e["ts"], "kind": "fee", "simulated": False,
+                         "label": FEE_LABEL, "order_id": e["order_id"],
+                         "reference": e["booking_reference"], "route": e["route"],
+                         "amount": -fee, "currency": e["currency"]})
+    for e in sim_execs:
         recovered = Decimal(e["recovered"])
         fee = Decimal(e["service_fee"] or 0)
-        sim = e["execution"] != "executed"
-        rows.append({"ts": e["ts"], "kind": "recovery", "simulated": sim,
+        rows.append({"ts": e["ts"], "kind": "recovery", "simulated": True,
+                     "delivery_type": "refund_to_card",
                      "label": "Fare drop recovered", "order_id": e["order_id"],
                      "reference": e["booking_reference"], "route": e["route"],
                      "amount": recovered, "currency": e["currency"]})
         if fee:
-            rows.append({"ts": e["ts"], "kind": "fee", "simulated": sim,
-                         "label": "Service fee (25% of recovery)",
-                         "order_id": e["order_id"],
+            rows.append({"ts": e["ts"], "kind": "fee", "simulated": True,
+                         "label": FEE_LABEL, "order_id": e["order_id"],
                          "reference": e["booking_reference"], "route": e["route"],
                          "amount": -fee, "currency": e["currency"]})
 
@@ -916,3 +964,143 @@ def order_for_offer(account_id, offer_id):
                             WHERE account_id = %s AND offer_id = %s
                             ORDER BY created_at LIMIT 1""",
                         (account_id, offer_id), fetch="one"))
+
+
+def account_commission_rate(account_id):
+    """The account's real rate — never the hardcoded 0.25 module constant.
+    Falls back to 0.25 only if the account itself can't be found, which
+    should not happen in practice."""
+    row = q("SELECT commission_rate FROM accounts WHERE id = %s",
+           (account_id,), fetch="one")
+    return row["commission_rate"] if row else Decimal("0.25")
+
+
+# ---------------------------------------------------------------------------
+# travel policy
+# ---------------------------------------------------------------------------
+
+def policy_rules_active(account_id):
+    return q("""SELECT id, rule_type, scope, value, enforcement
+                FROM policy_rules WHERE account_id = %s AND active""",
+             (account_id,), fetch="all")
+
+
+# ---------------------------------------------------------------------------
+# booking requests — approval lifecycle, pre-purchase
+# ---------------------------------------------------------------------------
+
+def booking_request_create(account_id, *, requested_by, itinerary_snapshot, amount,
+                           currency, policy_result, traveler_id=None, cost_center_id=None):
+    return q("""INSERT INTO booking_requests
+                   (account_id, traveler_id, cost_center_id, requested_by,
+                    itinerary_snapshot, amount, currency, policy_result)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *""",
+            (account_id, traveler_id, cost_center_id, requested_by,
+             Jsonb(itinerary_snapshot), _num(amount), currency, Jsonb(policy_result)),
+            fetch="one")
+
+
+# ---------------------------------------------------------------------------
+# airline credits — a liability register, not a log
+# ---------------------------------------------------------------------------
+
+def airline_credit_create(account_id, *, traveler_id, airline, loyalty_account_reference,
+                          order_id, savings_event_id, amount_issued, currency, expires_at=None):
+    return q("""INSERT INTO airline_credits
+                   (account_id, traveler_id, airline, loyalty_account_reference,
+                    order_id, savings_event_id, amount_issued, amount_remaining,
+                    currency, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *""",
+            (account_id, traveler_id, airline, loyalty_account_reference or "",
+             order_id, savings_event_id, _num(amount_issued), _num(amount_issued),
+             currency, expires_at), fetch="one")
+
+
+# ---------------------------------------------------------------------------
+# invoicing
+# ---------------------------------------------------------------------------
+
+def generate_invoice(account_id, period_start, period_end):
+    """One invoice for one account over [period_start, period_end).
+
+    Built from savings_events not yet billed (invoice_line_id IS NULL) plus
+    the account's subscription_fee. 'forfeited' events are excluded by a
+    positive allowlist (delivery_type IN ('refund_to_card','airline_credit'))
+    rather than relied on to never carry a nonzero commission_amount —
+    forfeited recoveries are never billable, no commission on value that
+    was destroyed.
+
+    Every line is a positive charge; invoice_lines.amount's own CHECK
+    (amount >= 0) makes a credit line netting against a cash line
+    structurally impossible, not just a convention this function follows.
+    Cash refunds never appear here at all — Duffel refunds the company's
+    card directly, TD's books never see that money.
+
+    invoices.total is stored, computed once here, and frozen from that
+    point on — an issued invoice must not change if a savings_event or the
+    account's commission_rate is edited afterward.
+    """
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT subscription_fee FROM accounts WHERE id = %s", (account_id,))
+        acct = cur.fetchone()
+        subscription_fee = acct["subscription_fee"] if acct else None
+
+        cur.execute("""SELECT se.id, se.realized_savings, se.commission_amount,
+                              se.commission_rate, se.delivery_type,
+                              COALESCE(NULLIF(se.currency, ''), o.currency) AS currency
+                         FROM savings_events se
+                         JOIN orders o ON o.order_id = se.order_id
+                        WHERE o.account_id = %s
+                          AND se.invoice_line_id IS NULL
+                          AND se.delivery_type IN ('refund_to_card', 'airline_credit')
+                          AND se.created_at >= %s AND se.created_at < %s
+                        FOR UPDATE OF se""",
+                    (account_id, period_start, period_end))
+        events = cur.fetchall()
+
+        cur.execute("""INSERT INTO invoices
+                          (account_id, period_start, period_end, issued_at, due_at, status, total)
+                       VALUES (%s, %s, %s, now(), now() + interval '30 days', 'issued', 0)
+                       RETURNING *""",
+                    (account_id, period_start, period_end))
+        invoice = cur.fetchone()
+
+        total = Decimal("0")
+
+        if subscription_fee:
+            cur.execute("""INSERT INTO invoice_lines
+                              (invoice_id, line_type, description, basis_amount, rate, amount)
+                            VALUES (%s, 'subscription', 'Monthly platform fee', NULL, NULL, %s)""",
+                        (invoice["id"], _num(subscription_fee)))
+            total += Decimal(str(subscription_fee))
+
+        for delivery_type, line_type in (("refund_to_card", "commission_cash"),
+                                         ("airline_credit", "commission_credit")):
+            matching = [e for e in events if e["delivery_type"] == delivery_type]
+            amount = sum((Decimal(str(e["commission_amount"])) for e in matching), Decimal("0"))
+            if amount <= 0:
+                continue
+            basis = sum((Decimal(str(e["realized_savings"])) for e in matching), Decimal("0"))
+            rate = matching[0]["commission_rate"]
+            noun = "cash recovery" if line_type == "commission_cash" else "airline-credit recovery"
+            plural = "" if len(matching) == 1 else "s"
+            desc = f"Commission on {len(matching)} {noun}{plural}"
+            cur.execute("""INSERT INTO invoice_lines
+                              (invoice_id, line_type, description, basis_amount, rate, amount)
+                            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                        (invoice["id"], line_type, desc, _num(basis), _num(rate), _num(amount)))
+            line_id = cur.fetchone()["id"]
+            cur.execute("UPDATE savings_events SET invoice_line_id = %s WHERE id = ANY(%s)",
+                        (line_id, [e["id"] for e in matching]))
+            total += amount
+
+        cur.execute("UPDATE invoices SET total = %s WHERE id = %s RETURNING *",
+                    (_num(total), invoice["id"]))
+        return cur.fetchone()
+
+
+def invoice_lines_for(invoice_id):
+    return q("SELECT * FROM invoice_lines WHERE invoice_id = %s ORDER BY id",
+             (invoice_id,), fetch="all")
