@@ -128,6 +128,17 @@
   </div>
   {% endif %}
 
+  {% if o.payment_capture_failed_at %}
+  <div class="notice notice-err" style="margin-top:12px">
+    <span>!</span>
+    <div>
+      <b>Payment capture failed — needs manual resolution.</b>
+      The ticket is issued; the card charge is not.
+      <div class="mono" style="margin-top:4px">{{ o.payment_capture_error }}</div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="ops-act">
     <form method="post" action="{{ url_for('simulate', order_id=o.order_id) }}" class="sim">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">

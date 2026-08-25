@@ -248,6 +248,8 @@ def test_upsert_order_round_trips_every_writable_value(acct):
         "cost_center_id": cost_center["id"],
         "refundable": True, "fare_conditions": {"refund_before_departure": {"allowed": True}},
         "stripe_payment_intent_id": "pi_test_abc",
+        "payment_capture_failed_at": "2026-08-25T12:00:00+00:00",
+        "payment_capture_error": "test capture error",
     }
     assert set(values) == set(db._ORDER_COLS), "test fixture drifted from _ORDER_COLS"
 
@@ -263,6 +265,10 @@ def test_upsert_order_round_trips_every_writable_value(acct):
             assert row[col] == values[col], col
         elif col in ("traveler_id", "cost_center_id"):
             assert str(row[col]) == str(values[col]), col
+        elif col == "payment_capture_failed_at":
+            # timestamptz round-trips as a datetime, not the ISO string
+            # that was written — presence is what this test cares about.
+            assert row[col] is not None, col
         else:
             assert row[col] == values[col], col
 
@@ -366,22 +372,47 @@ def test_retried_book_reuses_idempotency_key_and_recovers_without_reauthorizing(
     assert first_key == f"book-{offer['id']}"
 
 
-def test_capture_failure_after_duffel_success_is_unhandled(logged_in_carded):
-    """Documents current behaviour, does not fix it — item 2's report
-    covers this explicitly. capture_authorization() is called with nothing
-    catching a failure: a real Duffel order can exist with no
-    corresponding `orders` row and no authorization ever captured."""
+def test_capture_failure_persists_order_and_flags_for_resolution(logged_in_carded):
+    """item 2b's fix: the order is now persisted before capture is even
+    attempted, so a capture failure is a payment problem on a known order,
+    not an untracked ticket. Both attempts fail (the retry doesn't save
+    it) -> order exists, flagged, honest non-500 response, Duffel order
+    never voided."""
     client, account = logged_in_carded
     offer = fake_offer()
     order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"])
     with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
          patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_5")), \
-         patch("billing.capture_authorization", side_effect=billing.CardError("capture failed")):
+         patch("billing.capture_authorization",
+              side_effect=billing.CardError("capture failed")) as mock_capture, \
+         patch("billing.cancel_authorization") as mock_cancel:
         resp = client.post("/book", data=book_form(offer["id"]))
-    # Nothing in book() catches this — it surfaces as a bare 500, and the
-    # order was never persisted despite a real Duffel order existing.
-    assert resp.status_code == 500
-    assert db.order_for_offer(account["account_id"], offer["id"]) is None
+
+    assert resp.status_code == 200, "an honest error, not a 500"
+    assert mock_capture.call_count == 2, "one retry, exactly"
+    mock_cancel.assert_not_called(), "the ticket must never be voided over a payment hiccup"
+
+    row = db.order_for_offer(account["account_id"], offer["id"])
+    assert row is not None, "the order must exist even though capture failed"
+    assert row["payment_capture_failed_at"] is not None
+    assert "capture failed" in row["payment_capture_error"]
+
+
+def test_capture_retry_then_success_leaves_no_flag(logged_in_carded):
+    client, account = logged_in_carded
+    offer = fake_offer()
+    order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"])
+    with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
+         patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_5b")), \
+         patch("billing.capture_authorization",
+              side_effect=[billing.CardError("transient"), None]) as mock_capture:
+        resp = client.post("/book", data=book_form(offer["id"]), follow_redirects=False)
+
+    assert resp.status_code == 302, "a retry that succeeds proceeds normally"
+    assert mock_capture.call_count == 2
+    row = db.order_for_offer(account["account_id"], offer["id"])
+    assert row["payment_capture_failed_at"] is None
+    assert row["payment_capture_error"] is None
 
 
 # ---------------------------------------------------------------------------

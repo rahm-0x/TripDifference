@@ -146,16 +146,19 @@ def _audit_payload(r):
     return payload
 
 
-def audit_rows(limit=300, order_id=None):
-    """Newest first. Ops-wide (no account scoping) — see audit_rows_for_account
-    for the customer-facing, account-scoped Activity Timeline."""
-    if order_id:
-        rows = q(f"""SELECT {_AUDIT_COLS} FROM audit_events WHERE order_id = %s
-                     ORDER BY ts DESC, id DESC LIMIT %s""",
-                 (order_id, limit), fetch="all")
-    else:
-        rows = q(f"""SELECT {_AUDIT_COLS} FROM audit_events
-                     ORDER BY ts DESC, id DESC LIMIT %s""", (limit,), fetch="all")
+def audit_rows(order_id, limit=500):
+    """Newest first, for one order. order_id is required on purpose — this
+    used to also support an unscoped "every account's rows" mode with no
+    caller-side check at all, which /decisions called directly and handed
+    to any authenticated user regardless of account. The only remaining
+    legitimate use (price_history(), gated by find_order() before it ever
+    gets here) only ever needed the single-order form; removing the other
+    one removes the unscoped query from existing at all, rather than
+    leaving it sitting here for the next caller who wants "all the rows."
+    See audit_rows_for_account for the account-scoped equivalent."""
+    rows = q(f"""SELECT {_AUDIT_COLS} FROM audit_events WHERE order_id = %s
+                 ORDER BY ts DESC, id DESC LIMIT %s""",
+             (order_id, limit), fetch="all")
     return [_audit_payload(r) for r in rows]
 
 
@@ -225,7 +228,8 @@ _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "offer_id", "source", "fare_type", "traveler_id",
                "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin",
                "cost_center_id", "refundable", "fare_conditions",
-               "stripe_payment_intent_id")
+               "stripe_payment_intent_id", "payment_capture_failed_at",
+               "payment_capture_error")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario", "fare_conditions"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
@@ -239,10 +243,11 @@ _ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash"}
 # Nullable uuid FK — a blank string must stay NULL, not become '' (invalid
 # uuid input), unlike the plain text fields above.
 _NULLABLE_UUID = {"traveler_id", "cost_center_id"}
-# refundable (nullable boolean) and stripe_payment_intent_id (nullable
-# text) need no coercion at all — None must stay None (unknown disposition,
-# no charge yet), not become False/''. They fall through the loop below
-# untouched, same as any column not named in one of these sets.
+# refundable (nullable boolean), stripe_payment_intent_id, and the
+# payment_capture_* columns need no coercion at all — None must stay None
+# (unknown disposition, no charge yet, no capture problem), not become
+# False/''. They fall through the loop below untouched, same as any column
+# not named in one of these sets.
 
 
 def _to_record(row):

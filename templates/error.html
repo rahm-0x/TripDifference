@@ -6,6 +6,10 @@
     <h1>Something went wrong</h1>
     <p>{{ error }}</p>
   </div>
+  {% if order_id %}
+  <a href="{{ url_for('trip_detail', order_id=order_id) }}" class="btn">View your trip</a>
+  {% else %}
   <a href="{{ url_for('index') }}" class="btn">Back to search</a>
+  {% endif %}
 </div>
 {% endblock %}

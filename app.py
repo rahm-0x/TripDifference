@@ -1138,8 +1138,6 @@ def book():
         return render_template("results.html", nav="search", offers=None, form={},
                                error=str(exc))
 
-    billing.capture_authorization(intent.id)
-
     has_card = True  # gated above; this line never reaches here without one
     snap = OrderSnapshot.from_duffel(order, has_card=has_card)
 
@@ -1149,6 +1147,11 @@ def book():
 
     refundable, fare_conditions = _fare_disposition(order)
 
+    # Persisted BEFORE the capture attempt, deliberately. A capture failure
+    # after this point is a payment problem on a real, known order — a
+    # human can resolve that. A capture failure before this point used to
+    # mean a real Duffel order existed with no local record of it at all:
+    # unrecoverable, because nothing in the system knew to look for it.
     upsert_order({
         "order_id": order["id"],
         "offer_id": offer_id,
@@ -1182,6 +1185,31 @@ def book():
         "new_total": str(Decimal(order["total_amount"]) + Decimal("100.00")),
         "penalty": "25.00",
     }})
+
+    # Capture: retry once, since transient Stripe errors are common and a
+    # retry costs nothing. Never cancel/void the Duffel order from here on —
+    # the ticket is real and issued; voiding it because payment capture
+    # hiccuped is destructive, and the void call can itself fail, which
+    # would leave a worse state than the one being fixed.
+    capture_error = None
+    for _attempt in (1, 2):
+        try:
+            billing.capture_authorization(intent.id)
+            capture_error = None
+            break
+        except billing.CardError as exc:
+            capture_error = exc
+
+    if capture_error is not None:
+        upsert_order({"order_id": order["id"],
+                      "payment_capture_failed_at": datetime.now(timezone.utc).isoformat(),
+                      "payment_capture_error": str(capture_error)})
+        return render_template(
+            "error.html", hide_nav=True, order_id=order["id"],
+            error="Your booking is confirmed and the ticket is issued, but we couldn't "
+                  "complete the card charge. Our team has been notified and will follow "
+                  "up to resolve payment — no action is needed from you right now."), 200
+
     return redirect(url_for("trip_booked", order_id=order["id"]))
 
 
@@ -1980,7 +2008,12 @@ def execute(order_id, action):
 @app.route("/decisions")
 @auth.login_required
 def decisions():
-    return render_template("decisions.html", nav="log", rows=db.audit_rows(limit=200))
+    # Was db.audit_rows(limit=200) — ops-wide, no account filter at all, so
+    # any authenticated user could read every other account's decisions,
+    # eligibility verdicts, and executions. Scoped to the requesting
+    # account, same as the Activity Timeline this already powers.
+    return render_template("decisions.html", nav="log",
+                           rows=db.audit_rows_for_account(_account(), limit=200))
 
 
 if __name__ == "__main__":
