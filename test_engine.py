@@ -570,6 +570,79 @@ def test_no_change_action_beats_permissive_conditions():
     assert a.reason is EligibilityReason.NO_CHANGE_ACTION
 
 
+def test_no_available_actions_is_likely_not_confirmed():
+    """An offer (or, rarely, an order Duffel returned without the field) has
+    no way to confirm 'change' is really there. Must not read as the same
+    confirmed MONITORING an order with real available_actions gets — that
+    conflation is the bug this state exists to fix (search claimed
+    'Monitored' on offers that, once booked, came back without a 'change'
+    action; see the Iberia case in test_available_actions_beats_lying_
+    conditions_block)."""
+    a = elig.assess(order_payload(available_actions=None))
+    assert a.state is Eligibility.LIKELY_MONITORING
+    assert a.reason is EligibilityReason.CHANGES_LIKELY_ALLOWED
+    assert a.should_poll is True
+
+
+def test_single_denial_is_a_penalty_not_an_exclusion():
+    """One real order, zero confirms: not enough to exclude the carrier
+    outright — FINDINGS.md notes this can be a fare-brand quirk, not a
+    carrier-wide fact — but not trusted at face value either. Stays
+    LIKELY_MONITORING (still shown, still counted as monitorable) under a
+    distinct reason the ranking penalizes instead of boosting."""
+    a = elig.assess(order_payload(available_actions=None),
+                    carrier_capability={"confirmed": 0, "denied": 1})
+    assert a.state is Eligibility.LIKELY_MONITORING
+    assert a.reason is EligibilityReason.CARRIER_SINGLE_DENIAL
+    assert a.should_poll is True
+
+
+def test_carrier_with_only_denials_overrides_permissive_conditions():
+    """The Iberia case, at the exclusion threshold: conditions say allowed,
+    but every real order Trip Difference has seen from this carrier (2 or
+    more) came back without a 'change' action. Don't let the offer's own
+    optimistic conditions win against a track record that already
+    contradicts it this many times."""
+    a = elig.assess(order_payload(available_actions=None),
+                    carrier_capability={"confirmed": 0, "denied": 2})
+    assert a.state is Eligibility.NOT_ELIGIBLE
+    assert a.reason is EligibilityReason.CARRIER_NEVER_CONFIRMED_CHANGE
+    assert a.should_poll is False
+
+    # And it only gets more certain from there.
+    a = elig.assess(order_payload(available_actions=None),
+                    carrier_capability={"confirmed": 0, "denied": 5})
+    assert a.state is Eligibility.NOT_ELIGIBLE
+
+
+def test_carrier_with_mixed_history_does_not_override():
+    """A carrier seen both ways (FINDINGS.md notes conditions can vary by
+    fare brand within one carrier) isn't confident enough evidence to
+    downgrade — stays an unconfirmed but real claim, not a record model,
+    just a 'has this ever definitely worked' check. Even a single confirm
+    against many denials counts as mixed, not excluded — one real success
+    is enough to stop treating the carrier as a lost cause."""
+    a = elig.assess(order_payload(available_actions=None),
+                    carrier_capability={"confirmed": 2, "denied": 1})
+    assert a.state is Eligibility.LIKELY_MONITORING
+    assert a.reason is EligibilityReason.CHANGES_LIKELY_ALLOWED
+
+    a = elig.assess(order_payload(available_actions=None),
+                    carrier_capability={"confirmed": 1, "denied": 10})
+    assert a.state is Eligibility.LIKELY_MONITORING
+    assert a.reason is EligibilityReason.CHANGES_LIKELY_ALLOWED
+
+
+def test_confirmed_available_actions_ignores_carrier_capability():
+    """Direct evidence from this exact order always wins over an aggregate
+    carrier-level signal — the carrier table only fills the gap where there
+    is no available_actions at all; it never overrides one that's present."""
+    a = elig.assess(order_payload(available_actions=["cancel", "change"]),
+                    carrier_capability={"confirmed": 0, "denied": 5})
+    assert a.state is Eligibility.MONITORING
+    assert a.reason is EligibilityReason.CHANGES_ALLOWED
+
+
 def test_every_reason_has_customer_copy():
     for reason in EligibilityReason:
         assert elig.CUSTOMER_COPY[reason].strip(), f"{reason} has no customer copy"

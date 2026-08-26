@@ -17,7 +17,7 @@ Every test creates and tears down its own account.
 """
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -126,7 +126,13 @@ def fake_offer(offer_id=None, amount="219.00", currency="USD", cabin="economy"):
 
 
 def fake_order(order_id=None, amount="219.00", currency="USD",
-              refundable=True, change_allowed=False, carrier_name="Test Airways"):
+              refundable=True, change_allowed=False, carrier_name="Test Airways",
+              carrier_iata="T1", fare_brand="Basic"):
+    # T1, not a real IATA code — book()'s carrier_capability_record() write
+    # is real and unmocked (only duffel_http.request is patched here), so a
+    # fixture default that collided with a seeded carrier (ZZ/BA/AA/TP/IB)
+    # would let every test in this file quietly pollute that carrier's real
+    # observation counts on every run.
     order_id = order_id or f"ord_test_{uuid.uuid4().hex[:16]}"
     return {
         "id": order_id, "booking_reference": "TEST123",
@@ -141,6 +147,7 @@ def fake_order(order_id=None, amount="219.00", currency="USD",
                 "arriving_at": "2026-12-01T18:00:00Z",
                 "passengers": [{"cabin_class": "economy"}],
             }],
+            "fare_brand_name": fare_brand,
         }],
         "conditions": {
             "change_before_departure": {"allowed": change_allowed, "penalty_amount": "50.00",
@@ -149,7 +156,7 @@ def fake_order(order_id=None, amount="219.00", currency="USD",
                                         "penalty_currency": currency},
         },
         "available_actions": ["cancel", "change"] if change_allowed else ["cancel"],
-        "owner": {"name": carrier_name},
+        "owner": {"name": carrier_name, "iata_code": carrier_iata},
         "void_window_ends_at": None,
     }
 
@@ -390,6 +397,118 @@ def test_book_proceeds_with_card(logged_in_carded):
     row = db.find_order(order["id"], account["account_id"])
     assert row is not None
     assert row["stripe_payment_intent_id"] == "pi_test_1"
+
+
+# ---------------------------------------------------------------------------
+# carrier change-capability observations (eligibility bug fix)
+# ---------------------------------------------------------------------------
+
+def _clear_carrier(carrier_iata):
+    db.q("DELETE FROM carrier_change_capability WHERE carrier_iata = %s", (carrier_iata,))
+    db.q("DELETE FROM carrier_change_observations WHERE carrier_iata = %s", (carrier_iata,))
+
+
+def test_carrier_capability_record_and_read():
+    _clear_carrier("QQ")
+    try:
+        assert db.carrier_capability_for("QQ") is None
+        db.carrier_capability_record("QQ", "Test Air", change_allowed=True, fare_brand="Flex")
+        assert db.carrier_capability_for("QQ") == {"confirmed": 1, "denied": 0, "is_synthetic": False}
+        db.carrier_capability_record("QQ", "Test Air", change_allowed=False, fare_brand="Basic")
+        db.carrier_capability_record("QQ", "Test Air", change_allowed=False, fare_brand="Basic")
+        assert db.carrier_capability_for("QQ") == {"confirmed": 1, "denied": 2, "is_synthetic": False}
+        assert db.carrier_capabilities_for(["QQ", "NOPE"]) == \
+            {"QQ": {"confirmed": 1, "denied": 2, "is_synthetic": False}}
+
+        # The raw log — not read by anything yet, but the fare_brand has to
+        # actually be there for the "does it cluster by fare brand" question
+        # to be answerable later.
+        rows = db.q("""SELECT fare_brand, change_allowed FROM carrier_change_observations
+                       WHERE carrier_iata = 'QQ' ORDER BY id""", fetch="all")
+        assert [dict(r) for r in rows] == [
+            {"fare_brand": "Flex", "change_allowed": True},
+            {"fare_brand": "Basic", "change_allowed": False},
+            {"fare_brand": "Basic", "change_allowed": False},
+        ]
+    finally:
+        _clear_carrier("QQ")
+
+
+def test_zz_is_seeded_as_synthetic():
+    """Duffel Airways is Duffel's own sandbox carrier — real in the sense
+    that sandbox orders really do come back this way, but not evidence
+    about how a real airline behaves. Must stay readable (sandbox ranking
+    needs it) but flagged so a future real-carrier-only read can skip it."""
+    assert db.carrier_capability_for("ZZ")["is_synthetic"] is True
+
+
+def test_book_records_a_carrier_capability_observation(logged_in_carded):
+    """Every real order is a free observation — book() must record one
+    whenever Duffel actually returned available_actions, using this exact
+    order's carrier and its real change_allowed fact, not a guess."""
+    client, account = logged_in_carded
+    offer = fake_offer()
+    order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"],
+                       change_allowed=False, carrier_iata="QQ", fare_brand="Basic")
+    _clear_carrier("QQ")
+    try:
+        with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
+             patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_carrier1")), \
+             patch("billing.capture_authorization"):
+            resp = client.post("/book", data=book_form(offer["id"]), follow_redirects=False)
+        assert resp.status_code == 302
+        assert db.carrier_capability_for("QQ") == {"confirmed": 0, "denied": 1, "is_synthetic": False}
+        logged = db.q("""SELECT fare_brand, change_allowed, order_id
+                         FROM carrier_change_observations WHERE carrier_iata = 'QQ'""", fetch="one")
+        assert logged["fare_brand"] == "Basic"
+        assert logged["change_allowed"] is False
+        assert logged["order_id"] == order["id"]
+    finally:
+        _clear_carrier("QQ")
+
+
+def test_rank_price_discounts_likely_monitoring_not_ineligible():
+    """The sort weighting Part B asked to be stated plainly: a
+    likely-monitorable fare ranks as if LIKELY_MONITORING_RANK_DISCOUNT
+    cheaper — enough to beat a similarly-priced ineligible fare, not enough
+    to beat one that's materially cheaper."""
+    discount = app_module.LIKELY_MONITORING_RANK_DISCOUNT
+    likely = {"amount": "230.00", "eligibility_state": "likely_monitoring",
+             "eligibility_reason": "changes_likely_allowed"}
+    ineligible_close = {"amount": "220.00", "eligibility_state": "not_eligible",
+                        "eligibility_reason": "carrier_never_confirmed_change"}
+    ineligible_far = {"amount": "150.00", "eligibility_state": "not_eligible",
+                      "eligibility_reason": "change_not_allowed"}
+
+    assert app_module._offer_rank_price(likely) == Decimal("230.00") * (1 - discount)
+    # A materially cheaper ineligible fare beats it...
+    assert app_module._offer_rank_price(ineligible_far) < app_module._offer_rank_price(likely)
+    # ...but a merely-somewhat-cheaper one, within the discount, does not.
+    assert app_module._offer_rank_price(likely) < app_module._offer_rank_price(ineligible_close)
+
+
+def test_rank_price_never_discounts_a_confirmed_monitoring_state():
+    """Kept for completeness — an offer can never actually reach this state
+    (FINDINGS.md §8: available_actions doesn't exist pre-purchase), but if
+    it ever did, a confirmed claim gets no discount at all, same as today."""
+    confirmed = {"amount": "230.00", "eligibility_state": "monitoring",
+                "eligibility_reason": "changes_allowed"}
+    assert app_module._offer_rank_price(confirmed) == Decimal("230.00")
+
+
+def test_rank_price_gives_no_boost_to_a_single_carrier_denial():
+    """The graduated-penalty half of Part B's follow-up: a carrier with one
+    real denial and zero confirms stays LIKELY_MONITORING (still shown,
+    still counts as monitorable) but gets none of the usual optimism
+    discount — priced at face value, same as an outright ineligible fare,
+    so an ordinary likely-monitorable alternative at the same price wins."""
+    single_denial = {"amount": "230.00", "eligibility_state": "likely_monitoring",
+                     "eligibility_reason": "carrier_single_denial"}
+    ordinary_likely = {"amount": "230.00", "eligibility_state": "likely_monitoring",
+                       "eligibility_reason": "changes_likely_allowed"}
+
+    assert app_module._offer_rank_price(single_denial) == Decimal("230.00")
+    assert app_module._offer_rank_price(ordinary_likely) < app_module._offer_rank_price(single_denial)
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +876,7 @@ def test_invoice_generation_is_idempotent_per_period(logged_in_carded):
     order = make_real_order(account["account_id"])
     execute_cancel(client, order["order_id"], "200.00")
 
-    today = date.today()
+    today = datetime.now(timezone.utc).date()  # matches generate_invoice_route()
     invoice1 = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
     lines1 = db.invoice_lines_for(invoice1["id"], account["account_id"])
     assert len(lines1) == 1
@@ -775,7 +894,7 @@ def test_forfeited_events_produce_no_invoice_line(logged_in_carded):
     order = make_real_order(account["account_id"])
     execute_cancel(client, order["order_id"], "0.00")  # forfeited
 
-    today = date.today()
+    today = datetime.now(timezone.utc).date()  # matches generate_invoice_route()
     invoice = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
     lines = db.invoice_lines_for(invoice["id"], account["account_id"])
     assert lines == []
@@ -793,7 +912,7 @@ def test_invoice_lines_for_refuses_a_foreign_account():
     b = db.create_account(email_b, password_hash="x")
     try:
         order = make_real_order(a["account_id"])
-        today = date.today()
+        today = datetime.now(timezone.utc).date()  # matches generate_invoice_route()
         invoice = db.generate_invoice(a["account_id"], today, today + timedelta(days=1))
         db.q("""INSERT INTO invoice_lines (invoice_id, line_type, description, amount)
                VALUES (%s, 'subscription', 'test', 10.00)""", (invoice["id"],))

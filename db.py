@@ -174,6 +174,77 @@ def audit_rows_for_account(account_id, limit=20):
 
 
 # ---------------------------------------------------------------------------
+# carrier change-capability — real available_actions observations, not a
+# score (see migration 027 and eligibility.assess's carrier_capability arg)
+# ---------------------------------------------------------------------------
+
+def carrier_capability_for(carrier_iata):
+    """None means never observed — the caller (offer_view, single-offer
+    path) should treat that exactly like today's behaviour: no override.
+    is_synthetic flags a sandbox-only carrier (Duffel Airways/ZZ) whose
+    confirm is real in the sense that it happened, but isn't evidence about
+    real airline behaviour — ranking still reads it (sandbox needs a sane
+    result), but a future read answering "what do real carriers do" should
+    filter it out."""
+    if not carrier_iata:
+        return None
+    row = q("""SELECT change_confirmed_count, change_denied_count, is_synthetic
+              FROM carrier_change_capability WHERE carrier_iata = %s""",
+           (carrier_iata,), fetch="one")
+    return {"confirmed": row["change_confirmed_count"], "denied": row["change_denied_count"],
+           "is_synthetic": row["is_synthetic"]} if row else None
+
+
+def carrier_capabilities_for(carrier_iatas):
+    """Batch form — one query for every carrier in a search's results
+    rather than one per offer. Same shape as carrier_capability_for's
+    return value, keyed by carrier_iata."""
+    codes = sorted({c for c in carrier_iatas if c})
+    if not codes:
+        return {}
+    rows = q("""SELECT carrier_iata, change_confirmed_count, change_denied_count, is_synthetic
+               FROM carrier_change_capability WHERE carrier_iata = ANY(%s)""",
+            (codes,), fetch="all")
+    return {r["carrier_iata"]: {"confirmed": r["change_confirmed_count"],
+                                "denied": r["change_denied_count"],
+                                "is_synthetic": r["is_synthetic"]} for r in rows}
+
+
+def carrier_capability_record(carrier_iata, carrier_name, change_allowed, fare_brand="", order_id=None):
+    """One real order is one free observation of whether this carrier's
+    orders actually carry 'change' in available_actions. Call only when
+    available_actions was present on the order at all — no field, no
+    observation, nothing to record.
+
+    Writes two things: the aggregate counts ranking actually reads, and a
+    raw per-order log (carrier_change_observations) nobody reads yet —
+    kept anyway so "do denials cluster by fare brand rather than by
+    carrier" (FINDINGS.md already suspects this) is a question that can
+    still be asked once there's enough data to answer it.
+    """
+    if not carrier_iata:
+        return
+    confirmed, denied = (1, 0) if change_allowed else (0, 1)
+    q("""INSERT INTO carrier_change_capability
+             (carrier_iata, carrier_name, change_confirmed_count, change_denied_count, last_observed_at)
+         VALUES (%s, %s, %s, %s, now())
+         ON CONFLICT (carrier_iata) DO UPDATE SET
+             carrier_name = CASE WHEN carrier_change_capability.carrier_name = ''
+                                  THEN EXCLUDED.carrier_name
+                                  ELSE carrier_change_capability.carrier_name END,
+             change_confirmed_count = carrier_change_capability.change_confirmed_count
+                                       + EXCLUDED.change_confirmed_count,
+             change_denied_count = carrier_change_capability.change_denied_count
+                                    + EXCLUDED.change_denied_count,
+             last_observed_at = now(), updated_at = now()""",
+      (carrier_iata, carrier_name or "", confirmed, denied))
+    q("""INSERT INTO carrier_change_observations
+             (carrier_iata, fare_brand, change_allowed, order_id)
+         VALUES (%s, %s, %s, %s)""",
+      (carrier_iata, fare_brand or "", bool(change_allowed), order_id))
+
+
+# ---------------------------------------------------------------------------
 # orders
 # ---------------------------------------------------------------------------
 

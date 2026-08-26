@@ -128,8 +128,11 @@
     </div>
 
     <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start">
-      {% if o.monitorable %}
+      {% if o.eligibility_state == 'monitoring' %}
         <span class="tag tag-sage"><span class="dot"></span>Monitored</span>
+      {% elif o.eligibility_state == 'likely_monitoring' %}
+        <span class="tag tag-sage-soft" title="{{ o.eligibility_copy }}">
+          <span class="dot-hollow"></span>Likely monitorable</span>
       {% else %}
         <span class="tag tag-mute">Not monitored</span>
       {% endif %}

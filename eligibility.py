@@ -5,10 +5,19 @@ Decides whether an order is worth polling at all, from the fare conditions at
 booking time. This is deliberately separate from the reshop decision: eligibility
 answers "could this fare ever win?", the engine answers "has it won today?".
 
-Three states, never a boolean. The bug this replaces defaulted every order to
+Four states, never a boolean. The bug this replaces defaulted every order to
 monitored, so a SWISS Economy Light fare with a GBP 300 change penalty on a
 573.33 USD ticket displayed as "Monitoring" while needing a ~66% market collapse
 to break even.
+
+MONITORING vs. LIKELY_MONITORING is a second, later bug of the same shape:
+`available_actions` is the only reliable signal for whether an order can
+actually be changed (FINDINGS.md §8 — `conditions` lies in both directions),
+but an offer has no `available_actions` at all — Duffel doesn't expose it
+before a ticket is issued. Search-time code passing an offer through this
+function was silently getting the same "Monitoring" state a confirmed order
+gets, on `conditions` alone. LIKELY_MONITORING is the honest name for that:
+a real but unconfirmed claim, never conflated with a verified one.
 
 Field names verified against ./responses/ dumps and
 https://duffel.com/docs/api/orders/schema.
@@ -22,9 +31,18 @@ from enum import Enum
 # total means the fare has to fall further than fares realistically do.
 MAX_PENALTY_RATIO = Decimal("0.30")
 
+# Real denials (zero confirms) needed before a carrier is excluded outright
+# rather than just rank-penalized. 2, not 1: a single denial could be one
+# restrictive fare brand, not the carrier as a whole (FINDINGS.md notes
+# conditions varies by fare brand within a carrier) — one data point earns
+# suspicion, not a verdict. A carrier that racks up even one confirm at any
+# point moves to the untouched "mixed" case regardless of this threshold.
+CARRIER_EXCLUSION_DENIAL_THRESHOLD = 2
+
 
 class Eligibility(str, Enum):
     MONITORING = "monitoring"
+    LIKELY_MONITORING = "likely_monitoring"
     UNLIKELY_TO_SAVE = "unlikely_to_save"
     NOT_ELIGIBLE = "not_eligible"
 
@@ -34,12 +52,15 @@ class EligibilityReason(str, Enum):
     NO_PAYMENT_METHOD = "no_payment_method"
     CUSTOMER_SOURCED = "customer_sourced"
     CHANGES_ALLOWED = "changes_allowed"
+    CHANGES_LIKELY_ALLOWED = "changes_likely_allowed"
     NO_CHANGE_ACTION = "no_change_action"
     CHANGE_NOT_ALLOWED = "change_not_allowed"
     CONDITIONS_MISSING = "conditions_missing"
     PENALTY_UNKNOWN = "penalty_unknown"
     PENALTY_CURRENCY_MISMATCH = "penalty_currency_mismatch"
     PENALTY_TOO_HIGH = "penalty_too_high"
+    CARRIER_NEVER_CONFIRMED_CHANGE = "carrier_never_confirmed_change"
+    CARRIER_SINGLE_DENIAL = "carrier_single_denial"
 
 
 # Customer-facing copy. Keyed by reason so the UI never invents its own wording.
@@ -54,6 +75,18 @@ CUSTOMER_COPY = {
         "appears.",
     EligibilityReason.CHANGES_ALLOWED:
         "We're watching this fare and will rebook you if the price drops.",
+    EligibilityReason.CHANGES_LIKELY_ALLOWED:
+        "This fare's rules suggest it can be changed after ticketing, but "
+        "we can only confirm that once it's booked — we'll know for certain "
+        "as soon as you buy it.",
+    EligibilityReason.CARRIER_NEVER_CONFIRMED_CHANGE:
+        "This fare's rules say changes are allowed, but this airline has "
+        "never actually let us change a ticket like this once issued, so "
+        "we're not counting on being able to rebook it.",
+    EligibilityReason.CARRIER_SINGLE_DENIAL:
+        "This fare's rules suggest it can be changed, but the one real "
+        "ticket we've seen from this airline wasn't — we're less confident "
+        "about this one than usual.",
     EligibilityReason.NO_CHANGE_ACTION:
         "This fare can't be changed after ticketing, so it can't be rebooked.",
     EligibilityReason.CHANGE_NOT_ALLOWED:
@@ -85,7 +118,12 @@ class Assessment:
 
     @property
     def should_poll(self):
-        return self.state is Eligibility.MONITORING
+        # LIKELY_MONITORING is the pre-purchase-only state — an offer, or
+        # (rare) an order Duffel returned without available_actions at all.
+        # Treated the same as a confirmed MONITORING for whether to poll:
+        # the alternative is not polling anything until it's confirmed,
+        # which is never true before a ticket exists.
+        return self.state in (Eligibility.MONITORING, Eligibility.LIKELY_MONITORING)
 
     @property
     def customer_copy(self):
@@ -95,6 +133,7 @@ class Assessment:
     def label(self):
         return {
             Eligibility.MONITORING: "Monitoring",
+            Eligibility.LIKELY_MONITORING: "Likely monitorable",
             Eligibility.UNLIKELY_TO_SAVE: "Unlikely to save",
             Eligibility.NOT_ELIGIBLE: "Not eligible",
         }[self.state]
@@ -109,16 +148,23 @@ def _decimal(value):
         return None
 
 
-def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_card=True):
+def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_card=True,
+           carrier_capability=None):
     """
-    `order` is a raw Duffel order payload, or `{}` for a reservation with no
-    Duffel order behind it (customer-sourced: email import / manual entry).
-    `fare_type` is 'cash' or 'points' — every fare Duffel's cash-offer search
-    can book is 'cash' by construction, so the default holds for every order
-    this app has ever booked itself; only a customer-sourced reservation can
-    actually be 'points'. `has_card` defaults True so nothing regresses ahead
-    of real Stripe wiring — card-gating (business rule: no card on file, no
-    active monitoring) is enforced here once a real value is passed in.
+    `order` is a raw Duffel order payload, a raw Duffel *offer* payload
+    (pre-purchase — carries no `available_actions`), or `{}` for a
+    reservation with no Duffel order behind it (customer-sourced: email
+    import / manual entry). `fare_type` is 'cash' or 'points' — every fare
+    Duffel's cash-offer search can book is 'cash' by construction, so the
+    default holds for every order this app has ever booked itself; only a
+    customer-sourced reservation can actually be 'points'. `has_card`
+    defaults True so nothing regresses ahead of real Stripe wiring —
+    card-gating (business rule: no card on file, no active monitoring) is
+    enforced here once a real value is passed in.
+
+    `carrier_capability` is an optional `{"confirmed": int, "denied": int}`
+    of real `available_actions` observations gathered from this carrier's
+    past orders (db.carrier_capability_for) — see LIKELY_MONITORING below.
 
     Order of checks matters — the first failing gate is the one reported.
     """
@@ -206,8 +252,48 @@ def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_car
             f"{max_penalty_ratio:.0%} threshold",
             penalty=penalty, penalty_currency=penalty_currency, penalty_ratio=ratio)
 
+    # available_actions already confirmed 'change' is present (gate 1 would
+    # have returned above otherwise) — this is a real order, verified.
+    if actions is not None:
+        return Assessment(
+            Eligibility.MONITORING, EligibilityReason.CHANGES_ALLOWED,
+            f"change penalty {penalty} {penalty_currency} is {ratio:.1%} of the total, "
+            f"within the {max_penalty_ratio:.0%} threshold",
+            penalty=penalty, penalty_currency=penalty_currency, penalty_ratio=ratio)
+
+    # No available_actions to go on (an offer, pre-purchase — or, rarely, an
+    # order Duffel returned without the field). conditions alone is not
+    # reliable (FINDINGS.md §8), so a carrier's own real-order track record
+    # is consulted instead — graduated by how much of one there is, not a
+    # single denial turned into a permanent verdict. A carrier that's never
+    # once confirmed 'change' can't earn its way out of a hard exclusion by
+    # being booked less because of that exclusion — the one-denial case gets
+    # a rank penalty, not a black mark, and FINDINGS.md already notes this
+    # can vary by fare brand within one carrier, not just between carriers.
+    confirmed = carrier_capability.get("confirmed", 0) if carrier_capability else 0
+    denied = carrier_capability.get("denied", 0) if carrier_capability else 0
+
+    if confirmed == 0 and denied >= CARRIER_EXCLUSION_DENIAL_THRESHOLD:
+        return Assessment(
+            Eligibility.NOT_ELIGIBLE, EligibilityReason.CARRIER_NEVER_CONFIRMED_CHANGE,
+            f"conditions claim changes are allowed, but every real order seen from this "
+            f"carrier ({denied} observed, 0 confirmed) came back without a 'change' "
+            f"action — not trusting the claim",
+            penalty=penalty, penalty_currency=penalty_currency, penalty_ratio=ratio,
+            needs_attention=True)
+
+    if confirmed == 0 and denied == 1:
+        return Assessment(
+            Eligibility.LIKELY_MONITORING, EligibilityReason.CARRIER_SINGLE_DENIAL,
+            f"conditions claim changes are allowed, but the one real order seen from "
+            f"this carrier came back without a 'change' action — one data point, not "
+            f"enough to exclude outright, but not trusted at face value either",
+            penalty=penalty, penalty_currency=penalty_currency, penalty_ratio=ratio,
+            needs_attention=True)
+
     return Assessment(
-        Eligibility.MONITORING, EligibilityReason.CHANGES_ALLOWED,
+        Eligibility.LIKELY_MONITORING, EligibilityReason.CHANGES_LIKELY_ALLOWED,
         f"change penalty {penalty} {penalty_currency} is {ratio:.1%} of the total, "
-        f"within the {max_penalty_ratio:.0%} threshold",
+        f"within the {max_penalty_ratio:.0%} threshold, but available_actions isn't "
+        f"known yet — conditions alone is not reliable (FINDINGS.md §8)",
         penalty=penalty, penalty_currency=penalty_currency, penalty_ratio=ratio)

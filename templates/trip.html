@@ -35,6 +35,15 @@
     <span class="muted">{{ trip.executed }}</span>
   </div>
 </div>
+{% elif trip.source == 'td_rebook' and not trip.eligible
+        and trip.eligibility.reason in ('no_change_action', 'carrier_never_confirmed_change') %}
+<div class="notice" style="margin-bottom:16px">
+  <span>i</span>
+  <div>
+    <b>This ticket isn't being monitored.</b>
+    {{ trip.eligibility.customer_copy }}
+  </div>
+</div>
 {% endif %}
 
 {% for ev in savings_events %}

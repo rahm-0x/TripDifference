@@ -191,24 +191,46 @@ def slice_view(sl):
     }
 
 
-def offer_view(offer, policy_rules=None):
+# How much ranking weight an *unconfirmed* recovery claim gets, in search()'s
+# value-after-reshop sort. A LIKELY_MONITORING fare is ranked as if it cost
+# this much less than its real price — enough to beat an ineligible fare at
+# a similar price point, not enough to beat one that's materially cheaper.
+# Deliberately smaller than eligibility.MAX_PENALTY_RATIO (0.30): this is a
+# softer signal than the fare's own penalty math, since it's a prediction,
+# not a verified fact. Tunable; not derived from anything.
+LIKELY_MONITORING_RANK_DISCOUNT = Decimal("0.15")
+
+
+def offer_view(offer, policy_rules=None, has_card=None, carrier_capability_map=None):
     """
     Duffel offer → view model.
 
-    Eligibility runs through the same assessor as orders, so a fare with a
-    disproportionate or unquotable change penalty is never advertised as
-    monitored at search time either. Offers carry no available_actions, so that
-    gate is skipped here and re-checked once the order exists (FINDINGS.md §8) —
-    treat the search-time tag as a prediction, not a guarantee.
+    Eligibility runs through the same assessor as orders — no parallel
+    approximation — but an offer carries no `available_actions` at all
+    (Duffel doesn't expose it before a ticket is issued), so the one gate
+    that's actually authoritative (FINDINGS.md §8) can never fire here.
+    assess() reflects that honestly: LIKELY_MONITORING, not MONITORING,
+    unless carrier_capability says this carrier has never once honoured
+    that claim on a real order, in which case it's NOT_ELIGIBLE outright.
 
-    policy_rules lets a caller checking many offers (search()) fetch the
-    account's active rules once rather than once per offer; a single-offer
-    caller (fetch_offer_view) leaves it None and this fetches for itself.
-    Advisory only here — nothing renders policy_enforcement/policy_result
-    yet (Phase 4 UI); the hard gate lives in book().
+    policy_rules/has_card let a caller checking many offers (search()) fetch
+    the account's active rules and card status once rather than once per
+    offer; a single-offer caller (fetch_offer_view) leaves them None and
+    this fetches for itself. carrier_capability_map is the same batching
+    idea, keyed by carrier IATA code. policy_result is advisory only here —
+    nothing renders policy_enforcement/policy_result yet (Phase 4 UI); the
+    hard gate lives in book().
     """
     slices = [v for v in (slice_view(s) for s in offer.get("slices", [])) if v]
-    a = eligibility.assess(offer)
+    if has_card is None:
+        has_card = bool(db.account_card(_account()))
+    carrier_iata = (offer.get("owner") or {}).get("iata_code")
+    if carrier_capability_map is not None:
+        capability = carrier_capability_map.get(carrier_iata)
+    else:
+        capability = db.carrier_capability_for(carrier_iata)
+    a = eligibility.assess(offer, fare_type="cash", has_card=has_card,
+                           carrier_capability=capability)
     rules = policy_rules if policy_rules is not None else db.policy_rules_active(_account())
     decision = policy.evaluate_with_rules(rules, offer)
     first = slices[0] if slices else {}
@@ -220,6 +242,8 @@ def offer_view(offer, policy_rules=None):
         "slices": slices,
         "fare_brand": first.get("fare_brand"),
         "monitorable": a.should_poll,
+        "eligibility_state": a.state.value,
+        "eligibility_reason": a.reason.value,
         "eligibility_label": a.label,
         "eligibility_copy": a.customer_copy,
         "policy_enforcement": decision.enforcement,
@@ -810,6 +834,41 @@ def index():
     return render_template("landing.html", deals=PLACEHOLDER_DEALS)
 
 
+def _offer_rank_price(o):
+    """search()'s value-after-reshop sort key: rank by price, but a fare
+    that can never be recovered (Basic Economy and similar) ranks below one
+    that can, even when it's cheaper up front. There is no real historical
+    per-route recovery-rate data yet (nothing polls on a schedule until the
+    scheduler phase), so this proxies on eligibility state plus price, not
+    the richer "recovers $94 on average on this fare" ranking the mockup
+    shows.
+
+    An offer can never come back MONITORING — Duffel doesn't expose
+    available_actions before a ticket exists (FINDINGS.md §8), so every
+    offer here is LIKELY_MONITORING at best, an unconfirmed claim. It still
+    ranks ahead of an ineligible fare (the claim is real, just not verified
+    yet), but not with the same unconditional pull a confirmed order gets:
+    ranked as if its price were LIKELY_MONITORING_RANK_DISCOUNT cheaper, so
+    a materially cheaper ineligible fare can still win instead of being
+    buried under an unconfirmed one.
+
+    CARRIER_SINGLE_DENIAL (eligibility.py: one real order from this carrier
+    came back without 'change', not yet enough to exclude outright) gets no
+    discount at all — priced at face value, same as an ineligible fare for
+    ranking purposes. That's the graduated penalty: it still shows, still
+    counts as monitorable, still beats a pricier ineligible fare, but loses
+    the optimism boost every other unconfirmed-but-untested claim gets, so a
+    same-priced ordinary "likely monitorable" alternative wins instead.
+    """
+    amount = Decimal(o["amount"])
+    if o["eligibility_state"] == "monitoring":
+        return amount
+    if o["eligibility_state"] == "likely_monitoring" \
+            and o.get("eligibility_reason") != "carrier_single_denial":
+        return amount * (1 - LIKELY_MONITORING_RANK_DISCOUNT)
+    return amount
+
+
 @app.route("/search", methods=["GET"])
 def search():
     """The app's search page.
@@ -855,16 +914,14 @@ def search():
 
     raw = data.get("offers", [])
     rules = db.policy_rules_active(_account())
-    offers = [offer_view(o, policy_rules=rules) for o in raw]
-    # Sort by value after reshop, not raw price: a fare that can never be
-    # recovered (not monitorable — Basic Economy and similar) ranks below
-    # one that can, even when it's cheaper up front. should_poll already
-    # reflects genuine fare-condition eligibility, not a guess — but there
-    # is no real historical per-route recovery-rate data yet (nothing polls
-    # on a schedule until the scheduler phase), so "monitorable, then
-    # cheapest" is the honest proxy available today, not the richer
-    # "recovers $94 on average on this fare" ranking the mockup shows.
-    offers.sort(key=lambda o: (not o["monitorable"], Decimal(o["amount"])))
+    has_card = bool(db.account_card(_account()))
+    capability_map = db.carrier_capabilities_for(
+        (o.get("owner") or {}).get("iata_code") for o in raw)
+    offers = [offer_view(o, policy_rules=rules, has_card=has_card,
+                         carrier_capability_map=capability_map) for o in raw]
+
+    # Sort by value after reshop, not raw price — see _offer_rank_price.
+    offers.sort(key=_offer_rank_price)
     total = len(offers)
     offers = offers[:20]
     # The single best-value offer, flagged for display — the cheapest one
@@ -1198,6 +1255,23 @@ def book():
         "stripe_payment_intent_id": intent.id,
         "cost_center_id": cost_center_id,
     })
+
+    # A free observation of this carrier's real available_actions, every
+    # time — the same near-zero-marginal-cost idea as fare-observation data.
+    # Only recorded when Duffel actually returned the field; no signal, no
+    # observation (see eligibility.py's carrier_capability docs). Must run
+    # after upsert_order() above — the observations log's order_id is a real
+    # foreign key into orders, and this order doesn't exist there yet
+    # any earlier in this function.
+    order_actions = order.get("available_actions")
+    if order_actions is not None:
+        order_slices = order.get("slices") or [{}]
+        db.carrier_capability_record(
+            (order.get("owner") or {}).get("iata_code"),
+            (order.get("owner") or {}).get("name", ""),
+            change_allowed="change" in order_actions,
+            fare_brand=order_slices[0].get("fare_brand_name") or "",
+            order_id=order["id"])
 
     # Seed the simulated scenario from reality, so simulation starts at the
     # sandbox constant (+125.00) rather than an accidental fake drop. Stored on
