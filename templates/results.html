@@ -98,8 +98,8 @@
   <div>
     <b>{{ unmonitorable }} of these fares can't be monitored.</b>
     Restricted fares — Basic Economy and similar — don't permit changes after
-    ticketing, so there is no way to rebook them if the price drops. They're
-    marked <span class="tag tag-mute" style="vertical-align:baseline">Not monitored</span> below.
+    ticketing, so there is no way to rebook them if the price drops. Each is
+    marked below with the real reason.
   </div>
 </div>
 {% endif %}
@@ -108,7 +108,12 @@
   {% for o in offers %}
   <div class="fl {{ 'fl-rec' if o.best_value }}" data-price="{{ o.amount }}" data-depart="{{ o.depart_sort }}" data-duration="{{ o.duration_min }}">
     <div class="fl-carrier">
-      {% if o.best_value %}<div class="rec-flag" style="margin-bottom:3px">Best value after reshop</div>{% endif %}
+      {% if o.best_value %}
+      <div class="rec-flag" style="margin-bottom:3px"
+           title="Ranked by price after weighing eligibility — a likely-monitorable fare is ranked as if it were 15% cheaper than face value, reflecting the fare drop we'd expect to recover.">
+        Best value after reshop
+      </div>
+      {% endif %}
       <b>{{ o.carrier }}</b>
       <div class="mono muted">{{ o.flight_numbers }}</div>
       {% if o.fare_brand %}<div class="fl-meta">{{ o.fare_brand }}</div>{% endif %}
@@ -127,14 +132,18 @@
       </div>
     </div>
 
-    <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start">
-      {% if o.eligibility_state == 'monitoring' %}
-        <span class="tag tag-sage"><span class="dot"></span>Monitored</span>
+    <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start; max-width:220px;">
+      {% if o.eligibility_reason == 'carrier_single_denial' %}
+        <span class="tag tag-credit"><span class="dot-hollow"></span>Likely monitorable</span>
+        <div class="fl-meta" style="color:var(--credit); line-height:1.4">
+          This carrier denied one real change request — ranked without optimism.
+        </div>
       {% elif o.eligibility_state == 'likely_monitoring' %}
-        <span class="tag tag-sage-soft" title="{{ o.eligibility_copy }}">
-          <span class="dot-hollow"></span>Likely monitorable</span>
+        <span class="tag tag-sage-soft"><span class="dot-hollow"></span>Likely monitorable</span>
+        <div class="fl-meta" style="line-height:1.4">Confirmed after booking.</div>
       {% else %}
-        <span class="tag tag-mute">Not monitored</span>
+        <span class="tag tag-mute">{{ o.eligibility_label }}</span>
+        <div class="fl-meta" style="line-height:1.4">{{ o.eligibility_copy }}</div>
       {% endif %}
       {% if o.policy_enforcement == 'block' %}
         <span class="tag tag-alert">Blocked by policy</span>

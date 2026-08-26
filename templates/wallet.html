@@ -100,21 +100,37 @@
 <div class="card" style="padding:0; overflow-x:auto">
   <table class="ledger">
     <thead>
-      <tr><th>Issued</th><th>Airline</th><th>Loyalty account</th><th>Status</th>
-          <th class="r">Remaining</th></tr>
+      <tr><th>Issued</th><th>Airline</th><th>Loyalty account</th><th>Source trip</th>
+          <th>Status</th><th class="r">Remaining</th><th>Expires</th></tr>
     </thead>
     <tbody>
       {% for c in airline_credits %}
       <tr>
         <td class="muted mono nw">{{ c.issued_at.strftime('%Y-%m-%d') if c.issued_at else '—' }}</td>
-        <td>{{ c.airline }}{% if c.expires_at %}<div class="hint" style="margin-top:2px">expires {{ c.expires_at.strftime('%Y-%m-%d') }}</div>{% endif %}</td>
+        <td>{{ c.airline }}</td>
         <td class="mono">{{ c.loyalty_account_reference or '—' }}</td>
+        <td class="muted">
+          {% if c.route %}
+          <a href="{{ url_for('trip_detail', order_id=c.order_id) }}">{{ c.route }}</a>
+          {% else %}—{% endif %}
+        </td>
         <td>
           <span class="tag {{ 'tag-credit' if c.status == 'active' else ('tag-sage' if c.status == 'redeemed' else 'tag-mute') }}">
             {{ c.status|capitalize }}
           </span>
         </td>
         <td class="r num">{{ c.amount_remaining }} <span class="cur">{{ c.currency }}</span></td>
+        <td class="mono nw">
+          {% if c.expires_at %}
+            {% if c.expiring_soon %}
+            <span class="tag tag-alert" title="Expires within {{ credit_expiry_warning_days }} days">
+              <span class="dot"></span>{{ c.expires_at.strftime('%Y-%m-%d') }}
+            </span>
+            {% else %}
+            {{ c.expires_at.strftime('%Y-%m-%d') }}
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

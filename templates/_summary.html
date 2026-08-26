@@ -32,20 +32,26 @@
     </div>
 
     <div style="margin-top:14px">
-      {% if offer.monitorable %}
+      {% if offer.eligibility_reason == 'carrier_single_denial' %}
+      <div class="card-flat" style="background:var(--credit-wash); border-color:#E0D0AE; padding:12px">
+        <div class="tag tag-credit" style="margin-bottom:6px"><span class="dot-hollow"></span>Likely monitorable</div>
+        <div style="font-size:12.5px; color:var(--credit); line-height:1.5">
+          {{ offer.eligibility_copy }}
+        </div>
+      </div>
+      {% elif offer.eligibility_state == 'likely_monitoring' %}
       <div class="card-flat" style="background:var(--sage-wash); border-color:rgba(22,163,74,.22); padding:12px">
-        <div class="tag tag-sage" style="margin-bottom:6px"><span class="dot"></span>Monitored</div>
+        <div class="tag tag-sage-soft" style="margin-bottom:6px"><span class="dot-hollow"></span>Likely monitorable</div>
         <div style="font-size:12.5px; color:var(--green); line-height:1.5">
-          We'll watch this fare after booking and rebook you if it drops by more
-          than {{ policy.min_saving }} {{ offer.currency }}.
+          Confirmed after booking — we'll watch this fare and rebook you if it
+          drops by more than {{ policy.min_saving }} {{ offer.currency }}.
         </div>
       </div>
       {% else %}
       <div class="card-flat" style="padding:12px">
-        <div class="tag tag-mute" style="margin-bottom:6px">Not monitored</div>
+        <div class="tag tag-mute" style="margin-bottom:6px">{{ offer.eligibility_label }}</div>
         <div style="font-size:12.5px; color:var(--ink-soft); line-height:1.5">
-          This fare doesn't permit changes after ticketing, so it can't be
-          rebooked if the price drops.
+          {{ offer.eligibility_copy }}
         </div>
       </div>
       {% endif %}

@@ -408,6 +408,24 @@ def price_history(order_id):
     return out
 
 
+def execution_steps(order_id, original_paid):
+    """(ts, new_paid) for every exchange that actually landed on this order,
+    oldest first — the difference band's baseline steps down at each one.
+    Starts from original_paid at the dawn of time (an empty string sorts
+    before any real ISO timestamp — db.audit_rows() hands back ts as an
+    isoformat() string, not a datetime, so the sentinel has to sort the
+    same way) so a checkpoint logged before the first exchange still
+    resolves to what was actually paid then, not the post-exchange amount.
+    Real data or nothing — an order with no successful execution just
+    yields the one starting point, which difference_band renders as a flat
+    baseline, identical to before this stepping existed."""
+    out = [("", Decimal(str(original_paid or 0)))]
+    for r in reversed(db.audit_rows(limit=500, order_id=order_id)):
+        if r.get("kind") == "execution" and r.get("execution") == "executed" and r.get("new_paid"):
+            out.append((r["ts"], Decimal(str(r["new_paid"]))))
+    return out
+
+
 # --- dashboard chart geometry -------------------------------------------
 # Computed here rather than in the template so the SVG stays declarative, and
 # in the browser-free tests the numbers can be asserted directly.
@@ -553,16 +571,44 @@ BAND_W, BAND_H = 720, 180
 BAND_PAD_T, BAND_PAD_B = 16, 20
 
 
-def difference_band(points, baseline, currency):
+def difference_band(points, baseline, currency, baseline_steps=None):
     """points: [(ts, Decimal), ...] market_best checks, oldest first.
-    baseline: a single Decimal, flat across the whole window."""
+    baseline: a single Decimal, used when baseline_steps is None — flat
+    across the whole window. This is the only mode aggregate_difference_band
+    ever uses: summed across multiple orders, there is no single execution
+    timeline left to step at.
+
+    baseline_steps: optional [(ts, Decimal), ...], oldest first — what was
+    paid, and every timestamp it changed (each exchange execution actually
+    landing). When given, the dashed datum line steps down at the market
+    checkpoint on or after each step's timestamp, rather than sloping
+    between the old and new paid amount as a flat baseline would. Resolution
+    is the market-check series itself (points), not the step's exact
+    timestamp — this is a real, honest approximation (snapped to the
+    nearest checkpoint actually plotted), never an interpolated or invented
+    value.
+    """
     if len(points) < 2:
         return None
     n = len(points)
     xs = [i / (n - 1) * BAND_W for i in range(n)]
     series_vals = [float(v) for _, v in points]
-    base_val = float(baseline)
-    all_vals = series_vals + [base_val]
+
+    if baseline_steps:
+        ordered = sorted(baseline_steps, key=lambda s: s[0])
+        def baseline_at(ts):
+            val = ordered[0][1]
+            for step_ts, step_val in ordered:
+                if step_ts <= ts:
+                    val = step_val
+                else:
+                    break
+            return val
+        base_vals = [float(baseline_at(ts)) for ts, _ in points]
+    else:
+        base_vals = [float(baseline)] * n
+
+    all_vals = series_vals + base_vals
     lo, hi = min(all_vals), max(all_vals)
     pad = (hi - lo) * 0.35 or max(hi * 0.1, 10)
     lo, hi = lo - pad, hi + pad
@@ -572,11 +618,27 @@ def difference_band(points, baseline, currency):
         return BAND_PAD_T + (1 - (v - lo) / span) * (BAND_H - BAND_PAD_T - BAND_PAD_B)
 
     line_pts = [(round(xs[i], 1), round(y(series_vals[i]), 1)) for i in range(n)]
-    base_pts = [(round(xs[i], 1), round(y(base_val), 1)) for i in range(n)]
+    base_pts = [(round(xs[i], 1), round(y(base_vals[i]), 1)) for i in range(n)]
 
     line_path = "M" + " L".join(f"{x},{yy}" for x, yy in line_pts)
-    base_path = "M" + " L".join(f"{x},{yy}" for x, yy in base_pts)
-    area_path = line_path + " L" + " L".join(f"{x},{yy}" for x, yy in reversed(base_pts)) + " Z"
+
+    # A stepped baseline needs a horizontal jump between differing y values,
+    # not a sloped line — the paid amount changed instantly at the exchange,
+    # it did not drift there. Flat baselines never insert a corner (every
+    # base_pts[i] shares one y), so this degrades to the plain point list —
+    # same shape as before this function supported stepping at all.
+    base_corner_pts = [base_pts[0]]
+    for i in range(1, n):
+        prev_y = base_pts[i - 1][1]
+        x, yy = base_pts[i]
+        if yy != prev_y:
+            base_corner_pts.append((x, prev_y))
+        base_corner_pts.append((x, yy))
+    base_path = "M" + " L".join(f"{x},{yy}" for x, yy in base_corner_pts)
+    # The fill's baseline edge reuses the same corner points (reversed), so
+    # the shaded region's boundary matches the dashed line's step exactly —
+    # not a diagonal cutting across it.
+    area_path = line_path + " L" + " L".join(f"{x},{yy}" for x, yy in reversed(base_corner_pts)) + " Z"
     below_clip = base_path + f" L{BAND_W},{BAND_H} L0,{BAND_H} Z"
     above_clip = base_path + f" L{BAND_W},0 L0,0 Z"
 
@@ -584,7 +646,7 @@ def difference_band(points, baseline, currency):
         "w": BAND_W, "h": BAND_H, "currency": currency, "has_data": True,
         "line_path": line_path, "base_path": base_path, "area_path": area_path,
         "below_clip": below_clip, "above_clip": above_clip,
-        "baseline": f"{base_val:,.2f}", "latest": f"{series_vals[-1]:,.2f}",
+        "baseline": f"{base_vals[-1]:,.2f}", "latest": f"{series_vals[-1]:,.2f}",
         "n": n,
     }
 
@@ -1405,6 +1467,25 @@ def overview():
                            monitored_count=len(monitored))
 
 
+CREDIT_EXPIRY_WARNING_DAYS = 30
+
+
+def _flag_expiring_credits(credits):
+    """The credit ledger is a liability register — expiry is the point of
+    it (migrations/021's own comment). Flags active credits expiring within
+    CREDIT_EXPIRY_WARNING_DAYS so the template can render them distinctly
+    rather than as one more date in a column."""
+    now = datetime.now(timezone.utc)
+    out = []
+    for c in credits:
+        c = dict(c)
+        c["expiring_soon"] = bool(
+            c["status"] == "active" and c["expires_at"]
+            and c["expires_at"] - now <= timedelta(days=CREDIT_EXPIRY_WARNING_DAYS))
+        out.append(c)
+    return out
+
+
 @app.route("/wallet")
 @auth.login_required
 def wallet():
@@ -1418,7 +1499,9 @@ def wallet():
     return render_template("wallet.html", nav="wallet", rows=rows,
                            totals=db.wallet_totals(rows),
                            commission_rate=db.account_commission_rate(account_id),
-                           airline_credits=db.airline_credits_for_account(account_id))
+                           airline_credits=_flag_expiring_credits(
+                               db.airline_credits_for_account(account_id)),
+                           credit_expiry_warning_days=CREDIT_EXPIRY_WARNING_DAYS)
 
 
 def _json_safe(row):
@@ -1653,6 +1736,12 @@ def _traveler_form():
         {"airline": a.strip(), "member_number": n.strip()}
         for a, n in zip(airlines, numbers) if a.strip() and n.strip()
     ]
+    # Same ownership check as book()'s cost_center_id — a center id from
+    # another account (or a stale/deleted one) is dropped, not attached.
+    default_cost_center_id = request.form.get("default_cost_center_id", "").strip() or None
+    if default_cost_center_id and not db.cost_center(default_cost_center_id, _account()):
+        default_cost_center_id = None
+    form["default_cost_center_id"] = default_cost_center_id
     return form
 
 
@@ -1677,7 +1766,8 @@ def _traveler_problem(form):
 @auth.login_required
 def travelers():
     return render_template("travelers.html", nav="travelers",
-                           travelers=db.travelers(_account()), form={}, editing=None)
+                           travelers=db.travelers(_account()), form={}, editing=None,
+                           cost_centers=db.cost_centers_for_account(_account(), active_only=True))
 
 
 @app.route("/travelers/new", methods=["POST"])
@@ -1688,7 +1778,8 @@ def traveler_new():
     if problem:
         return render_template("travelers.html", nav="travelers",
                                travelers=db.travelers(_account()), form=form,
-                               editing=None, error=problem), 400
+                               editing=None, error=problem,
+                               cost_centers=db.cost_centers_for_account(_account(), active_only=True)), 400
     db.traveler_save(form, _account())
     return redirect(url_for("travelers"))
 
@@ -1699,18 +1790,20 @@ def traveler_edit(traveler_id):
     existing = db.traveler(traveler_id, _account())
     if not existing:
         return redirect(url_for("travelers"))
+    cost_centers = db.cost_centers_for_account(_account(), active_only=True)
     if request.method == "POST":
         form = _traveler_form()
         problem = _traveler_problem(form)
         if problem:
             return render_template("travelers.html", nav="travelers",
                                    travelers=db.travelers(_account()), form=form,
-                                   editing=traveler_id, error=problem), 400
+                                   editing=traveler_id, error=problem,
+                                   cost_centers=cost_centers), 400
         db.traveler_save(form, _account(), traveler_id)
         return redirect(url_for("travelers"))
     return render_template("travelers.html", nav="travelers",
                            travelers=db.travelers(_account()),
-                           form=existing, editing=traveler_id)
+                           form=existing, editing=traveler_id, cost_centers=cost_centers)
 
 
 @app.route("/travelers/<traveler_id>/delete", methods=["POST"])
@@ -1777,9 +1870,13 @@ def reservation_new():
 @auth.login_required
 def trips():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # trip_view() carries only the bare cost_center_id (a uuid) — resolved
+    # to a human code here, once per account, rather than joining per row.
+    cc_codes = {str(c["id"]): c["code"] for c in db.cost_centers_for_account(_account())}
     upcoming, past, saved, count = [], [], Decimal("0"), 0
     for record in load_orders():
         t = trip_view(record)
+        t["cost_center_code"] = cc_codes.get(str(t["cost_center_id"])) if t["cost_center_id"] else None
         (upcoming if (t["depart_iso"][:10] or "9999") >= today else past).append(t)
         if t["refunded"]:
             saved += Decimal(t["refunded"])
@@ -1809,10 +1906,16 @@ def trip_detail(order_id):
         return redirect(url_for("trips"))
     trip = trip_view(record)
     points = price_history(order_id)
-    # Flat baseline at the current `paid` amount — not stepped at each
-    # exchange. No real exchange has moved real money yet to justify a
-    # genuinely stepped baseline; see the writeup.
-    band = difference_band(points, Decimal(str(trip["paid"] or 0)), trip["currency"]) if points else None
+    # Baseline steps down at each exchange that actually landed — see
+    # execution_steps(). No real exchange has moved real money yet (the
+    # sandbox's own change_total_amount never goes negative; see the
+    # writeup), so today this always resolves to one flat step, same as
+    # before stepping existed — but it is real machinery, not a promise,
+    # and needs no further change once a genuine exchange executes.
+    original = trip["original_paid"] or trip["paid"]
+    steps = execution_steps(order_id, original) if points else None
+    band = difference_band(points, Decimal(str(trip["paid"] or 0)), trip["currency"],
+                           baseline_steps=steps) if points else None
     return render_template("trip.html", nav="trips", trip=trip, band=band,
                            commission_rate=db.account_commission_rate(record["account_id"]),
                            savings_events=db.savings_events_for_order(order_id))
@@ -2155,6 +2258,7 @@ def execute(order_id, action):
         "source": last.get("source") or "operator",
         "execution": "executed", "detail": note,
         "currency": record.get("currency") or "",
+        "old_paid": record.get("paid"),
     }
 
     if savings:
@@ -2194,6 +2298,16 @@ def execute(order_id, action):
             # produced without a separate lookup by order_id.
             db.savings_event_link_credit(event["id"], credit["id"])
 
+    # finish_execution and the savings/credit writes above are durable
+    # regardless of what happens next — only old_paid needed data this
+    # code already had. new_paid needs a fresh GET, fetched only now, right
+    # before the row that carries it: audit_events is append-only (no
+    # UPDATE), so this is the one chance to attach it, but a transient
+    # failure here must not cost the execution/savings/credit trail
+    # already committed above.
+    fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
+    audit_payload["new_paid"] = fresh.get("total_amount")
+
     # The audit trail — an execution is the single most audit-worthy thing
     # this system does, and until now it left no trace here at all.
     # Written once, after the fact; distinct from the
@@ -2201,7 +2315,6 @@ def execute(order_id, action):
     # already logs before a human ever confirms anything.
     db.audit_append(audit_payload)
 
-    fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
     upsert_order({"order_id": order_id, "raw": fresh, "monitoring": False,
                   "executed": note, "paid": fresh["total_amount"], **extra})
     return redirect(url_for("trip_detail", order_id=order_id))

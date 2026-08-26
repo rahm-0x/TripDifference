@@ -216,15 +216,15 @@ def test_order_cols_covers_every_writable_column():
 
 
 def test_traveler_fields_covers_every_writable_column():
-    """Same check for traveler_save()'s combined field list — the close-out
-    found it missing default_cost_center_id."""
+    """Same check for traveler_save()'s combined field list — Item 3 wired
+    default_cost_center_id into the Travelers form, so it now belongs in
+    the allowlist same as everything else. Anything missing should fail
+    this test."""
     live = set(_live_columns("travelers")) - {"id", "account_id", "created_at", "updated_at"}
     combined = set(db.TRAVELER_FIELDS) | set(db.TRAVELER_TEXT_PROFILE_FIELDS) | \
-        {"clear_plus", "loyalty_programs"}
+        {"clear_plus", "loyalty_programs", "default_cost_center_id"}
     missing = live - combined
-    # default_cost_center_id: known, reported, deliberately not wired yet —
-    # no form collects it. Anything else missing should fail this test.
-    assert missing == {"default_cost_center_id"}, (
+    assert missing == set(), (
         f"unexpected gap between travelers schema and TRAVELER_FIELDS/"
         f"TRAVELER_TEXT_PROFILE_FIELDS: {missing}")
 
@@ -325,6 +325,47 @@ def test_cost_center_update_scoped_to_account(acct):
         untouched = db.cost_center(theirs["id"], other["account_id"])
         assert untouched["code"] == "ENG"
     finally:
+        db.q("DELETE FROM cost_centers WHERE id = %s", (theirs["id"],))
+        db.q("DELETE FROM accounts WHERE id = %s", (other["account_id"],))
+
+
+def test_traveler_save_writes_default_cost_center(acct):
+    """default_cost_center_id was schema-only until Item 3 wired a form
+    field for it — this is the round-trip proof, same shape as
+    test_upsert_order_round_trips_every_writable_value's per-column checks."""
+    account_id = acct["account_id"]
+    cc = db.cost_center_create(account_id, code="ENG", name="Engineering")
+    try:
+        traveler = db.traveler_save(
+            {"given_name": "Cost", "family_name": "Center", "default_cost_center_id": cc["id"]},
+            account_id)
+        assert str(traveler["default_cost_center_id"]) == str(cc["id"])
+
+        fetched = db.traveler(traveler["id"], account_id)
+        assert fetched["default_cost_center_id"] == str(cc["id"])  # _traveler() stringifies for JSON
+    finally:
+        db.q("DELETE FROM cost_centers WHERE id = %s", (cc["id"],))
+
+
+def test_traveler_new_ignores_cost_center_from_another_account(logged_in):
+    """Same account-scoping shape as book()'s cost_center_id handling
+    (test_book_ignores_cost_center_from_another_account) — _traveler_form()
+    must drop a default_cost_center_id that doesn't belong to the caller's
+    own account rather than trust a bare id from the form."""
+    client, account = logged_in
+    other = db.create_account(f"other-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    theirs = db.cost_center_create(other["account_id"], code="ENG", name="Engineering")
+    try:
+        resp = client.post("/travelers/new", data={
+            "_csrf": CSRF, "given_name": "Cost", "family_name": "Center",
+            "default_cost_center_id": str(theirs["id"]),
+        })
+        assert resp.status_code == 302
+        travelers = db.travelers(account["account_id"])
+        assert len(travelers) == 1
+        assert travelers[0]["default_cost_center_id"] == ""
+    finally:
+        db.q("DELETE FROM travelers WHERE account_id = %s", (account["account_id"],))
         db.q("DELETE FROM cost_centers WHERE id = %s", (theirs["id"],))
         db.q("DELETE FROM accounts WHERE id = %s", (other["account_id"],))
 
@@ -762,6 +803,75 @@ def test_exchange_negative_delta_reads_refund_to(logged_in_carded):
     events = db.savings_events_for_order(order["order_id"])
     assert events[0]["delivery_type"] == "airline_credit"
     assert events[0]["realized_savings"] == "45.00"
+
+
+# ---------------------------------------------------------------------------
+# difference-band baseline stepping (item 3) — the dashed "paid" line steps
+# down at the moment an exchange actually lands, instead of sloping between
+# the old and new paid amount.
+# ---------------------------------------------------------------------------
+
+def test_execute_records_old_and_new_paid_on_the_audit_row(logged_in_carded):
+    """execute()'s audit row is append-only (audit_events forbids UPDATE),
+    so old_paid/new_paid have to be captured in the same insert that logs
+    the execution — this is the only data source execution_steps() has."""
+    client, account = logged_in_carded
+    order = make_real_order(account["account_id"], carrier="Duffel Airways",
+                            paid="250.00",
+                            last_decision={"source": "duffel", "change_offer_id": "oco_test2"})
+
+    def _mock(method, path, body=None, params=None, label=None):
+        if method == "POST" and path == "/air/order_changes":
+            return {"id": "chg_test2", "change_total_amount": "-31.00",
+                    "change_total_currency": "USD"}
+        if method == "POST" and path.endswith("/actions/confirm"):
+            return {"confirmed_at": "2026-12-01T00:00:00Z", "refund_to": "airline_credits"}
+        if method == "GET" and path.startswith("/air/orders/"):
+            return fake_order(order_id=path.rsplit("/", 1)[-1], amount="219.00")
+        raise AssertionError(f"unexpected duffel_http.request({method!r}, {path!r})")
+
+    with patch("duffel_http.request", side_effect=_mock):
+        resp = client.post(f"/orders/{order['order_id']}/execute/exchange",
+                           data={"confirm_text": "CONFIRM", "_csrf": CSRF}, follow_redirects=False)
+    assert resp.status_code == 302
+
+    rows = db.audit_rows(order["order_id"])
+    execution = next(r for r in rows if r["kind"] == "execution")
+    assert execution["old_paid"] == "250.00"
+    assert execution["new_paid"] == "219.00"
+
+    steps = app_module.execution_steps(order["order_id"], "250.00")
+    assert [v for _, v in steps] == [Decimal("250.00"), Decimal("219.00")]
+    assert steps[0][0] < steps[1][0], "the starting point must sort before the execution's real timestamp"
+
+
+def test_difference_band_steps_at_the_execution_timestamp():
+    """Pure geometry, no DB: with baseline_steps given, the dashed baseline
+    must jump exactly at the point-in-time the step occurs, not slope
+    between the old and new value — and with none given, it must degrade to
+    the plain flat line this function always drew before stepping existed."""
+    points = [("2026-01-01T00:00:00+00:00", Decimal("200")),
+             ("2026-01-02T00:00:00+00:00", Decimal("180")),
+             ("2026-01-03T00:00:00+00:00", Decimal("210"))]
+
+    flat = app_module.difference_band(points, Decimal("250"), "USD")
+    assert flat["base_path"].count("L") == 2, "a flat baseline draws one segment per remaining point, no corners"
+
+    stepped = app_module.difference_band(
+        points, Decimal("250"), "USD",
+        baseline_steps=[("", Decimal("250")), ("2026-01-02T00:00:00+00:00", Decimal("200"))])
+    # One extra corner vs. the flat case: the horizontal run at the old
+    # value, then the vertical jump down, both inserted at the same x.
+    assert stepped["base_path"].count("L") == 3
+    assert stepped["baseline"] == "200.00", "the displayed baseline is the *current* step, not the first one"
+
+
+def test_execution_steps_with_no_executions_yields_flat_baseline(acct):
+    """An order that was never rebooked has nothing to step at — real data
+    or nothing, never a fabricated step."""
+    order = make_real_order(acct["account_id"], paid="199.00")
+    steps = app_module.execution_steps(order["order_id"], "199.00")
+    assert steps == [("", Decimal("199.00"))]
 
 
 # ---------------------------------------------------------------------------

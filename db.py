@@ -659,6 +659,7 @@ def _traveler(row):
     t = dict(row)
     t["born_on"] = t["born_on"].isoformat() if t.get("born_on") else ""
     t["id"] = str(t["id"])        # so the picker can serialise these to JSON
+    t["default_cost_center_id"] = str(t["default_cost_center_id"]) if t.get("default_cost_center_id") else ""
     t["loyalty_programs"] = t.get("loyalty_programs") or []
     return t
 
@@ -688,8 +689,13 @@ def traveler_save(data, account_id, traveler_id=None):
     form) or also TRAVELER_TEXT_PROFILE_FIELDS/clear_plus/loyalty_programs
     (the fuller bolt-on profile) — fields not present just keep their
     existing value on update, or the column default on insert.
+
+    `default_cost_center_id` is optional and, when present, is trusted to
+    have already been ownership-checked by the caller (same pattern as
+    book()'s cost_center_id) — this function does no FK validation itself.
     """
-    cols = list(TRAVELER_FIELDS) + list(TRAVELER_TEXT_PROFILE_FIELDS) + ["clear_plus", "loyalty_programs"]
+    cols = (list(TRAVELER_FIELDS) + list(TRAVELER_TEXT_PROFILE_FIELDS)
+            + ["clear_plus", "loyalty_programs", "default_cost_center_id"])
     vals = []
     for f in cols:
         if f == "born_on":
@@ -698,6 +704,8 @@ def traveler_save(data, account_id, traveler_id=None):
             vals.append(bool(data.get(f)))
         elif f == "loyalty_programs":
             vals.append(Jsonb(data.get(f) or []))
+        elif f == "default_cost_center_id":
+            vals.append(data.get(f) or None)
         else:
             vals.append(data.get(f) or "")
 

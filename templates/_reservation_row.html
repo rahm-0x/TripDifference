@@ -5,10 +5,12 @@
     <b>{{ t.origin }} → {{ t.destination }}</b>
     <div class="muted" style="font-size:12px">{{ t.carrier }}</div>
   </td>
+  <td class="muted">{{ t.passenger_name or '—' }}</td>
   <td>Flight</td>
   <td class="mono">{{ t.booking_reference }}</td>
   <td class="muted">{{ t.date_label }}</td>
   <td class="r num">{{ t.paid }} <span class="cur">{{ t.currency }}</span></td>
+  <td class="mono muted">{{ t.cost_center_code or '—' }}</td>
   <td>
     {% if t.refunded %}
       <span class="tag tag-terra">Rebooked</span>

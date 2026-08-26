@@ -108,6 +108,19 @@
           <input id="nationality" name="nationality" value="{{ form.nationality or '' }}"
                  placeholder="e.g. US">
         </div>
+        {% if cost_centers %}
+        <div class="field">
+          <label for="default_cost_center_id">Default cost center</label>
+          <select id="default_cost_center_id" name="default_cost_center_id">
+            <option value="">No default</option>
+            {% for c in cost_centers %}
+            <option value="{{ c.id }}" {{ 'selected' if form.default_cost_center_id == c.id|string }}>
+              {{ c.code }} — {{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <p class="hint">Pre-selects this cost center when booking for this traveler.</p>
+        </div>
+        {% endif %}
 
         <h4 class="form-section">Loyalty programs</h4>
         {% for i in range(3) %}
