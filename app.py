@@ -823,7 +823,8 @@ def onboarding_payment():
     intent = billing.create_setup_intent(customer_id)
     return render_template("onboarding_payment.html", hide_nav=True,
                            client_secret=intent.client_secret,
-                           stripe_publishable_key=os.environ.get("STRIPE_PUBLISHABLE_KEY", ""))
+                           stripe_publishable_key=os.environ.get("STRIPE_PUBLISHABLE_KEY", ""),
+                           commission_rate=db.account_commission_rate(acct))
 
 
 @app.route("/onboarding/payment/confirm", methods=["POST"])
