@@ -85,7 +85,7 @@
     {% if d.recovered %}
     <div class="fee">
       <div><span>Recovered</span><b>{{ d.recovered }} {{ o.currency }}</b></div>
-      <div><span>Our fee (25%)</span><b>−{{ d.service_fee }} {{ o.currency }}</b></div>
+      <div><span>Our fee ({{ (commission_rate * 100)|round(1) }}%)</span><b>−{{ d.service_fee }} {{ o.currency }}</b></div>
       <div class="fee-net"><span>Net to customer</span><b>{{ d.net_to_customer }} {{ o.currency }}</b></div>
     </div>
     {% endif %}

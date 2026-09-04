@@ -1936,7 +1936,8 @@ def orders():
         r["sim_market"] = sc.get("market_price")
         r["sim_change_total"] = sc.get("change_total")
     return render_template("orders.html", nav="ops", orders=records,
-                           source_name=os.environ.get("PRICE_SOURCE", "simulated"))
+                           source_name=os.environ.get("PRICE_SOURCE", "simulated"),
+                           commission_rate=db.account_commission_rate(_account()))
 
 
 @app.route("/orders/<order_id>/monitor", methods=["POST"])
