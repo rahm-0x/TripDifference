@@ -8,7 +8,7 @@
       <h1>Add a card so we can chase your savings</h1>
       <p>
         We track fare drops and work with the airline to claim them. When
-        your credit or refund lands, we charge a 25% success fee.
+        your credit or refund lands, we charge a {{ (commission_rate * 100)|round(1) }}% success fee.
       </p>
       <p class="muted" style="font-size:13px">No savings? No fee. (And no subscription necessary.)</p>
     </div>
@@ -34,12 +34,12 @@
     <div class="card">
       <h3 style="margin-bottom:4px">What a fare drop looks like</h3>
       <p class="muted" style="font-size:12.5px; margin-bottom:16px">
-        The airline issues the full savings. We bill a 25% success fee separately.
+        The airline issues the full savings. We bill a {{ (commission_rate * 100)|round(1) }}% success fee separately.
       </p>
       <input type="range" id="dropSlider" min="20" max="600" value="200" style="width:100%">
       <div class="ob-slider-rows">
         <div><span>Savings issued by airline</span><b id="sIssued">$200.00</b></div>
-        <div><span>Success fee (25% of the savings)</span><b id="sFee">$50.00</b></div>
+        <div><span>Success fee ({{ (commission_rate * 100)|round(1) }}% of the savings)</span><b id="sFee">$50.00</b></div>
       </div>
       <div class="ob-slider-net"><span>Net Savings</span><b id="sNet">$150.00</b></div>
     </div>
@@ -71,8 +71,9 @@
     const slider = document.getElementById('dropSlider');
     const sIssued = document.getElementById('sIssued'), sFee = document.getElementById('sFee'),
           sNet = document.getElementById('sNet');
+    const commissionRate = {{ (commission_rate|float)|tojson }};
     function updateSlider() {
-      const v = parseFloat(slider.value), fee = v * 0.25;
+      const v = parseFloat(slider.value), fee = v * commissionRate;
       sIssued.textContent = '$' + v.toFixed(2);
       sFee.textContent = '$' + fee.toFixed(2);
       sNet.textContent = '$' + (v - fee).toFixed(2);
