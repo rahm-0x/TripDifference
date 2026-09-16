@@ -6,14 +6,23 @@ execution-bookkeeping fixes from item 1.
 engine.py's decision math is covered by test_engine.py and untouched here.
 Duffel and Stripe are mocked so these run offline and fast — the live
 end-to-end runs already done against sandbox are the integration proof,
-this is the regression net underneath. The database is real (the same
-Postgres this app always uses): there is no way to derive a live column
-list from a mock, and the persistence tests below exist specifically to
-catch drift between the schema and db.py's allowlists.
+this is the regression net underneath. The database is real — the staging
+database, which conftest.py points POSTGRES_URL at: there is no way to derive
+a live column list from a mock, and the persistence tests below exist
+specifically to catch drift between the schema and db.py's allowlists.
 
     .venv/bin/python -m pytest test_money_path.py -v
 
-Every test creates and tears down its own account.
+Staging also holds live staging orders, so every test cleans up only what it
+created, by captured id:
+  - every account comes from new_account(), named db.TEST_ACCOUNT_NAME, and
+    is deleted by its id (cascading to its users, sessions, orders, travelers,
+    cost centres, policy rules, booking requests, invoices, credits, and the
+    orders' savings events and execution attempts);
+  - carrier capability data is global, so book() tests use carrier codes from
+    new_carrier_code() — never a real IATA designator, never an existing row —
+    and those codes' rows are deleted once the module finishes;
+  - audit_events is append-only by trigger and keeps what tests write.
 """
 
 import uuid
@@ -37,6 +46,37 @@ CSRF = "test-csrf-token"
 
 
 # ---------------------------------------------------------------------------
+# test-only identities — see the module docstring
+# ---------------------------------------------------------------------------
+
+def new_account(prefix="test"):
+    """An account + user named db.TEST_ACCOUNT_NAME. The caller deletes it by
+    the returned account_id."""
+    user = db.create_account(f"{prefix}-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    db.q("UPDATE accounts SET name = %s WHERE id = %s", (db.TEST_ACCOUNT_NAME, user["account_id"]))
+    return user
+
+
+_TEST_CARRIERS = []
+
+
+def new_carrier_code():
+    """A carrier code no airline and no live order can have (IATA designators
+    are two characters), recorded so teardown deletes exactly its rows."""
+    code = f"{db.TEST_ACCOUNT_NAME}{uuid.uuid4().hex[:10]}"
+    _TEST_CARRIERS.append(code)
+    return code
+
+
+@pytest.fixture(scope="module", autouse=True)
+def delete_test_carrier_rows():
+    yield
+    if _TEST_CARRIERS:
+        db.q("DELETE FROM carrier_change_observations WHERE carrier_iata = ANY(%s)", (_TEST_CARRIERS,))
+        db.q("DELETE FROM carrier_change_capability WHERE carrier_iata = ANY(%s)", (_TEST_CARRIERS,))
+
+
+# ---------------------------------------------------------------------------
 # fixtures
 # ---------------------------------------------------------------------------
 
@@ -44,8 +84,7 @@ CSRF = "test-csrf-token"
 def acct():
     """A real account + user, deleted afterward. accounts.commission_rate
     stays at its schema default (0.25) unless a test overrides it."""
-    email = f"test-{uuid.uuid4().hex[:12]}@example.com"
-    user = db.create_account(email, password_hash="x")
+    user = new_account()
     yield user
     db.q("DELETE FROM accounts WHERE id = %s", (user["account_id"],))
 
@@ -127,12 +166,12 @@ def fake_offer(offer_id=None, amount="219.00", currency="USD", cabin="economy"):
 
 def fake_order(order_id=None, amount="219.00", currency="USD",
               refundable=True, change_allowed=False, carrier_name="Test Airways",
-              carrier_iata="T1", fare_brand="Basic"):
-    # T1, not a real IATA code — book()'s carrier_capability_record() write
-    # is real and unmocked (only duffel_http.request is patched here), so a
-    # fixture default that collided with a seeded carrier (ZZ/BA/AA/TP/IB)
-    # would let every test in this file quietly pollute that carrier's real
-    # observation counts on every run.
+              carrier_iata=None, fare_brand="Basic"):
+    # book()'s carrier_capability_record() write is real and unmocked (only
+    # duffel_http.request is patched here), so the owner's code is always a
+    # fresh test-only one: a real or reused code would add this test's
+    # observation to another carrier's counts.
+    carrier_iata = carrier_iata or new_carrier_code()
     order_id = order_id or f"ord_test_{uuid.uuid4().hex[:16]}"
     return {
         "id": order_id, "booking_reference": "TEST123",
@@ -314,7 +353,7 @@ def test_cost_center_update_scoped_to_account(acct):
     """cost_center_update() takes account_id for the same reason
     audit_rows()/invoice_lines_for() do — a bare id from a URL/form must not
     let one account edit another's row."""
-    other = db.create_account(f"other-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    other = new_account("other")
     theirs = db.cost_center_create(other["account_id"], code="ENG", name="Engineering")
     try:
         assert db.cost_center(theirs["id"], acct["account_id"]) is None
@@ -353,8 +392,10 @@ def test_traveler_new_ignores_cost_center_from_another_account(logged_in):
     must drop a default_cost_center_id that doesn't belong to the caller's
     own account rather than trust a bare id from the form."""
     client, account = logged_in
-    other = db.create_account(f"other-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    other = new_account("other")
     theirs = db.cost_center_create(other["account_id"], code="ENG", name="Engineering")
+    existing = {t["id"] for t in db.travelers(account["account_id"])}
+    created = set()
     try:
         resp = client.post("/travelers/new", data={
             "_csrf": CSRF, "given_name": "Cost", "family_name": "Center",
@@ -362,10 +403,12 @@ def test_traveler_new_ignores_cost_center_from_another_account(logged_in):
         })
         assert resp.status_code == 302
         travelers = db.travelers(account["account_id"])
+        created = {t["id"] for t in travelers} - existing
         assert len(travelers) == 1
         assert travelers[0]["default_cost_center_id"] == ""
     finally:
-        db.q("DELETE FROM travelers WHERE account_id = %s", (account["account_id"],))
+        for traveler_id in created:
+            db.q("DELETE FROM travelers WHERE id = %s", (traveler_id,))
         db.q("DELETE FROM cost_centers WHERE id = %s", (theirs["id"],))
         db.q("DELETE FROM accounts WHERE id = %s", (other["account_id"],))
 
@@ -393,7 +436,7 @@ def test_book_ignores_cost_center_from_another_account(logged_in_carded):
     trust it just because it looks well-formed. One belonging to a
     different account must be dropped, not attached."""
     client, account = logged_in_carded
-    other = db.create_account(f"other-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    other = new_account("other")
     theirs = db.cost_center_create(other["account_id"], code="ENG", name="Engineering")
     offer = fake_offer()
     order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"])
@@ -444,35 +487,28 @@ def test_book_proceeds_with_card(logged_in_carded):
 # carrier change-capability observations (eligibility bug fix)
 # ---------------------------------------------------------------------------
 
-def _clear_carrier(carrier_iata):
-    db.q("DELETE FROM carrier_change_capability WHERE carrier_iata = %s", (carrier_iata,))
-    db.q("DELETE FROM carrier_change_observations WHERE carrier_iata = %s", (carrier_iata,))
-
-
 def test_carrier_capability_record_and_read():
-    _clear_carrier("QQ")
-    try:
-        assert db.carrier_capability_for("QQ") is None
-        db.carrier_capability_record("QQ", "Test Air", change_allowed=True, fare_brand="Flex")
-        assert db.carrier_capability_for("QQ") == {"confirmed": 1, "denied": 0, "is_synthetic": False}
-        db.carrier_capability_record("QQ", "Test Air", change_allowed=False, fare_brand="Basic")
-        db.carrier_capability_record("QQ", "Test Air", change_allowed=False, fare_brand="Basic")
-        assert db.carrier_capability_for("QQ") == {"confirmed": 1, "denied": 2, "is_synthetic": False}
-        assert db.carrier_capabilities_for(["QQ", "NOPE"]) == \
-            {"QQ": {"confirmed": 1, "denied": 2, "is_synthetic": False}}
+    carrier = new_carrier_code()
+    never_recorded = new_carrier_code()
+    assert db.carrier_capability_for(carrier) is None
+    db.carrier_capability_record(carrier, "Test Air", change_allowed=True, fare_brand="Flex")
+    assert db.carrier_capability_for(carrier) == {"confirmed": 1, "denied": 0, "is_synthetic": False}
+    db.carrier_capability_record(carrier, "Test Air", change_allowed=False, fare_brand="Basic")
+    db.carrier_capability_record(carrier, "Test Air", change_allowed=False, fare_brand="Basic")
+    assert db.carrier_capability_for(carrier) == {"confirmed": 1, "denied": 2, "is_synthetic": False}
+    assert db.carrier_capabilities_for([carrier, never_recorded]) == \
+        {carrier: {"confirmed": 1, "denied": 2, "is_synthetic": False}}
 
-        # The raw log — not read by anything yet, but the fare_brand has to
-        # actually be there for the "does it cluster by fare brand" question
-        # to be answerable later.
-        rows = db.q("""SELECT fare_brand, change_allowed FROM carrier_change_observations
-                       WHERE carrier_iata = 'QQ' ORDER BY id""", fetch="all")
-        assert [dict(r) for r in rows] == [
-            {"fare_brand": "Flex", "change_allowed": True},
-            {"fare_brand": "Basic", "change_allowed": False},
-            {"fare_brand": "Basic", "change_allowed": False},
-        ]
-    finally:
-        _clear_carrier("QQ")
+    # The raw log — not read by anything yet, but the fare_brand has to
+    # actually be there for the "does it cluster by fare brand" question
+    # to be answerable later.
+    rows = db.q("""SELECT fare_brand, change_allowed FROM carrier_change_observations
+                   WHERE carrier_iata = %s ORDER BY id""", (carrier,), fetch="all")
+    assert [dict(r) for r in rows] == [
+        {"fare_brand": "Flex", "change_allowed": True},
+        {"fare_brand": "Basic", "change_allowed": False},
+        {"fare_brand": "Basic", "change_allowed": False},
+    ]
 
 
 def test_zz_is_seeded_as_synthetic():
@@ -488,24 +524,21 @@ def test_book_records_a_carrier_capability_observation(logged_in_carded):
     whenever Duffel actually returned available_actions, using this exact
     order's carrier and its real change_allowed fact, not a guess."""
     client, account = logged_in_carded
+    carrier = new_carrier_code()
     offer = fake_offer()
     order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"],
-                       change_allowed=False, carrier_iata="QQ", fare_brand="Basic")
-    _clear_carrier("QQ")
-    try:
-        with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
-             patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_carrier1")), \
-             patch("billing.capture_authorization"):
-            resp = client.post("/book", data=book_form(offer["id"]), follow_redirects=False)
-        assert resp.status_code == 302
-        assert db.carrier_capability_for("QQ") == {"confirmed": 0, "denied": 1, "is_synthetic": False}
-        logged = db.q("""SELECT fare_brand, change_allowed, order_id
-                         FROM carrier_change_observations WHERE carrier_iata = 'QQ'""", fetch="one")
-        assert logged["fare_brand"] == "Basic"
-        assert logged["change_allowed"] is False
-        assert logged["order_id"] == order["id"]
-    finally:
-        _clear_carrier("QQ")
+                       change_allowed=False, carrier_iata=carrier, fare_brand="Basic")
+    with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
+         patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_carrier1")), \
+         patch("billing.capture_authorization"):
+        resp = client.post("/book", data=book_form(offer["id"]), follow_redirects=False)
+    assert resp.status_code == 302
+    assert db.carrier_capability_for(carrier) == {"confirmed": 0, "denied": 1, "is_synthetic": False}
+    logged = db.q("""SELECT fare_brand, change_allowed, order_id
+                     FROM carrier_change_observations WHERE carrier_iata = %s""", (carrier,), fetch="one")
+    assert logged["fare_brand"] == "Basic"
+    assert logged["change_allowed"] is False
+    assert logged["order_id"] == order["id"]
 
 
 def test_rank_price_discounts_likely_monitoring_not_ineligible():
@@ -928,8 +961,7 @@ def test_spend_by_carrier_does_not_multiply_paid_with_two_savings_events(logged_
         pass
     # Build via fixtures manually since this needs two savings_events on
     # one order, which no single execute() call produces.
-    email = f"test-{uuid.uuid4().hex[:12]}@example.com"
-    user = db.create_account(email, password_hash="x")
+    user = new_account()
     account_id = user["account_id"]
     try:
         order = make_real_order(account_id, carrier="Multi Airways", paid="500.00")
@@ -1016,10 +1048,8 @@ def test_invoice_lines_for_refuses_a_foreign_account():
     caller happened to pass a trusted id. Proves the fix, not just that it
     compiles -- account B must get nothing back for account A's invoice,
     even though the invoice_id itself is valid."""
-    email_a = f"test-{uuid.uuid4().hex[:12]}@example.com"
-    email_b = f"test-{uuid.uuid4().hex[:12]}@example.com"
-    a = db.create_account(email_a, password_hash="x")
-    b = db.create_account(email_b, password_hash="x")
+    a = new_account()
+    b = new_account()
     try:
         order = make_real_order(a["account_id"])
         today = datetime.now(timezone.utc).date()  # matches generate_invoice_route()

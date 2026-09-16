@@ -132,9 +132,10 @@ def _eligible_orders():
     """Every live, monitored order across every account. 'Live' means a real
     Duffel order backs it (raw is non-empty) — a manual/imported reservation
     has no order-change mechanism to quote against at all (engine.evaluate's
-    own NO_EXECUTION_MECHANISM gate), so there is nothing here to observe."""
+    own NO_EXECUTION_MECHANISM gate), so there is nothing here to observe.
+    Test-suite accounts (db.TEST_ACCOUNT_NAME) are skipped."""
     orders = []
-    for acct in db.q("SELECT id FROM accounts", fetch="all"):
+    for acct in db.q("SELECT id FROM accounts WHERE name <> %s", (db.TEST_ACCOUNT_NAME,), fetch="all"):
         for record in db.load_orders(acct["id"]):
             if record.get("monitoring") and record.get("raw"):
                 orders.append(record)

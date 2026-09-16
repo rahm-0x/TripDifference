@@ -28,6 +28,13 @@ from psycopg_pool import ConnectionPool
 
 SESSION_TTL = timedelta(days=14)
 
+# Every account the test suite creates carries this name, because tests share
+# the staging database with live staging orders. Sign-in never resolves to
+# one (user_by_email / user_by_supabase_id), signup never produces the name
+# for a real account (create_account), and validation/observe.py and
+# validation/report.py leave them out.
+TEST_ACCOUNT_NAME = "__pytest__"
+
 _pool = None
 
 
@@ -468,9 +475,11 @@ def create_account(email, password_hash=None, supabase_user_id=None):
 
     Both rows or neither — a user without an account has nothing to own.
     """
+    placeholder = email.split("@")[0]
+    if placeholder == TEST_ACCOUNT_NAME:
+        placeholder = "account"  # reserved for test accounts; see TEST_ACCOUNT_NAME
     with pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("INSERT INTO accounts (name) VALUES (%s) RETURNING id",
-                    (email.split("@")[0],))
+        cur.execute("INSERT INTO accounts (name) VALUES (%s) RETURNING id", (placeholder,))
         account_id = cur.fetchone()["id"]
         cur.execute(
             """INSERT INTO users (account_id, email, password_hash, supabase_user_id)
@@ -493,12 +502,17 @@ def complete_profile(user_id, account_id, *, given_name, family_name, middle_nam
 
 
 def user_by_email(email):
-    return q("SELECT * FROM users WHERE email = %s", (email,), fetch="one")
+    """Sign-in lookup. Never resolves to a test account (TEST_ACCOUNT_NAME)."""
+    return q("""SELECT u.* FROM users u JOIN accounts a ON a.id = u.account_id
+                 WHERE u.email = %s AND a.name <> %s""",
+             (email, TEST_ACCOUNT_NAME), fetch="one")
 
 
 def user_by_supabase_id(supabase_user_id):
-    return q("SELECT * FROM users WHERE supabase_user_id = %s",
-             (supabase_user_id,), fetch="one")
+    """Google sign-in lookup. Never resolves to a test account."""
+    return q("""SELECT u.* FROM users u JOIN accounts a ON a.id = u.account_id
+                 WHERE u.supabase_user_id = %s AND a.name <> %s""",
+             (supabase_user_id, TEST_ACCOUNT_NAME), fetch="one")
 
 
 def link_supabase_id(user_id, supabase_user_id):

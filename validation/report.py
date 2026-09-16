@@ -56,7 +56,14 @@ def _day_bucket(days):
 
 
 def _fetch_all():
-    return db.q("SELECT * FROM reshop_observations", fetch="all")
+    """Every observation except those on test-suite accounts
+    (db.TEST_ACCOUNT_NAME). An observation whose order row is gone has no
+    account to judge by and is kept."""
+    return db.q("""SELECT ro.* FROM reshop_observations ro
+                     LEFT JOIN orders o ON o.order_id = ro.order_id
+                     LEFT JOIN accounts a ON a.id = o.account_id
+                    WHERE a.name IS DISTINCT FROM %s""",
+                (db.TEST_ACCOUNT_NAME,), fetch="all")
 
 
 def _pct(part, whole):

@@ -24,8 +24,19 @@ Duffel sandbox bookings and real Stripe test-mode charges happen against whateve
 `DUFFEL_TOKEN`/`STRIPE_SECRET_KEY` you have configured; nothing here is a mock.
 
 ```bash
-.venv/bin/python -m pytest          # money-path and reshop-engine tests, real DB, mocked Duffel/Stripe
+.venv/bin/python scripts/migrate_staging.py   # once, and after adding a migration
+.venv/bin/python -m pytest                    # money-path and reshop-engine tests, staging DB, mocked Duffel/Stripe
 ```
+
+There are two databases: production and staging. The money-path tests write real rows,
+so they run against staging: set `STAGING_POSTGRES_URL` (transaction pooler, 6543) and
+`STAGING_POSTGRES_URL_NON_POOLING` (session pooler or direct, 5432) in
+`.env.staging.local` (gitignored, and untouched by `vercel env pull`, which rewrites
+`.env.local`). `conftest.py` refuses to run if either is missing or reaches the production
+database, aborts if the connection it opens isn't the staging one, and warns when staging
+holds live orders. Tests share that database with live staging orders, so each deletes
+only the rows it created, every account it creates is named `__pytest__` (never
+signable-into; excluded by `validation/`), and carrier data uses test-only codes.
 
 ## Deployment
 
