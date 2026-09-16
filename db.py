@@ -88,6 +88,16 @@ def _is_staging_database(url):
     return identity(url)[:2] == ("supabase", config.STAGING_SUPABASE_REF)
 
 
+def project_ref():
+    """The Supabase project POSTGRES_URL reaches, or None (unset, or not
+    Supabase). Never any other part of the URL."""
+    url = (os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL") or "").strip()
+    if not url:
+        return None
+    ident = identity(url)
+    return ident[1] if ident[0] == "supabase" else None
+
+
 def startup_check():
     """Run at app import. APP_ENV=staging must run against the staging
     Supabase project (config.STAGING_SUPABASE_REF); APP_ENV=production must

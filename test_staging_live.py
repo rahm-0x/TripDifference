@@ -31,6 +31,7 @@ from unittest.mock import MagicMock, patch
 import psycopg
 import pytest
 
+import app as app_module
 import billing
 import config
 import db
@@ -141,40 +142,79 @@ def test_duffel_guard_matrix(monkeypatch, app_env, token_kind, search_enabled, o
     monkeypatch.setenv("DUFFEL_LIVE_SEARCH_ENABLED", _flag(search_enabled))
     monkeypatch.setenv("DUFFEL_LIVE_ORDERS_ENABLED", _flag(orders_enabled))
     monkeypatch.setenv("DUFFEL_TOKEN", TEST_TOKEN if token_kind == "test" else LIVE_TOKEN)
+    any_flag = search_enabled or orders_enabled
 
-    if app_env != "staging" and (search_enabled or orders_enabled):
+    if app_env != "staging" and any_flag:
         # a live flag anywhere but staging is refused at startup, whatever the token
         with pytest.raises(RuntimeError, match="only allowed with APP_ENV=staging"):
             duffel_http.startup_check()
         return
-    if token_kind == "live" and not (app_env == "staging" and (search_enabled or orders_enabled)):
-        with pytest.raises(RuntimeError, match="LIVE token"):
-            duffel_http.startup_check()
-        with pytest.raises(RuntimeError, match="LIVE token"):
-            duffel_http.token()
+    if app_env == "staging" and any_flag and token_kind == "test":
+        # a live flag on staging with a test token would be sandbox passed off as live
+        for check in (duffel_http.startup_check, duffel_http.token):
+            with pytest.raises(RuntimeError, match="requires DUFFEL_TOKEN to be a duffel_live_ token"):
+                check()
+        return
+    if token_kind == "live" and not (app_env == "staging" and any_flag):
+        for check in (duffel_http.startup_check, duffel_http.token):
+            with pytest.raises(RuntimeError, match="LIVE token"):
+                check()
         return
 
     duffel_http.startup_check()
     assert duffel_http.mode() == token_kind
 
     # what each kind of request may do once started
+    search_allowed = token_kind == "test" or search_enabled
+    orders_allowed = app_env != "staging" or orders_enabled  # staging books nothing without live orders
     with patch("duffel_http.requests.request", return_value=_duffel_response({"id": "x"})) as sent:
         with duffel_http.search_authorized(duffel_http.SearchAuthorization(0)):
-            if token_kind == "test" or search_enabled:
+            if search_allowed:
                 duffel_http.request("POST", "/air/offer_requests", body=OFFER_REQUEST_BODY)
             else:
-                with pytest.raises(duffel_http.LiveRequestRefused, match="search is disabled"):
+                with pytest.raises(duffel_http.RequestRefused, match="search is disabled"):
                     duffel_http.request("POST", "/air/offer_requests", body=OFFER_REQUEST_BODY)
-        for method, path in (("POST", "/air/order_cancellations"), ("POST", "/air/order_change_requests"),
-                             ("POST", "/air/order_changes"), ("GET", "/air/orders/ord_x")):
-            if token_kind == "test" or orders_enabled:
+        for method, path in (("POST", "/air/orders"), ("POST", "/air/order_cancellations"),
+                             ("POST", "/air/order_change_requests"), ("POST", "/air/order_changes"),
+                             ("GET", "/air/orders/ord_x")):
+            if orders_allowed:
                 duffel_http.request(method, path, body={"data": {"order_id": "ord_x"}})
             else:
-                with pytest.raises(duffel_http.LiveRequestRefused, match="Live Duffel orders are disabled"):
+                with pytest.raises(duffel_http.RequestRefused,
+                                   match="Duffel orders are disabled on this staging deployment"):
                     duffel_http.request(method, path, body={"data": {"order_id": "ord_x"}})
-    expected_sent = (1 if token_kind == "test" or search_enabled else 0) + \
-                    (4 if token_kind == "test" or orders_enabled else 0)
-    assert sent.call_count == expected_sent
+    assert sent.call_count == (1 if search_allowed else 0) + (5 if orders_allowed else 0)
+
+
+def test_staging_live_flag_without_any_token_refuses_to_start(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("DUFFEL_LIVE_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("DUFFEL_TOKEN", "")
+    with patch("duffel_http.load_dotenv"):  # keep .env's test token out of it
+        with pytest.raises(RuntimeError, match="DUFFEL_TOKEN is not set"):
+            duffel_http.startup_check()
+
+
+@pytest.mark.parametrize("vercel_env,app_env,refusal", [
+    ("preview", None, "APP_ENV is not set"),
+    ("preview", "", "APP_ENV is not set"),
+    ("preview", "prod", "is not one of"),
+    ("preview", "staging", None),
+    ("preview", "production", None),
+    ("production", None, None),
+    (None, None, None),
+])
+def test_preview_deployments_must_set_app_env(monkeypatch, vercel_env, app_env, refusal):
+    for name, value in (("VERCEL_ENV", vercel_env), ("APP_ENV", app_env)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    if refusal is None:
+        config.startup_check()
+    else:
+        with pytest.raises(RuntimeError, match=refusal):
+            config.startup_check()
 
 
 def test_unrecognised_token_is_refused_everywhere():
@@ -185,11 +225,11 @@ def test_unrecognised_token_is_refused_everywhere():
 
 def test_live_offer_request_needs_a_single_use_search_authorization(live_staging):
     with patch("duffel_http.requests.request", return_value=_duffel_response({"id": "orq_x"})) as sent:
-        with pytest.raises(duffel_http.LiveRequestRefused, match="no unused search-budget authorization"):
+        with pytest.raises(duffel_http.RequestRefused, match="no unused search-budget authorization"):
             duffel_http.request("POST", "/air/offer_requests", body=OFFER_REQUEST_BODY)
         with duffel_http.search_authorized(duffel_http.SearchAuthorization(0)):
             duffel_http.request("POST", "/air/offer_requests", body=OFFER_REQUEST_BODY)
-            with pytest.raises(duffel_http.LiveRequestRefused, match="no unused search-budget authorization"):
+            with pytest.raises(duffel_http.RequestRefused, match="no unused search-budget authorization"):
                 duffel_http.request("POST", "/air/offer_requests", body=OFFER_REQUEST_BODY)
         duffel_http.request("GET", "/air/offers/off_x")  # a single-offer fetch needs no authorization
     assert sent.call_count == 2
@@ -239,6 +279,11 @@ def test_database_must_match_app_env(monkeypatch, app_env, pooled, direct, refus
       "POSTGRES_URL": STAGING_POOLED, "POSTGRES_URL_NON_POOLING": ""}, "is the staging database"),
     ({"APP_ENV": "staging", "DUFFEL_TOKEN": TEST_TOKEN, "STRIPE_SECRET_KEY": "sk_test_x",
       "POSTGRES_URL": PRODUCTION_POOLED, "POSTGRES_URL_NON_POOLING": ""}, "not the staging database"),
+    ({"APP_ENV": "staging", "DUFFEL_LIVE_SEARCH_ENABLED": "true", "DUFFEL_TOKEN": TEST_TOKEN,
+      "STRIPE_SECRET_KEY": "sk_test_x", "POSTGRES_URL": STAGING_POOLED, "POSTGRES_URL_NON_POOLING": ""},
+     "requires DUFFEL_TOKEN to be a duffel_live_ token"),
+    ({"VERCEL_ENV": "preview", "APP_ENV": "", "DUFFEL_TOKEN": TEST_TOKEN, "STRIPE_SECRET_KEY": "sk_test_x",
+      "POSTGRES_URL": PRODUCTION_POOLED, "POSTGRES_URL_NON_POOLING": ""}, "APP_ENV is not set"),
     ({"APP_ENV": "staging", "DUFFEL_LIVE_SEARCH_ENABLED": "true", "DUFFEL_LIVE_ORDERS_ENABLED": "false",
       "DUFFEL_TOKEN": LIVE_TOKEN, "STRIPE_SECRET_KEY": "sk_test_x",
       "POSTGRES_URL": STAGING_POOLED, "POSTGRES_URL_NON_POOLING": STAGING_DIRECT}, None),
@@ -458,7 +503,7 @@ def test_live_booking_refused_while_live_orders_are_disabled(live_staging, logge
     offer = fake_offer(amount="219.00")
     resp, duffel, authorize = _book(client, offer)
     assert resp.status_code == 403
-    assert "Live Duffel orders are disabled" in resp.get_data(as_text=True)
+    assert "Duffel orders are disabled on this staging deployment" in resp.get_data(as_text=True)
     authorize.assert_not_called()
     assert not [c for c in duffel.call_args_list if c.args[:2] == ("POST", "/air/orders")]
     assert db.q("SELECT count(*) AS n FROM live_spend WHERE account_id = %s",
@@ -475,28 +520,40 @@ def test_live_cancel_refused_while_live_orders_are_disabled(live_staging, logged
                            data={"confirm_text": "CONFIRM", "_csrf": CSRF}, follow_redirects=False)
     sent.assert_not_called()
     assert resp.status_code == 200
-    assert "Live Duffel orders are disabled" in resp.get_data(as_text=True)
+    assert "Duffel orders are disabled on this staging deployment" in resp.get_data(as_text=True)
     assert db.find_order(order["order_id"], account["account_id"])["executed"] is None
 
 
-def test_staging_with_a_test_token_books_normally_as_duffel_mode_test(monkeypatch, logged_in_carded):
+def test_staging_refuses_a_sandbox_booking(monkeypatch, logged_in_carded):
+    """Staging with a test token and no live flags: still no booking."""
     monkeypatch.setenv("APP_ENV", "staging")
-    monkeypatch.setenv("DUFFEL_LIVE_SEARCH_ENABLED", "true")
     monkeypatch.setenv("DUFFEL_TOKEN", TEST_TOKEN)
     client, account = logged_in_carded
     offer = fake_offer()
-    order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"])
-    with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer, order=order)), \
-         patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_staging")), \
-         patch("billing.capture_authorization"):
-        resp = client.post("/book", data=book_form(offer["id"]), follow_redirects=False)
-    assert resp.status_code == 302
-    assert db.find_order(order["id"], account["account_id"])["duffel_mode"] == "test"
-    assert db.q("SELECT count(*) AS n FROM live_spend WHERE account_id = %s",
-                (account["account_id"],), fetch="one")["n"] == 0
+    resp, duffel, authorize = _book(client, offer)
+    assert resp.status_code == 403
+    assert "Duffel orders are disabled on this staging deployment" in resp.get_data(as_text=True)
+    authorize.assert_not_called()
+    assert not [c for c in duffel.call_args_list if c.args[:2] == ("POST", "/air/orders")]
+    assert db.order_for_offer(account["account_id"], offer["id"]) is None
 
 
-def test_production_booking_records_duffel_mode_test(logged_in_carded):
+def test_staging_refuses_a_sandbox_cancel(monkeypatch, logged_in_carded):
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("DUFFEL_TOKEN", TEST_TOKEN)
+    client, account = logged_in_carded
+    order = make_real_order(account["account_id"])
+    with patch("duffel_http.requests.request") as sent:
+        resp = client.post(f"/orders/{order['order_id']}/execute/cancel",
+                           data={"confirm_text": "CONFIRM", "_csrf": CSRF}, follow_redirects=False)
+    sent.assert_not_called()
+    assert "Duffel orders are disabled on this staging deployment" in resp.get_data(as_text=True)
+    assert db.q("SELECT count(*) AS n FROM execution_attempts WHERE order_id = %s",
+                (order["order_id"],), fetch="one")["n"] == 0
+
+
+def test_production_booking_records_duffel_mode_test(monkeypatch, logged_in_carded):
+    monkeypatch.setenv("APP_ENV", "production")
     client, account = logged_in_carded
     offer = fake_offer()
     order = fake_order(amount=offer["total_amount"], currency=offer["total_currency"])
@@ -686,18 +743,28 @@ def test_report_table_groups_by_carrier_and_departure_bucket(monkeypatch):
 # the staging banner
 # ---------------------------------------------------------------------------
 
+def _banner_pages(signed_in):
+    """One page per full-page template: base.html (/login) and landing.html (/)
+    as an anonymous visitor, info.html (/info) signed in."""
+    anonymous = app_module.app.test_client()
+    pages = {path: anonymous.get(path) for path in ("/login", "/")}
+    pages["/info"] = signed_in.get("/info")
+    for path, resp in pages.items():
+        assert resp.status_code == 200, path
+    return {path: resp.get_data(as_text=True) for path, resp in pages.items()}
+
+
 @pytest.mark.parametrize("search_enabled,orders_enabled,shown,hidden", [
     ("true", "true", BANNER, SEARCH_BANNER),
     ("false", "true", BANNER, SEARCH_BANNER),
     ("true", "false", SEARCH_BANNER, BANNER),
 ])
-def test_staging_banner_on_every_full_page_template(monkeypatch, client, search_enabled, orders_enabled,
+def test_staging_banner_on_every_full_page_template(monkeypatch, logged_in, search_enabled, orders_enabled,
                                                     shown, hidden):
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("DUFFEL_LIVE_SEARCH_ENABLED", search_enabled)
     monkeypatch.setenv("DUFFEL_LIVE_ORDERS_ENABLED", orders_enabled)
-    for path in ("/login", "/", "/info"):  # base.html, landing.html, info.html
-        page = client.get(path).get_data(as_text=True)
+    for path, page in _banner_pages(logged_in[0]).items():
         assert shown in page, path
         assert hidden not in page, path
 
@@ -705,10 +772,9 @@ def test_staging_banner_on_every_full_page_template(monkeypatch, client, search_
 @pytest.mark.parametrize("app_env,search_enabled,orders_enabled", [
     ("staging", "false", "false"), ("production", "true", "true"), ("dev", "true", "true"),
 ])
-def test_no_banner_otherwise(monkeypatch, client, app_env, search_enabled, orders_enabled):
+def test_no_banner_otherwise(monkeypatch, logged_in, app_env, search_enabled, orders_enabled):
     monkeypatch.setenv("APP_ENV", app_env)
     monkeypatch.setenv("DUFFEL_LIVE_SEARCH_ENABLED", search_enabled)
     monkeypatch.setenv("DUFFEL_LIVE_ORDERS_ENABLED", orders_enabled)
-    for path in ("/login", "/", "/info"):
-        page = client.get(path).get_data(as_text=True)
+    for path, page in _banner_pages(logged_in[0]).items():
         assert BANNER not in page and SEARCH_BANNER not in page, path

@@ -48,20 +48,25 @@ Flask `app` in root `app.py` and routes every path to a single function.
   `DUFFEL_LIVE_SEARCH_ENABLED=true` runs real Duffel searches, capped at
   `STAGING_MAX_MONTHLY_SEARCHES` (default 1400) and logged in `live_search_log`; the
   `/eligibility` page and `scripts/eligibility_scan.py` use it. Orders, changes and cancels
-  on a live token are refused unless `DUFFEL_LIVE_ORDERS_ENABLED=true` (default false), and
-  then only under `STAGING_ALLOWED_EMAILS`, `STAGING_MAX_ORDER_USD` and
+  on staging are refused, live or sandbox, unless `DUFFEL_LIVE_ORDERS_ENABLED=true` (default
+  false), and then only under `STAGING_ALLOWED_EMAILS`, `STAGING_MAX_ORDER_USD` and
   `STAGING_MAX_DAILY_USD` (`live_guard.py`), paid from TD's Duffel balance. Every page
   carries a banner: amber for live search, red for live orders. The app refuses to start
-  if a live flag or live token is set outside staging, if staging's Stripe key isn't
-  `sk_test_`, or if the database doesn't match `APP_ENV` (staging must be the staging
-  Supabase project, production must not be). Staging's env vars are scoped to the
+  on a Vercel Preview deployment without an explicit `APP_ENV`, if a live flag or live token
+  is set outside staging, if a live flag is on over a test token, if staging's Stripe key
+  isn't `sk_test_`, or if the database doesn't match `APP_ENV` (staging must be the staging
+  Supabase project, production must not be). `GET /healthz/env` (signed in) shows what a
+  deploy is running as: `APP_ENV`, commit, token mode, database project, both flags. Staging's env vars are scoped to the
   `staging` branch in Vercel's Preview environment. Apply migrations to staging with
   `scripts/migrate_staging.py` and to production with `scripts_migrate.py` **before**
   deploying code that needs them.
 
-- **Real auth, gating almost everything.** Every screen except the marketing landing
-  page, login/signup, the logo route, and the Resend inbound webhook requires a
-  session (`@auth.login_required`, `app.py`). Two open gaps: no email verification
+- **Real auth, default deny.** Every route requires a session except
+  `app.PUBLIC_ENDPOINTS`: the landing page, login/signup, the Google auth callbacks, static
+  files and the logo route, and the Resend inbound webhook (authenticated by its Svix
+  signature). `app._require_login` enforces it before any view runs, including routes
+  added later; `test_routes.py` walks the route map and fails on anything else reachable
+  anonymously. Two open gaps: no email verification
   (anyone can sign up as any address) and no password reset — both need an email
   provider, which is a decision, not a build.
 - **Durable state.** Bookings, the audit trail, and everything else live in Postgres

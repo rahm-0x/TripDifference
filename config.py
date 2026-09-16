@@ -72,6 +72,22 @@ def _allowed_emails():
     return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
 
 
+def startup_check():
+    """Run at app import. A Vercel Preview deployment must say what it is:
+    with VERCEL_ENV=preview, APP_ENV has to be set explicitly to one of
+    APP_ENVS. Anywhere else a missing APP_ENV still means production."""
+    if os.environ.get("VERCEL_ENV", "").strip() != "preview":
+        return
+    raw = os.environ.get("APP_ENV", "").strip()
+    if not raw:
+        raise RuntimeError("Refusing to start: this is a Vercel Preview deployment (VERCEL_ENV=preview) and "
+                           "APP_ENV is not set — set APP_ENV for this branch rather than falling back to "
+                           "production mode.")
+    if raw not in APP_ENVS:
+        raise RuntimeError(f"Refusing to start: APP_ENV={raw!r} is not one of {', '.join(APP_ENVS)} "
+                           "(VERCEL_ENV=preview).")
+
+
 _READERS = {
     "APP_ENV": _app_env,
     "DUFFEL_LIVE_SEARCH_ENABLED": lambda: _flag("DUFFEL_LIVE_SEARCH_ENABLED"),

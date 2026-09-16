@@ -26,14 +26,17 @@ notes, and the list of known, deliberate gaps.
 
 - Production is sandbox-only; staging may search live and, only if told to, book live.
   `APP_ENV` (`config.py`) is `dev | staging | production`, and missing or unknown means
-  production. Two flags, both staging-only (either one true elsewhere fails startup):
-  `DUFFEL_LIVE_SEARCH_ENABLED` lets a `duffel_live_` token make offer requests and fetch
-  offers; `DUFFEL_LIVE_ORDERS_ENABLED` (default false) lets it create, change or cancel
-  orders — while false, `duffel_http.request()` refuses every non-search live request
-  with a clear error. `app.py` runs `duffel_http.startup_check()`,
+  production — except on a Vercel Preview deployment, which refuses to start without an
+  explicit `APP_ENV` (`config.startup_check`). Two flags, both staging-only (either one
+  true elsewhere fails startup), and either one on staging requires a `duffel_live_`
+  token: `DUFFEL_LIVE_SEARCH_ENABLED` lets it make offer requests and fetch offers;
+  `DUFFEL_LIVE_ORDERS_ENABLED` (default false) allows orders. While it is false,
+  **staging creates, changes and cancels nothing, live or sandbox** — `book()` and
+  `execute()` refuse up front and `duffel_http.request()` refuses every non-search call.
+  `app.py` runs `config.startup_check()`, `duffel_http.startup_check()`,
   `billing.startup_check()` (staging needs an `sk_test_` Stripe key) and
   `db.startup_check()` (staging must be on Supabase project `bcqzwnoifwkuimrrdysy`,
-  production must not) at import. Every offer request goes through `live_search`: a live
+  production must not) at import. `GET /healthz/env` shows the result without secrets. Every offer request goes through `live_search`: a live
   one is counted against `STAGING_MAX_MONTHLY_SEARCHES` in `live_search_log` first, and
   `duffel_http` refuses a live offer request without that single-use authorization.
   Every live spend (booking, exchange top-up) goes through `live_guard.reserve()` —
@@ -86,6 +89,11 @@ notes, and the list of known, deliberate gaps.
   `account_id` column, deliberately, since carrier behaviour isn't tenant-specific.
   `ZZ` is Duffel Airways, a synthetic sandbox carrier, flagged `is_synthetic` and not
   evidence about real airlines.
+- Every route requires a signed-in session unless its endpoint is in
+  `app.PUBLIC_ENDPOINTS` (landing, login, signup, Google auth callbacks, static, and the
+  signature-authenticated Resend webhook); `app._require_login` enforces that before any
+  view. `test_routes.py` fails on any other anonymously reachable route — adding a public
+  one means editing both.
 - Roles exist on `users.role` (`admin | booker | approver | finance`, migration 016)
   but nothing enforces them yet — `auth.role_required` is defined and unused by any
   route. Don't assume role gating is live anywhere in the UI.

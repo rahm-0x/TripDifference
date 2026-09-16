@@ -52,10 +52,12 @@ HERE = Path(__file__).parent
 PORT = 8000
 
 # Environment guards, at startup rather than on the first request that would
-# touch the wrong thing: a live Duffel flag or token anywhere but staging
-# (production above all), a non-sk_test_ Stripe key on staging, and a database
-# that doesn't match APP_ENV (staging must use the staging project, production
-# must not).
+# touch the wrong thing: a Vercel Preview deployment without an explicit
+# APP_ENV, a live Duffel flag or token anywhere but staging (production above
+# all), a test token behind a live flag on staging, a non-sk_test_ Stripe key
+# on staging, and a database that doesn't match APP_ENV (staging must use the
+# staging project, production must not).
+config.startup_check()
 duffel_http.startup_check()
 billing.startup_check()
 db.startup_check()
@@ -105,6 +107,32 @@ PLACEHOLDER_DEALS = [
 
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# The only endpoints reachable without signing in. Everything else — every
+# route that exists now and every route added later — requires a session,
+# enforced by _require_login below before any view (or the CSRF guard) runs.
+# test_routes.py walks the route map and fails on anything reachable that isn't
+# listed here.
+PUBLIC_ENDPOINTS = frozenset({
+    "index",                                       # landing
+    "login", "signup",
+    "google_auth_start", "google_auth_callback",   # auth callbacks
+    "static", "logo",                              # static
+    # Server-to-server: Resend can't hold a session. Authenticated by its Svix
+    # signature instead (_verify_resend_signature), and refused without one.
+    "resend_inbound",
+})
+
+
+@app.before_request
+def _require_login():
+    """Default deny. Registered before _csrf_guard, so an anonymous POST is
+    sent to sign in rather than answered with a CSRF error."""
+    if request.endpoint is None or request.endpoint in PUBLIC_ENDPOINTS:
+        return None  # unknown URLs 404 as usual
+    if auth.current_user() is None:
+        return redirect(url_for("login", next=request.full_path.rstrip("?")))
+    return None
 
 
 @app.before_request
@@ -713,6 +741,7 @@ def aggregate_difference_band(monitored, currency="USD"):
 # ---------------------------------------------------------------------------
 
 @app.route("/info")
+@auth.login_required
 def info():
     """
     Standalone explainer of the booking → monitor → exchange → settle flow.
@@ -721,6 +750,21 @@ def info():
     system, so it is served whole rather than themed to match the app.
     """
     return render_template("info.html")
+
+
+@app.route("/healthz/env")
+@auth.login_required
+def healthz_env():
+    """What this deployment is running as, for checking a deploy. Never a
+    secret: the token as a mode, the database as its Supabase project ref."""
+    return {
+        "app_env": config.APP_ENV,
+        "vercel_git_commit_sha": os.environ.get("VERCEL_GIT_COMMIT_SHA") or None,
+        "duffel_token_mode": duffel_http.configured_token_mode(),
+        "db_project_ref": db.project_ref(),
+        "duffel_live_search_enabled": config.DUFFEL_LIVE_SEARCH_ENABLED,
+        "duffel_live_orders_enabled": config.DUFFEL_LIVE_ORDERS_ENABLED,
+    }
 
 
 @app.route("/logo.png")
@@ -867,6 +911,7 @@ def onboarding_payment_confirm():
 
 
 @app.route("/logout", methods=["GET", "POST"])
+@auth.login_required
 def logout():
     auth.sign_out()
     return redirect(url_for("index"))
@@ -961,6 +1006,7 @@ def _offer_rank_price(o):
 
 
 @app.route("/search", methods=["GET"])
+@auth.login_required
 def search():
     """The app's search page.
 
@@ -1034,18 +1080,14 @@ _IATA = re.compile(r"^[A-Z]{3}$")
 
 
 @app.route("/eligibility")
+@auth.login_required
 def eligibility_page():
-    """Staging only (404 elsewhere, before any sign-in redirect): search Duffel
-    and list every offer with its change/refund conditions and the verdict
-    offer_eligibility derives from eligibility.assess(). GET, like /search —
-    nothing here writes anything but the search log."""
+    """Staging only (404 elsewhere): search Duffel and list every offer with
+    its change/refund conditions and the verdict offer_eligibility derives from
+    eligibility.assess(). GET, like /search — nothing here writes anything but
+    the search log."""
     if config.APP_ENV != "staging":
         abort(404)
-    return _eligibility_view()
-
-
-@auth.login_required
-def _eligibility_view():
     form = {
         "origin": request.args.get("origin", "").strip().upper(),
         "destination": request.args.get("destination", "").strip().upper(),
@@ -1292,6 +1334,13 @@ def book():
                                people=people, saved=saved,
                                error=" · ".join(problems)), 400
 
+    # Staging books nothing — live or sandbox — unless live orders are on.
+    # duffel_http would refuse the order call anyway; refusing here means no
+    # card is authorized and no spend is reserved first.
+    if config.APP_ENV == "staging" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
+        return render_template("payment.html", nav="search", offer=offer_view(offer),
+                               people=people, error=duffel_http.staging_orders_refusal()), 403
+
     # --- gates: everything that can stop a booking outright, checked here
     # before anything is created anywhere — same position passenger_problems()
     # already occupies, extended rather than bolted on beside it.
@@ -1339,11 +1388,6 @@ def book():
     # authorized; a refusal is audited there and nothing else happens.
     duffel_mode = duffel_http.mode()
     spend = None
-    if duffel_mode == "live" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
-        # duffel_http would refuse the order call anyway; refusing here means
-        # no spend is reserved and no card is authorized first.
-        return render_template("payment.html", nav="search", offer=offer_view(offer),
-                               people=people, error=duffel_http.live_orders_refusal()), 403
     if duffel_mode == "live":
         try:
             spend = live_guard.reserve(
@@ -2251,6 +2295,9 @@ def execute(order_id, action):
     def refuse(msg):
         return render_template("confirm_action.html", nav="ops", order=record,
                                action=action, error=msg)
+
+    if config.APP_ENV == "staging" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
+        return refuse(duffel_http.staging_orders_refusal())
 
     if request.form.get("confirm_text", "").strip().upper() != "CONFIRM":
         return refuse("Type CONFIRM exactly to proceed.")

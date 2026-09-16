@@ -284,7 +284,8 @@ def test_live_eligibility_search_records_the_refetch_on_its_log_row(live_search_
 # the /eligibility page
 # ---------------------------------------------------------------------------
 
-def test_eligibility_page_is_404_outside_staging(monkeypatch, client):
+def test_eligibility_page_is_404_outside_staging(monkeypatch, logged_in):
+    client, _ = logged_in
     for app_env in ("production", "dev"):
         monkeypatch.setenv("APP_ENV", app_env)
         assert client.get("/eligibility").status_code == 404
@@ -356,6 +357,7 @@ def _scan_module():
 
 
 def test_scan_writes_csv_and_summarizes_by_carrier_and_fare_brand(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("APP_ENV", "staging")  # the scan refuses to run as anything else
     scan = _scan_module()
     routes = tmp_path / "routes.csv"
     routes.write_text("origin,destination,date\nlhr,jfk,2026-12-01\nLHR,JFK,2026-12-08\n")

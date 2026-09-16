@@ -8,25 +8,28 @@ This one raises, so it can be used from the engine and the web app.
 RFC 2616 *date string*, not a seconds delta. `Retry-After` is checked first only
 because proxies sometimes inject it; Duffel itself does not send it.
 
-Environment guard (check_environment, check_token). A duffel_test_ token is
-allowed everywhere. The two live flags — DUFFEL_LIVE_SEARCH_ENABLED and
-DUFFEL_LIVE_ORDERS_ENABLED — may only be true with APP_ENV=staging, and a
-duffel_live_ token is only allowed there with at least one of them on. app.py
-calls startup_check() at import, so production with either flag or a live
-token fails the process at startup rather than on a request. duffel.py and
-duffel_reshop_test.py keep their own test-only guards, untouched.
+Environment guard (check_environment, check_token), run at app import by
+startup_check() so a bad combination fails the process, not a request:
+  - the two live flags, DUFFEL_LIVE_SEARCH_ENABLED and DUFFEL_LIVE_ORDERS_ENABLED,
+    may only be true with APP_ENV=staging;
+  - on staging, either flag being true requires a duffel_live_ token — a test
+    token there would mean sandbox searches or sandbox bookings presented as
+    live;
+  - a duffel_live_ token is only allowed on staging with at least one flag on.
+duffel.py and duffel_reshop_test.py keep their own test-only guards, untouched.
 
-Per-request guard, live token only (_check_live_request):
-  - search requests (POST /air/offer_requests, GET /air/offer_requests…,
-    GET /air/offers…) need DUFFEL_LIVE_SEARCH_ENABLED, and a live offer request
-    additionally needs a single-use SearchAuthorization from live_search, which
-    is how every live search is counted against the monthly budget;
-  - everything else — order create, order change, cancel — needs
-    DUFFEL_LIVE_ORDERS_ENABLED (default false) and is refused with a clear error
-    otherwise; with it on, a request carrying a payment still needs a
-    SpendAuthorization from live_guard (right account, never a test account,
-    same currency, amount within what was authorized).
-Nothing reaches Duffel with a live token by calling request() around these.
+Per-request guard (_check_request):
+  - on APP_ENV=staging, everything but a search request — order create,
+    order change, cancel — is refused unless DUFFEL_LIVE_ORDERS_ENABLED=true,
+    whatever the token: no sandbox bookings on staging either;
+  - with a live token, a search request (POST /air/offer_requests,
+    GET /air/offer_requests…, GET /air/offers…) needs DUFFEL_LIVE_SEARCH_ENABLED,
+    and a live offer request also needs a single-use SearchAuthorization from
+    live_search, which is how every live search is counted against the budget;
+  - with a live token and live orders on, a request carrying a payment still
+    needs a SpendAuthorization from live_guard (right account, never a test
+    account, same currency, amount within what was authorized).
+Nothing reaches Duffel by calling request() around these.
 """
 
 import json
@@ -69,11 +72,11 @@ class DuffelError(RuntimeError):
         return [e.get("code") for e in self.errors]
 
 
-class LiveRequestRefused(RuntimeError):
-    """A live-token request this deployment's flags or authorizations don't allow."""
+class RequestRefused(RuntimeError):
+    """A Duffel request this deployment's environment, flags or authorizations don't allow."""
 
 
-class LiveSpendBlocked(LiveRequestRefused):
+class LiveSpendBlocked(RequestRefused):
     """A live-token request that would spend money had no matching authorization."""
 
 
@@ -107,6 +110,10 @@ def check_token(tok, app_env, search_enabled, orders_enabled):
     """The token's mode, or raises if this environment may not use it."""
     check_environment(app_env, search_enabled, orders_enabled)
     mode = token_mode(tok)
+    if app_env == "staging" and (search_enabled or orders_enabled) and mode != "live":
+        on = [n for n, v in zip(LIVE_FLAGS, (search_enabled, orders_enabled)) if v]
+        raise RuntimeError(f"Refusing to run: {' and '.join(n + '=true' for n in on)} on APP_ENV=staging "
+                           "requires DUFFEL_TOKEN to be a duffel_live_ token, and it is a test token.")
     if mode == "live" and not (app_env == "staging" and (search_enabled or orders_enabled)):
         raise RuntimeError(
             "Refusing to run: DUFFEL_TOKEN is a LIVE token, which is only allowed with APP_ENV=staging and "
@@ -141,18 +148,34 @@ def mode():
 
 def startup_check():
     """Run at app import. A live flag outside staging, or a token this
-    environment may not use, fails here at startup. A missing token is still
-    left to request time, as before."""
+    environment may not use, fails here at startup. A missing token is left to
+    request time, except on staging with a live flag on, where it can only be
+    wrong."""
     app_env, search_enabled, orders_enabled = _flags()
     check_environment(app_env, search_enabled, orders_enabled)
     tok = _raw_token()
     if tok:
         check_token(tok, app_env, search_enabled, orders_enabled)
+    elif app_env == "staging" and (search_enabled or orders_enabled):
+        raise RuntimeError("Refusing to run: a live flag is on with APP_ENV=staging but DUFFEL_TOKEN is not set "
+                           "(it must be a duffel_live_ token).")
 
 
-def live_orders_refusal():
-    return ("Live Duffel orders are disabled on this deployment (DUFFEL_LIVE_ORDERS_ENABLED is not 'true'): "
-            "searches can be live, but no ticket can be booked, changed or cancelled with the live token.")
+def configured_token_mode():
+    """'test', 'live', 'missing' or 'unrecognised' — for display, never raises
+    and never returns any part of the token."""
+    tok = _raw_token()
+    if not tok:
+        return "missing"
+    try:
+        return token_mode(tok)
+    except RuntimeError:
+        return "unrecognised"
+
+
+def staging_orders_refusal():
+    return ("Duffel orders are disabled on this staging deployment (DUFFEL_LIVE_ORDERS_ENABLED is not "
+            "'true'): no ticket can be booked, changed or cancelled here, live or sandbox.")
 
 
 # ---------------------------------------------------------------------------
@@ -246,20 +269,23 @@ def _check_live_spend(method, path, body):
         raise LiveSpendBlocked(f"live payment of {amount} exceeds the authorized {auth.amount}")
 
 
-def _check_live_request(method, path, body):
-    if is_search_request(method, path):
+def _check_request(method, path, body, mode):
+    search = is_search_request(method, path)
+    if not search and config.APP_ENV == "staging" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
+        raise RequestRefused(f"{staging_orders_refusal()} Refused {method} {path}.")
+    if mode != "live":
+        return
+    if search:
         if not config.DUFFEL_LIVE_SEARCH_ENABLED:
-            raise LiveRequestRefused(f"Live Duffel search is disabled on this deployment "
-                                     f"(DUFFEL_LIVE_SEARCH_ENABLED is not 'true'): refused {method} {path}.")
+            raise RequestRefused(f"Live Duffel search is disabled on this deployment "
+                                 f"(DUFFEL_LIVE_SEARCH_ENABLED is not 'true'): refused {method} {path}.")
         if method.upper() == "POST":
             auth = _SEARCH_AUTHORIZATION.get()
             if auth is None or auth.used:
-                raise LiveRequestRefused(f"live offer request has no unused search-budget authorization "
-                                         f"(go through live_search.offer_request): refused {method} {path}.")
+                raise RequestRefused(f"live offer request has no unused search-budget authorization "
+                                     f"(go through live_search.offer_request): refused {method} {path}.")
             auth.used = True
         return
-    if not config.DUFFEL_LIVE_ORDERS_ENABLED:
-        raise LiveRequestRefused(f"{live_orders_refusal()} Refused {method} {path}.")
     _check_live_spend(method, path, body)
 
 
@@ -294,8 +320,7 @@ def dump(label, payload):
 def request(method, path, *, body=None, params=None, label=None):
     """One request. Retries a 429 once, then gives up. Raises DuffelError on non-2xx."""
     tok = token()
-    if token_mode(tok) == "live":
-        _check_live_request(method, path, body)
+    _check_request(method, path, body, token_mode(tok))
     headers = {
         "Authorization": f"Bearer {tok}",
         "Duffel-Version": "v2",
