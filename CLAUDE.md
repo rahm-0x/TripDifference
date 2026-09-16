@@ -24,13 +24,27 @@ notes, and the list of known, deliberate gaps.
 
 ### Duffel
 
-- Sandbox-only by construction. Three independent pieces of code each reject any
-  token without a `duffel_test_` prefix: `duffel_http.py:51-54`, `duffel.py:48-51`,
-  `duffel_reshop_test.py:173-183`. Only the first is on the deployed app's actual path
-  (`app.py` imports `duffel_http`, not `duffel`); the other two guard the old spike
-  CLI (`server.py`) and the standalone validation harness, neither of which `vercel.json`
-  deploys. Don't route around any of them, and don't assume a change to one protects
-  the others — they're independent, not layered.
+- Production is sandbox-only; staging may search live and, only if told to, book live.
+  `APP_ENV` (`config.py`) is `dev | staging | production`, and missing or unknown means
+  production. Two flags, both staging-only (either one true elsewhere fails startup):
+  `DUFFEL_LIVE_SEARCH_ENABLED` lets a `duffel_live_` token make offer requests and fetch
+  offers; `DUFFEL_LIVE_ORDERS_ENABLED` (default false) lets it create, change or cancel
+  orders — while false, `duffel_http.request()` refuses every non-search live request
+  with a clear error. `app.py` runs `duffel_http.startup_check()`,
+  `billing.startup_check()` (staging needs an `sk_test_` Stripe key) and
+  `db.startup_check()` (staging must be on Supabase project `bcqzwnoifwkuimrrdysy`,
+  production must not) at import. Every offer request goes through `live_search`: a live
+  one is counted against `STAGING_MAX_MONTHLY_SEARCHES` in `live_search_log` first, and
+  `duffel_http` refuses a live offer request without that single-use authorization.
+  Every live spend (booking, exchange top-up) goes through `live_guard.reserve()` —
+  allowlist, USD-only, per-order and daily caps summed from the `live_spend` ledger,
+  and never a `__pytest__` account — and `duffel_http.request()` refuses a live-token
+  payment that no reservation covers.
+  Live orders are `orders.duffel_mode = 'live'`, set once at creation; the database
+  refuses to delete one, or the account that owns it (migration 030). The two
+  standalone scripts, `duffel.py:48-51` and `duffel_reshop_test.py:173-183`, still reject
+  anything but `duffel_test_` — independent guards, not layered on the app's; don't
+  route around them.
 - Sandbox hardcodes `change_total_amount` at **+125.00** regardless of fare, carrier,
   route, cabin, or date — verified across a 33× price range, a business→economy
   downgrade, and multiple carriers (see `docs/architecture.md`'s Duffel sandbox

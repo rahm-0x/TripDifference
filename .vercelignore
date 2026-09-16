@@ -15,6 +15,12 @@ decisions.log
 /requirements-dev.txt
 /test_engine.py
 /test_money_path.py
+/test_staging_live.py
+/test_eligibility.py
+/test_fixtures/
+/conftest.py
+/pytest.ini
+/scripts/
 /server.py
 /index.html
 /duffel.py

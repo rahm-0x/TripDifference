@@ -1,0 +1,21 @@
+{# Included first thing in <body> by every full-page template (base.html,
+   landing.html, info.html). live_banner comes from app.inject_globals, on
+   APP_ENV=staging only: 'orders' when DUFFEL_LIVE_ORDERS_ENABLED=true (real
+   tickets, real money), 'search' when only DUFFEL_LIVE_SEARCH_ENABLED=true.
+   Inline styles on purpose — it must look the same on pages that don't share
+   base.html's stylesheet. #}
+{% if live_banner == 'orders' %}
+<div role="alert" class="live-banner"
+     style="position:sticky;top:0;z-index:2147483000;background:#b3001b;color:#fff;
+            font:700 14px/1.25 system-ui,-apple-system,'Segoe UI',sans-serif;letter-spacing:.03em;
+            text-align:center;padding:10px 16px;box-shadow:0 1px 0 rgba(0,0,0,.25)">
+  STAGING — LIVE TICKETS, REAL MONEY
+</div>
+{% elif live_banner == 'search' %}
+<div role="status" class="live-banner"
+     style="position:sticky;top:0;z-index:2147483000;background:#8a5a00;color:#fff;
+            font:700 14px/1.25 system-ui,-apple-system,'Segoe UI',sans-serif;letter-spacing:.03em;
+            text-align:center;padding:10px 16px;box-shadow:0 1px 0 rgba(0,0,0,.25)">
+  STAGING — LIVE DUFFEL SEARCH · ORDERS DISABLED
+</div>
+{% endif %}

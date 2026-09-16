@@ -26,14 +26,17 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+import config
+from db_identity import identity
+
 SESSION_TTL = timedelta(days=14)
 
 # Every account the test suite creates carries this name, because tests share
 # the staging database with live staging orders. Sign-in never resolves to
 # one (user_by_email / user_by_supabase_id), signup never produces the name
-# for a real account (create_account), and validation/observe.py and
-# validation/report.py leave them out.
-TEST_ACCOUNT_NAME = "__pytest__"
+# for a real account (create_account), validation/observe.py and
+# validation/report.py leave them out, and live_guard never lets one spend.
+TEST_ACCOUNT_NAME = config.TEST_ACCOUNT_NAME
 
 _pool = None
 
@@ -79,6 +82,31 @@ def pool():
             open=True,
         )
     return _pool
+
+
+def _is_staging_database(url):
+    return identity(url)[:2] == ("supabase", config.STAGING_SUPABASE_REF)
+
+
+def startup_check():
+    """Run at app import. APP_ENV=staging must run against the staging
+    Supabase project (config.STAGING_SUPABASE_REF); APP_ENV=production must
+    never. Both URLs are checked when set. dev is not checked."""
+    urls = {name: os.environ.get(name, "").strip() for name in ("POSTGRES_URL", "POSTGRES_URL_NON_POOLING")}
+    if not urls["POSTGRES_URL"] and os.environ.get("DATABASE_URL", "").strip():
+        urls["POSTGRES_URL"] = os.environ["DATABASE_URL"].strip()
+    if config.APP_ENV == "staging":
+        if not urls["POSTGRES_URL"]:
+            raise RuntimeError("Refusing to start: APP_ENV=staging but POSTGRES_URL is not set")
+        for name, url in urls.items():
+            if url and not _is_staging_database(url):
+                raise RuntimeError(f"Refusing to start: APP_ENV=staging but {name} is not the staging "
+                                   f"database (Supabase project {config.STAGING_SUPABASE_REF})")
+    elif config.APP_ENV == "production":
+        for name, url in urls.items():
+            if url and _is_staging_database(url):
+                raise RuntimeError(f"Refusing to start: APP_ENV=production but {name} is the staging "
+                                   f"database (Supabase project {config.STAGING_SUPABASE_REF})")
 
 
 def q(sql, params=(), *, fetch=None):
@@ -263,7 +291,7 @@ _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin",
                "cost_center_id", "refundable", "fare_conditions",
                "stripe_payment_intent_id", "payment_capture_failed_at",
-               "payment_capture_error")
+               "payment_capture_error", "duffel_mode")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario", "fare_conditions"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
@@ -273,7 +301,10 @@ _TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currenc
 # Columns with their own DB default and a CHECK constraint, so an
 # absent/blank value here must fall through to the column default rather
 # than being coerced to '' like the plain text fields above.
-_ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash"}
+# duffel_mode is set once, at creation, from the token that bought the ticket
+# (migration 030 refuses to change it afterwards); an order created without
+# one is a test-mode order.
+_ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash", "duffel_mode": "test"}
 # Nullable uuid FK — a blank string must stay NULL, not become '' (invalid
 # uuid input), unlike the plain text fields above.
 _NULLABLE_UUID = {"traveler_id", "cost_center_id"}
@@ -1318,3 +1349,100 @@ def monitored_orders_with_history(account_id):
                    ORDER BY ts""", (o["order_id"],), fetch="all")
         out.append({**o, "points": [(r["ts"], r["market_best"]) for r in rows]})
     return out
+
+
+# ---------------------------------------------------------------------------
+# live spend — the staging live-ticket ledger (migration 030, live_guard.py)
+# ---------------------------------------------------------------------------
+
+# One fixed key: every reservation takes the same transaction-scoped advisory
+# lock, so two live bookings can't both read "under the daily cap" and both
+# spend. Transaction-scoped, not session-scoped — safe through the pooler.
+_LIVE_SPEND_LOCK = 7_302_030
+
+
+def account_name(account_id):
+    row = q("SELECT name FROM accounts WHERE id = %s", (account_id,), fetch="one")
+    return row["name"] if row else None
+
+
+def live_spend_today():
+    """Today's (UTC) live spend: every booking and exchange top-up recorded in
+    live_spend that wasn't released. Reserved-but-unsettled rows count — a
+    ticket may exist even if the settle step never ran."""
+    row = q("""SELECT COALESCE(sum(amount), 0) AS spent FROM live_spend
+                WHERE status <> 'released' AND created_at >= date_trunc('day', now(), 'UTC')""",
+            fetch="one")
+    return row["spent"]
+
+
+def live_spend_reserve(*, kind, account_id, amount, currency, reference="", order_id=None, check):
+    """Under the advisory lock: read today's spend, call check(spent_today)
+    — which raises to refuse — then record a 'reserved' row. Returns its id.
+    An exception from check() rolls the transaction back; nothing is written."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_LIVE_SPEND_LOCK,))
+        cur.execute("""SELECT COALESCE(sum(amount), 0) AS spent FROM live_spend
+                        WHERE status <> 'released' AND created_at >= date_trunc('day', now(), 'UTC')""")
+        check(cur.fetchone()["spent"])
+        cur.execute("""INSERT INTO live_spend (kind, account_id, order_id, amount, currency, reference)
+                       VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (kind, account_id, order_id, _num(amount), currency, reference or ""))
+        return cur.fetchone()["id"]
+
+
+def live_spend_settle(ledger_id, *, order_id=None):
+    q("""UPDATE live_spend SET status = 'spent', settled_at = now(),
+                order_id = COALESCE(%s, order_id)
+          WHERE id = %s AND status = 'reserved'""", (order_id, ledger_id))
+
+
+def live_spend_release(ledger_id):
+    """Only for a spend that provably never happened (Duffel refused it)."""
+    q("""UPDATE live_spend SET status = 'released', settled_at = now()
+          WHERE id = %s AND status = 'reserved'""", (ledger_id,))
+
+
+# ---------------------------------------------------------------------------
+# live search log — the staging monthly search budget (migration 031, live_search.py)
+# ---------------------------------------------------------------------------
+
+_LIVE_SEARCH_LOCK = 7_302_031
+
+
+def live_searches_this_month():
+    row = q("""SELECT count(*) AS n FROM live_search_log
+                WHERE created_at >= date_trunc('month', now(), 'UTC')""", fetch="one")
+    return row["n"]
+
+
+def live_search_reserve(*, limit, source, account_id, origin, destination, departure_date, cabin, passengers):
+    """Under an advisory lock: count this month's live searches and, if one
+    more stays within `limit`, record it and return (log_id, count including
+    it). Returns (None, count) when the budget is spent; nothing is written."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (_LIVE_SEARCH_LOCK,))
+        cur.execute("""SELECT count(*) AS n FROM live_search_log
+                        WHERE created_at >= date_trunc('month', now(), 'UTC')""")
+        used = cur.fetchone()["n"]
+        if used >= limit:
+            return None, used
+        cur.execute("""INSERT INTO live_search_log
+                           (source, account_id, origin, destination, departure_date, cabin, passengers)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (source, account_id, origin or "", destination or "", departure_date or None,
+                     cabin or "", passengers))
+        return cur.fetchone()["id"], used + 1
+
+
+def live_search_record(log_id, **fields):
+    """Fill in what a logged search returned: offer_request_id, offers_returned,
+    null_conditions, refetched, conditions_filled, error."""
+    allowed = ("offer_request_id", "offers_returned", "null_conditions", "refetched",
+               "conditions_filled", "error")
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    sets = ", ".join(f"{k} = %s" for k in updates)
+    q(f"UPDATE live_search_log SET {sets} WHERE id = %s", (*updates.values(), log_id))
+

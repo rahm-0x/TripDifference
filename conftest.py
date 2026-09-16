@@ -66,6 +66,20 @@ def _point_at_staging_database():
 
 _REFUSAL = _point_at_staging_database()
 
+# The suite runs against the staging database, so it runs as staging:
+# db.startup_check() refuses APP_ENV=production on the staging project when
+# app.py is imported. Live Duffel stays off unless a test turns it on itself —
+# the live flags are cleared, and every Duffel call is mocked, but book() and
+# live_search read the configured token's mode (duffel_http.mode) unmocked, so
+# anything other than a test token (none at all, or a live one from the shell)
+# is replaced by a placeholder test token. A real duffel_test_ token is kept.
+if not _REFUSAL:
+    os.environ["APP_ENV"] = "staging"
+for _flag in ("DUFFEL_LIVE_SEARCH_ENABLED", "DUFFEL_LIVE_ORDERS_ENABLED"):
+    os.environ.pop(_flag, None)
+if not os.environ.get("DUFFEL_TOKEN", "").strip().startswith("duffel_test_"):
+    os.environ["DUFFEL_TOKEN"] = "duffel_test_placeholder_for_pytest"
+
 
 def pytest_configure(config):
     # Raised here rather than at import so pytest reports it as a usage error,

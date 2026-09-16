@@ -12,7 +12,20 @@ from decimal import Decimal
 
 import stripe
 
+import config
 import db
+
+
+def startup_check():
+    """Run at app import. Staging may book live Duffel tickets, but its Stripe
+    key must be a test key — a staging deploy never charges a real card."""
+    if config.APP_ENV == "staging":
+        key = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+        if not key.startswith("sk_test_"):
+            raise RuntimeError("Refusing to start: APP_ENV=staging requires STRIPE_SECRET_KEY to start "
+                               f"with 'sk_test_' (got '{key[:8]}...')" if key else
+                               "Refusing to start: APP_ENV=staging requires STRIPE_SECRET_KEY "
+                               "(an sk_test_ key), and it is not set")
 
 
 class CardError(RuntimeError):

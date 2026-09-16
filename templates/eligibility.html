@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Rebooking eligibility — Trip Difference{% endblock %}
+{% block crumb %}Operations · Eligibility{% endblock %}
+{% block head %}
+<style>
+  .elig-head { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px 16px; }
+  .elig-budget { font-size:13px; color:var(--muted); }
+  .elig-budget b { color:var(--ink); font-variant-numeric:tabular-nums; }
+  .elig-form { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px 12px; align-items:end; }
+  .elig-form .field { margin:0; }
+  .elig-summary { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0 10px; }
+  .elig-summary .stat { font-size:12.5px; color:var(--muted); }
+  .elig-filters { display:flex; flex-wrap:wrap; gap:10px 14px; align-items:end; margin-bottom:10px; }
+  .elig-filters .field { margin:0; min-width:150px; }
+  .elig-list { max-height:70vh; overflow-y:auto; border:1px solid var(--line); border-radius:12px; }
+  .elig-row { padding:12px 14px; border-bottom:1px solid var(--line); }
+  .elig-row:last-child { border-bottom:0; }
+  .elig-top { display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline; justify-content:space-between; }
+  .elig-flight { font-weight:600; }
+  .elig-meta { font-size:12.5px; color:var(--muted); }
+  .elig-price { font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .elig-conds { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:4px 16px; margin:8px 0 6px; font-size:13px; }
+  .elig-verdict { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:baseline; font-size:13px; }
+  .elig-row pre { font-size:11.5px; max-height:280px; overflow:auto; background:var(--surface-2); padding:10px; border-radius:8px; margin:6px 0 0; }
+  .elig-row summary { cursor:pointer; font-size:12.5px; color:var(--muted); margin-top:6px; }
+</style>
+{% endblock %}
+
+{% block body %}
+{% macro condition(label, c) -%}
+  <div>
+    <span class="muted">{{ label }}:</span>
+    {% if c.allowed is none %}<b>not published</b>
+    {% elif c.allowed %}<b>allowed</b>{% else %}<b>not allowed</b>{% endif %}
+    {% if c.penalty is not none %} · penalty <span class="mono">{{ c.penalty }} {{ c.currency }}</span>
+    {% elif c.allowed %} · penalty <b>not published</b>{% endif %}
+  </div>
+{%- endmacro %}
+
+<div class="page-head elig-head">
+  <div>
+    <h1>Rebooking eligibility</h1>
+    <p>Staging. Every offer for a route, with its change and refund rules and the verdict eligibility.py gives it.</p>
+  </div>
+  <div class="elig-budget">
+    searches this month: <b>{{ budget.used }} / {{ budget.limit }}</b>
+    {% if mode == 'live' %}<span class="tag tag-danger">live Duffel</span>
+    {% elif mode == 'test' %}<span class="tag tag-mute">test token — not counted</span>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <form method="get" action="{{ url_for('eligibility_page') }}" class="elig-form">
+    <div class="field">
+      <label for="origin">From</label>
+      <input id="origin" name="origin" maxlength="3" placeholder="LHR" value="{{ form.origin }}" required autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="destination">To</label>
+      <input id="destination" name="destination" maxlength="3" placeholder="JFK" value="{{ form.destination }}" required autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="date">Date</label>
+      <input id="date" name="date" type="date" value="{{ form.date }}" required>
+    </div>
+    <div class="field">
+      <label for="cabin">Cabin</label>
+      <select id="cabin" name="cabin">
+        {% for c in cabins %}<option value="{{ c }}" {{ 'selected' if form.cabin == c }}>{{ c.replace('_', ' ') }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="passengers">Passengers</label>
+      <input id="passengers" name="passengers" type="number" min="1" max="9" value="{{ form.passengers }}">
+    </div>
+    <div class="field">
+      <button class="btn btn-block" type="submit">Search{% if mode == 'live' %} (uses 1){% endif %}</button>
+    </div>
+  </form>
+</div>
+
+{% if error %}
+<div class="card" role="alert" style="border-color:var(--danger); color:var(--danger); margin-top:16px">{{ error }}</div>
+{% endif %}
+
+{% if results %}
+<div class="elig-summary" aria-label="Offers per verdict">
+  {% set classes = {'Eligible': 'tag-sage', 'Eligible with penalty': 'tag-terra', 'Unknown': 'tag-mute', 'Not eligible': 'tag-danger'} %}
+  {% for v in verdicts %}<span class="tag {{ classes[v] }}">{{ v }}: {{ counts[v] }}</span>{% endfor %}
+  <span class="stat">{{ results.offers_returned }} offers ·
+    {{ results.stats.null_conditions }} with null change conditions,
+    {{ results.stats.refetched }} fetched again,
+    {{ results.stats.conditions_filled }} filled in</span>
+</div>
+
+<div class="elig-filters">
+  <div class="field">
+    <label for="f-verdict">Verdict</label>
+    <select id="f-verdict">
+      <option value="">All</option>
+      {% for v in verdicts %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="f-carrier">Carrier</label>
+    <select id="f-carrier">
+      <option value="">All</option>
+      {% for c in carriers %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="f-penalty">Max change penalty</label>
+    <input id="f-penalty" type="number" min="0" step="0.01" placeholder="any">
+  </div>
+  <div class="elig-meta" id="f-count" aria-live="polite">showing {{ results.rows|length }} of {{ results.rows|length }}</div>
+</div>
+<p class="elig-meta" style="margin:-4px 0 10px">Max change penalty compares the published amount in its own currency, and hides offers with no published penalty.</p>
+
+<div class="elig-list" id="elig-list">
+  {% for r in results.rows %}
+  {% set leg = r.legs[0] if r.legs else {} %}
+  <article class="elig-row" data-offer-id="{{ r.offer_id }}" data-verdict="{{ r.verdict }}" data-carrier="{{ r.carrier }}"
+           data-change-penalty="{{ r.change_penalty if r.change_penalty is not none else '' }}">
+    <div class="elig-top">
+      <div>
+        <span class="elig-flight">{{ r.carrier }}{% if r.carrier_iata %} ({{ r.carrier_iata }}){% endif %}</span>
+        <span class="mono">{{ leg.flight_numbers }}</span>
+        <div class="elig-meta">
+          {{ leg.origin }} {{ leg.depart }} → {{ leg.destination }} {{ leg.arrive }}{% if leg.next_day %} +1{% endif %}
+          · {{ leg.duration }} ·
+          {% if leg.stops == 0 %}nonstop{% else %}{{ leg.stops }} stop{{ 's' if leg.stops > 1 }}{% endif %}
+          · {{ r.fare_brand or 'no fare brand' }}
+        </div>
+      </div>
+      <div class="elig-price">{{ r.price }} {{ r.currency }}</div>
+    </div>
+    <div class="elig-conds">
+      {{ condition('Change before departure', r.change) }}
+      {{ condition('Refund before departure', r.refund) }}
+    </div>
+    <div class="elig-verdict">
+      <span class="tag {{ classes[r.verdict] }}">{{ r.verdict }}</span>
+      <span>{{ r.reason }}</span>
+      <span class="elig-meta">conditions: {{ r.conditions_source.replace('_', ' ') }}</span>
+    </div>
+    <details>
+      <summary>Raw conditions (offer and slices)</summary>
+      <pre>{{ r.raw_conditions }}</pre>
+    </details>
+  </article>
+  {% else %}
+  <div class="elig-row muted">Duffel returned no offers for this search.</div>
+  {% endfor %}
+</div>
+
+<script>
+(function () {
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#elig-list .elig-row[data-verdict]'));
+  var verdict = document.getElementById('f-verdict');
+  var carrier = document.getElementById('f-carrier');
+  var penalty = document.getElementById('f-penalty');
+  var count = document.getElementById('f-count');
+  function apply() {
+    var v = verdict.value, c = carrier.value, max = penalty.value === '' ? null : parseFloat(penalty.value);
+    var shown = 0;
+    rows.forEach(function (row) {
+      var p = row.getAttribute('data-change-penalty');
+      var ok = (!v || row.getAttribute('data-verdict') === v)
+            && (!c || row.getAttribute('data-carrier') === c)
+            && (max === null || (p !== '' && parseFloat(p) <= max));
+      row.hidden = !ok;
+      if (ok) shown++;
+    });
+    count.textContent = 'showing ' + shown + ' of ' + rows.length;
+  }
+  [verdict, carrier].forEach(function (el) { el.addEventListener('change', apply); });
+  penalty.addEventListener('input', apply);
+})();
+</script>
+{% endif %}
+{% endblock %}

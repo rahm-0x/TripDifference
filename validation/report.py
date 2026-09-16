@@ -2,22 +2,20 @@
 Summarizes validation/observe.py's reshop_observations table.
 
 Read-only: no Duffel calls, no writes, nothing to gate behind OBSERVE_ONLY.
-For the whole table, and broken out by carrier and by days-to-departure
-bucket, prints:
+Prints one table, a row per (carrier, days-to-departure bucket) plus an ALL
+row:
 
-  - total observations
-  - how many reached gate 9 (the profitability-floor check — reachable only
-    once a matched change offer priced out with change_total_amount < 0)
-  - count and percentage of observations with change_total_amount < 0
-  - min / median / max of change_total_amount, across every observation
-    that was actually priced (gate >= 8), positive or negative — a +40 quote
-    that a later gate skipped is still a real data point
+  carrier | days to departure | quotes observed | change_total < 0 | median change_total
 
-The gate-9 count and the change_total<0 count are computed two independent
-ways (the stored `gate` column, and a direct threshold on
-change_total_amount) specifically so they can be cross-checked against each
-other — they should always match; a mismatch would mean the gate
-attribution in observe.py has drifted from engine.py's actual gate order.
+A quote is an observation that was actually priced (change_total_amount not
+NULL, i.e. it reached gate 8); the median is over those quotes, positive and
+negative alike — a +40 quote that a later gate skipped is still a real data
+point. Observations on test-suite accounts are excluded.
+
+Below the table: an explicit line when no quote has ever come back below $0,
+and a cross-check that the gate>=9 count (the stored `gate` column) equals
+the change_total<0 count (a direct threshold) — a mismatch would mean the
+gate attribution in observe.py has drifted from engine.py's gate order.
 
 Usage:
     python validation/report.py
@@ -57,8 +55,9 @@ def _day_bucket(days):
 
 def _fetch_all():
     """Every observation except those on test-suite accounts
-    (db.TEST_ACCOUNT_NAME). An observation whose order row is gone has no
-    account to judge by and is kept."""
+    (db.TEST_ACCOUNT_NAME). An observation with no order link (possible only
+    for rows written before migration 030 made the link ON DELETE RESTRICT)
+    has no account to judge by and is kept."""
     return db.q("""SELECT ro.* FROM reshop_observations ro
                      LEFT JOIN orders o ON o.order_id = ro.order_id
                      LEFT JOIN accounts a ON a.id = o.account_id
@@ -66,66 +65,68 @@ def _fetch_all():
                 (db.TEST_ACCOUNT_NAME,), fetch="all")
 
 
-def _pct(part, whole):
-    return (100.0 * part / whole) if whole else 0.0
+def summarize(rows):
+    """One row per (carrier, days-to-departure bucket), sorted by carrier then
+    bucket order, plus an ALL row last. A quote is an observation that was
+    actually priced (change_total_amount not NULL); median_change_total is
+    over those quotes, positive and negative alike."""
+    bucket_order = [label for _, _, label in DAY_BUCKETS] + ["unknown (past departure)", "unknown"]
+    groups = {}
+    for r in rows:
+        key = (r["carrier"] or "(unknown)", _day_bucket(r["days_to_departure"]))
+        groups.setdefault(key, []).append(r)
+
+    def line(carrier, bucket, members):
+        quotes = [Decimal(str(r["change_total_amount"])) for r in members
+                  if r["change_total_amount"] is not None]
+        return {
+            "carrier": carrier, "bucket": bucket,
+            "observations": len(members),
+            "quotes": len(quotes),
+            "negative": sum(1 for q in quotes if q < 0),
+            "median_change_total": statistics.median(quotes) if quotes else None,
+            "reached_floor": sum(1 for r in members if r["gate"] >= GATE_FLOOR),
+        }
+
+    out = [line(c, b, groups[(c, b)])
+           for c, b in sorted(groups, key=lambda k: (k[0], bucket_order.index(k[1])))]
+    out.append(line("ALL", "all", rows))
+    return out
 
 
-def _print_bucket(label, rows):
-    total = len(rows)
-    print(f"\n{label} — {total} observation(s)")
-    if total == 0:
-        print("  (no observations)")
-        return
+def format_table(summary):
+    headers = ("carrier", "days to departure", "quotes observed", "change_total < 0", "median change_total")
+    body = [(s["carrier"], s["bucket"], str(s["quotes"]), str(s["negative"]),
+             "—" if s["median_change_total"] is None else str(s["median_change_total"]))
+            for s in summary]
+    widths = [max(len(h), *(len(row[i]) for row in body)) for i, h in enumerate(headers)]
+    numeric = {2, 3, 4}
 
-    reached_floor = [r for r in rows if r["gate"] >= GATE_FLOOR]
-    negative = [r for r in rows if r["change_total_amount"] is not None and r["change_total_amount"] < 0]
-    priced = [r for r in rows if r["change_total_amount"] is not None]
+    def fmt(cells):
+        return "  ".join(c.rjust(widths[i]) if i in numeric else c.ljust(widths[i])
+                         for i, c in enumerate(cells))
 
-    print(f"  total observations:        {total}")
-
-    if not reached_floor:
-        print(f"  reached gate {GATE_FLOOR} (profitability floor): 0 — no observation ever priced "
-              f"a matching identical-itinerary change offer below $0")
-    else:
-        print(f"  reached gate {GATE_FLOOR} (profitability floor): "
-              f"{len(reached_floor)} ({_pct(len(reached_floor), total):.1f}%)")
-
-    if not negative:
-        print("  change_total_amount < 0:   0 — no negative quote observed")
-    else:
-        print(f"  change_total_amount < 0:   {len(negative)} ({_pct(len(negative), total):.1f}%)")
-
-    if len(reached_floor) != len(negative):
-        print(f"  ** MISMATCH: gate>={GATE_FLOOR} count ({len(reached_floor)}) != "
-              f"change_total<0 count ({len(negative)}) — gate attribution may be wrong")
-
-    if not priced:
-        print("  change_total_amount stats: no observation was ever priced (nothing reached gate 8)")
-    else:
-        amounts = sorted(r["change_total_amount"] for r in priced)
-        print(f"  change_total_amount stats (n={len(amounts)}, all priced quotes, "
-              f"positive and negative): min={amounts[0]} median={statistics.median(amounts)} "
-              f"max={amounts[-1]}")
+    lines = [fmt(headers), "  ".join("-" * w for w in widths)]
+    for i, row in enumerate(body):
+        if i == len(body) - 1:
+            lines.append("  ".join("-" * w for w in widths))
+        lines.append(fmt(row))
+    return "\n".join(lines)
 
 
 def main():
-    rows = _fetch_all()
-
-    _print_bucket("ALL OBSERVATIONS", rows)
-
-    print("\n=== by carrier ===")
-    carriers = sorted({r["carrier"] or "(unknown)" for r in rows})
-    for carrier in carriers:
-        _print_bucket(f"carrier {carrier}", [r for r in rows if (r["carrier"] or "(unknown)") == carrier])
-
-    print("\n=== by days-to-departure bucket ===")
-    bucketed = {}
-    for r in rows:
-        bucketed.setdefault(_day_bucket(r["days_to_departure"]), []).append(r)
-    order = [label for _, _, label in DAY_BUCKETS] + ["unknown (past departure)", "unknown"]
-    for label in order:
-        if label in bucketed:
-            _print_bucket(label, bucketed[label])
+    summary = summarize(_fetch_all())
+    total = summary[-1]
+    print(format_table(summary))
+    print()
+    if total["observations"] == 0:
+        print("No observations recorded yet — nothing has been quoted.")
+    elif total["negative"] == 0:
+        print(f"No quote has come back below $0 across {total['quotes']} quote(s) — "
+              f"no observation reached gate {GATE_FLOOR} (the profitability floor).")
+    if total["reached_floor"] != total["negative"]:
+        print(f"** MISMATCH: gate>={GATE_FLOOR} count ({total['reached_floor']}) != change_total<0 count "
+              f"({total['negative']}) — gate attribution in observe.py may have drifted from engine.py")
 
 
 if __name__ == "__main__":

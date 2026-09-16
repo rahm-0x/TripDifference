@@ -1,0 +1,418 @@
+{
+  "changeable_no_fee": {
+    "_source": "mocked: the recorded changeable_with_penalty offer with its change penalty set to 0.00 USD (no recorded offer has a zero penalty in the fare's own currency)",
+    "id": "off_mocked_changeable_no_fee",
+    "total_amount": "43.67",
+    "total_currency": "USD",
+    "owner": {
+      "name": "Duffel Airways",
+      "iata_code": "ZZ"
+    },
+    "conditions": {
+      "change_before_departure": {
+        "allowed": true,
+        "penalty_amount": "0.00",
+        "penalty_currency": "USD"
+      },
+      "refund_before_departure": {
+        "allowed": false,
+        "penalty_amount": null,
+        "penalty_currency": null
+      }
+    },
+    "passengers": [
+      {
+        "id": "pas_0000B91gcVBvAEs0J3Ud2A",
+        "type": "adult"
+      }
+    ],
+    "slices": [
+      {
+        "id": "sli_0000B91gcVQ6JWDF127x8U",
+        "origin": {
+          "iata_code": "LAS"
+        },
+        "destination": {
+          "iata_code": "LAX"
+        },
+        "fare_brand_name": "Basic",
+        "conditions": {
+          "advance_seat_selection": null,
+          "change_before_departure": {
+            "allowed": true,
+            "penalty_amount": "0.00",
+            "penalty_currency": "USD"
+          },
+          "priority_boarding": null,
+          "priority_check_in": null
+        },
+        "segments": [
+          {
+            "marketing_carrier": {
+              "iata_code": "ZZ",
+              "name": "Duffel Airways"
+            },
+            "marketing_carrier_flight_number": "2623",
+            "operating_carrier": {
+              "iata_code": "ZZ",
+              "name": "Duffel Airways"
+            },
+            "departing_at": "2026-10-15T10:50:00",
+            "arriving_at": "2026-10-15T11:55:00",
+            "origin": {
+              "iata_code": "LAS"
+            },
+            "destination": {
+              "iata_code": "LAX"
+            },
+            "passengers": [
+              {
+                "cabin_class": "economy"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "changeable_with_penalty": {
+    "_source": "recorded: Duffel sandbox offer request 2026-08-04 (responses/20260804T103417Z-offer_request.json), trimmed",
+    "id": "off_0000B91gcVQSICUp28IEgj",
+    "total_amount": "43.67",
+    "total_currency": "USD",
+    "owner": {
+      "name": "Duffel Airways",
+      "iata_code": "ZZ"
+    },
+    "conditions": {
+      "change_before_departure": {
+        "allowed": true,
+        "penalty_amount": "10.00",
+        "penalty_currency": "USD"
+      },
+      "refund_before_departure": {
+        "allowed": false,
+        "penalty_amount": null,
+        "penalty_currency": null
+      }
+    },
+    "passengers": [
+      {
+        "id": "pas_0000B91gcVBvAEs0J3Ud2A",
+        "type": "adult"
+      }
+    ],
+    "slices": [
+      {
+        "id": "sli_0000B91gcVQ6JWDF127x8U",
+        "origin": {
+          "iata_code": "LAS"
+        },
+        "destination": {
+          "iata_code": "LAX"
+        },
+        "fare_brand_name": "Basic",
+        "conditions": {
+          "advance_seat_selection": null,
+          "change_before_departure": {
+            "allowed": true,
+            "penalty_amount": "10.00",
+            "penalty_currency": "USD"
+          },
+          "priority_boarding": null,
+          "priority_check_in": null
+        },
+        "segments": [
+          {
+            "marketing_carrier": {
+              "iata_code": "ZZ",
+              "name": "Duffel Airways"
+            },
+            "marketing_carrier_flight_number": "2623",
+            "operating_carrier": {
+              "iata_code": "ZZ",
+              "name": "Duffel Airways"
+            },
+            "departing_at": "2026-10-15T10:50:00",
+            "arriving_at": "2026-10-15T11:55:00",
+            "origin": {
+              "iata_code": "LAS"
+            },
+            "destination": {
+              "iata_code": "LAX"
+            },
+            "passengers": [
+              {
+                "cabin_class": "economy"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "non_changeable_basic_economy": {
+    "_source": "recorded: Duffel sandbox offer request 2026-08-04 (responses/20260804T103403Z-offer_request.json), trimmed",
+    "id": "off_0000B91gbDWXLtsoXcfuZn",
+    "total_amount": "225.89",
+    "total_currency": "USD",
+    "owner": {
+      "name": "American Airlines",
+      "iata_code": "AA"
+    },
+    "conditions": {
+      "change_before_departure": {
+        "allowed": false,
+        "penalty_amount": null,
+        "penalty_currency": null
+      },
+      "refund_before_departure": {
+        "allowed": false,
+        "penalty_amount": null,
+        "penalty_currency": null
+      }
+    },
+    "passengers": [
+      {
+        "id": "pas_0000B91gbDFAOTzLfkY2W3",
+        "type": "adult"
+      }
+    ],
+    "slices": [
+      {
+        "id": "sli_0000B91gbDWBNDbEWWVd2T",
+        "origin": {
+          "iata_code": "LHR"
+        },
+        "destination": {
+          "iata_code": "JFK"
+        },
+        "fare_brand_name": "Basic Economy",
+        "conditions": {
+          "advance_seat_selection": null,
+          "change_before_departure": {
+            "allowed": false,
+            "penalty_amount": null,
+            "penalty_currency": null
+          },
+          "priority_boarding": null,
+          "priority_check_in": null
+        },
+        "segments": [
+          {
+            "marketing_carrier": {
+              "iata_code": "AA",
+              "name": "American Airlines"
+            },
+            "marketing_carrier_flight_number": "107",
+            "operating_carrier": {
+              "iata_code": "AA",
+              "name": "American Airlines"
+            },
+            "departing_at": "2026-10-15T10:50:00",
+            "arriving_at": "2026-10-15T13:48:00",
+            "origin": {
+              "iata_code": "LHR"
+            },
+            "destination": {
+              "iata_code": "JFK"
+            },
+            "passengers": [
+              {
+                "cabin_class": "economy"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "null_conditions": {
+    "_source": "recorded: Duffel sandbox offer request 2026-08-04 (responses/20260804T103403Z-offer_request.json), trimmed",
+    "id": "off_0000B91gbOsD9ekxk1tsOT",
+    "total_amount": "506.73",
+    "total_currency": "USD",
+    "owner": {
+      "name": "TAP Air Portugal",
+      "iata_code": "TP"
+    },
+    "conditions": {
+      "change_before_departure": null,
+      "refund_before_departure": null
+    },
+    "passengers": [
+      {
+        "id": "pas_0000B91gbDFAOTzLfkY2W3",
+        "type": "adult"
+      }
+    ],
+    "slices": [
+      {
+        "id": "sli_0000B91gbOsD9ekxk1tsOR",
+        "origin": {
+          "iata_code": "LHR"
+        },
+        "destination": {
+          "iata_code": "JFK"
+        },
+        "fare_brand_name": "Discount",
+        "conditions": {
+          "advance_seat_selection": false,
+          "change_before_departure": null,
+          "priority_boarding": false,
+          "priority_check_in": false
+        },
+        "segments": [
+          {
+            "marketing_carrier": {
+              "iata_code": "TP",
+              "name": "TAP Air Portugal"
+            },
+            "marketing_carrier_flight_number": "1367",
+            "operating_carrier": {
+              "iata_code": "TP",
+              "name": "TAP Air Portugal"
+            },
+            "departing_at": "2026-10-15T11:20:00",
+            "arriving_at": "2026-10-15T14:30:00",
+            "origin": {
+              "iata_code": "LHR"
+            },
+            "destination": {
+              "iata_code": "LIS"
+            },
+            "passengers": [
+              {
+                "cabin_class": "economy"
+              }
+            ]
+          },
+          {
+            "marketing_carrier": {
+              "iata_code": "TP",
+              "name": "TAP Air Portugal"
+            },
+            "marketing_carrier_flight_number": "0209",
+            "operating_carrier": {
+              "iata_code": "TP",
+              "name": "TAP Air Portugal"
+            },
+            "departing_at": "2026-10-15T17:00:00",
+            "arriving_at": "2026-10-15T20:05:00",
+            "origin": {
+              "iata_code": "LIS"
+            },
+            "destination": {
+              "iata_code": "JFK"
+            },
+            "passengers": [
+              {
+                "cabin_class": "economy"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "zero_fee_other_currency": {
+    "_source": "recorded: Duffel sandbox offer request 2026-08-04 (responses/20260804T103403Z-offer_request.json), trimmed \u2014 0.00 GBP change penalty on a USD fare; 3,834 of 7,954 recorded changeable offers look like this",
+    "id": "off_0000B91gbKTbVChE6YMATz",
+    "total_amount": "819.48",
+    "total_currency": "USD",
+    "owner": {
+      "name": "Lufthansa",
+      "iata_code": "LH"
+    },
+    "conditions": {
+      "change_before_departure": {
+        "allowed": true,
+        "penalty_amount": "0.00",
+        "penalty_currency": "GBP"
+      },
+      "refund_before_departure": {
+        "allowed": true,
+        "penalty_amount": "200",
+        "penalty_currency": "GBP"
+      }
+    },
+    "passengers": [
+      {
+        "id": "pas_0000B91gbDFAOTzLfkY2W3",
+        "type": "adult"
+      }
+    ],
+    "slices": [
+      {
+        "id": "sli_0000B91gbKTbVChE6YMATr",
+        "origin": {
+          "iata_code": "LHR"
+        },
+        "destination": {
+          "iata_code": "JFK"
+        },
+        "fare_brand_name": "Economy Green",
+        "conditions": {
+          "advance_seat_selection": null,
+          "change_before_departure": {
+            "allowed": true,
+            "penalty_amount": "0.00",
+            "penalty_currency": "GBP"
+          },
+          "priority_boarding": null,
+          "priority_check_in": null
+        },
+        "segments": [
+          {
+            "marketing_carrier": {
+              "iata_code": "LX",
+              "name": "SWISS"
+            },
+            "marketing_carrier_flight_number": "0339",
+            "operating_carrier": {
+              "iata_code": "LX",
+              "name": "SWISS"
+            },
+            "departing_at": "2026-10-15T20:05:00",
+            "arriving_at": "2026-10-15T22:45:00",
+            "origin": {
+              "iata_code": "LHR"
+            },
+            "destination": {
+              "iata_code": "ZRH"
+            },
+            "passengers": [
+              {
+                "cabin_class": "economy"
+              }
+            ]
+          },
+          {
+            "marketing_carrier": {
+              "iata_code": "LX",
+              "name": "SWISS"
+            },
+            "marketing_carrier_flight_number": "0016",
+            "operating_carrier": {
+              "iata_code": "LX",
+              "name": "SWISS"
+            },
+            "departing_at": "2026-10-16T10:00:00",
+            "arriving_at": "2026-10-16T12:50:00",
+            "origin": {
+              "iata_code": "ZRH"
+            },
+            "destination": {
+              "iata_code": "JFK"
+            },
+            "passengers": [
+              {
+                "cabin_class": "economy"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

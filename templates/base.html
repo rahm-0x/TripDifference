@@ -443,6 +443,7 @@
 {% block head %}{% endblock %}
 </head>
 <body>
+{% include "_live_banner.html" %}
 
 {% macro brandmark() %}
 <a class="brand" href="{{ url_for('index') }}">
@@ -493,6 +494,12 @@
       </a>
 
       <div class="nav-sec">Operations</div>
+      {% if app_env == 'staging' %}
+      <a href="{{ url_for('eligibility_page') }}" class="{{ 'on' if nav == 'eligibility' }}">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
+        Eligibility
+      </a>
+      {% endif %}
       <a href="{{ url_for('orders') }}" class="{{ 'on' if nav == 'ops' }}">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h4v8H3v-8zm7-9h4v17h-4V4zm7 5h4v12h-4V9z"/></svg>
         Ops

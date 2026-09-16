@@ -43,6 +43,22 @@ signable-into; excluded by `validation/`), and carrier data uses test-only codes
 Production tracks `main`, staging tracks the `staging` branch. Vercel auto-detects the
 Flask `app` in root `app.py` and routes every path to a single function.
 
+- **Production is sandbox-only; staging can search live, and book live if told to.**
+  `APP_ENV` (`production` when unset) decides. On staging, a `duffel_live_` token with
+  `DUFFEL_LIVE_SEARCH_ENABLED=true` runs real Duffel searches, capped at
+  `STAGING_MAX_MONTHLY_SEARCHES` (default 1400) and logged in `live_search_log`; the
+  `/eligibility` page and `scripts/eligibility_scan.py` use it. Orders, changes and cancels
+  on a live token are refused unless `DUFFEL_LIVE_ORDERS_ENABLED=true` (default false), and
+  then only under `STAGING_ALLOWED_EMAILS`, `STAGING_MAX_ORDER_USD` and
+  `STAGING_MAX_DAILY_USD` (`live_guard.py`), paid from TD's Duffel balance. Every page
+  carries a banner: amber for live search, red for live orders. The app refuses to start
+  if a live flag or live token is set outside staging, if staging's Stripe key isn't
+  `sk_test_`, or if the database doesn't match `APP_ENV` (staging must be the staging
+  Supabase project, production must not be). Staging's env vars are scoped to the
+  `staging` branch in Vercel's Preview environment. Apply migrations to staging with
+  `scripts/migrate_staging.py` and to production with `scripts_migrate.py` **before**
+  deploying code that needs them.
+
 - **Real auth, gating almost everything.** Every screen except the marketing landing
   page, login/signup, the logo route, and the Resend inbound webhook requires a
   session (`@auth.login_required`, `app.py`). Two open gaps: no email verification

@@ -229,8 +229,13 @@ def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_car
             penalty_currency=penalty_currency, needs_attention=True)
 
     # 4. Never compare raw numbers across currencies. GBP 300 against a USD
-    #    total is not 300 — this is exactly how YBVI8R slipped through.
-    if penalty_currency and total_currency and penalty_currency != total_currency:
+    #    total is not 300 — this is exactly how YBVI8R slipped through. A zero
+    #    penalty is zero in any currency, so it needs no conversion: compared as
+    #    a Decimal, never by truthiness (Duffel sends amounts as strings, and
+    #    "0.00" is truthy).
+    if (penalty is not None and Decimal(str(penalty)) != 0
+            and penalty_currency and total_currency
+            and penalty_currency != total_currency):
         return Assessment(
             Eligibility.NOT_ELIGIBLE, EligibilityReason.PENALTY_CURRENCY_MISMATCH,
             f"penalty is {penalty} {penalty_currency} but order total is in "

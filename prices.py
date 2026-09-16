@@ -24,6 +24,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import duffel_http
+import live_search
 import paths
 
 SIM_FILE = paths.data_path("simulated_prices.json")
@@ -144,8 +145,9 @@ class DuffelPriceSource(PriceSource):
 
     def get_current_price(self, route, date, cabin="economy"):
         # FINDINGS.md §4: offer requests are single-use once booked from, so this
-        # always issues a fresh one rather than caching.
-        data = duffel_http.request("POST", "/air/offer_requests", body={
+        # always issues a fresh one rather than caching. Sent through
+        # live_search so a live one counts against the staging search budget.
+        data = live_search.offer_request({
             "data": {
                 "slices": [{
                     "origin": route.origin,
@@ -155,7 +157,7 @@ class DuffelPriceSource(PriceSource):
                 "passengers": [{"type": "adult"}],
                 "cabin_class": cabin,
             }
-        }, params={"return_offers": "true"}, label="ps_market")
+        }, source="market_price", params={"return_offers": "true"}, label="ps_market")
 
         offers = []
         for o in data.get("offers", []):

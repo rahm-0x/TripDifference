@@ -4,7 +4,8 @@ Live-order observation harness for the reshop-economics validation effort.
 Duffel's sandbox hardcodes change_total_amount at +125.00 no matter what
 (docs/architecture.md's Duffel sandbox section), so the decision engine's
 economics have never been checked against a real quote. This script is the
-first step towards that: for every live, monitored order, it runs the exact
+first step towards that: for every monitored order bought with a live Duffel
+token (orders.duffel_mode = 'live', on staging), it runs the exact
 same engine.evaluate() decision the app already makes, against the real
 Duffel price source, and records what it saw — including a positive
 change_total that a later gate would have skipped anyway, since a +40 quote
@@ -32,8 +33,10 @@ It records data and executes nothing. Concretely:
     .changeable) it already exposes publicly — no new engine hook exists or
     was needed for this.
 
-Usage:
-    OBSERVE_ONLY=1 python validation/observe.py
+Usage (against staging, with the staging live token and database):
+    OBSERVE_ONLY=1 APP_ENV=staging DUFFEL_LIVE_SEARCH_ENABLED=true DUFFEL_LIVE_ORDERS_ENABLED=true \\
+    DUFFEL_TOKEN=duffel_live_... POSTGRES_URL=<staging pooler URL> \\
+    python validation/observe.py
 """
 
 import os
@@ -128,16 +131,22 @@ def _days_to_departure(snapshot, now):
     return round((dep - now).total_seconds() / 86400.0)
 
 
+def _is_observable(record):
+    """A monitored order bought with a live Duffel token (duffel_mode 'live',
+    migration 030) that a real Duffel order backs (raw is non-empty) — a
+    manual/imported reservation has no order-change mechanism to quote
+    against at all (engine.evaluate's own NO_EXECUTION_MECHANISM gate), and a
+    test-mode order's quote is the sandbox's hardcoded +125.00, not data."""
+    return bool(record.get("monitoring") and record.get("raw") and record.get("duffel_mode") == "live")
+
+
 def _eligible_orders():
-    """Every live, monitored order across every account. 'Live' means a real
-    Duffel order backs it (raw is non-empty) — a manual/imported reservation
-    has no order-change mechanism to quote against at all (engine.evaluate's
-    own NO_EXECUTION_MECHANISM gate), so there is nothing here to observe.
-    Test-suite accounts (db.TEST_ACCOUNT_NAME) are skipped."""
+    """Every observable order across every account except test-suite
+    accounts (db.TEST_ACCOUNT_NAME)."""
     orders = []
     for acct in db.q("SELECT id FROM accounts WHERE name <> %s", (db.TEST_ACCOUNT_NAME,), fetch="all"):
         for record in db.load_orders(acct["id"]):
-            if record.get("monitoring") and record.get("raw"):
+            if _is_observable(record):
                 orders.append(record)
     return orders
 
@@ -181,7 +190,12 @@ def observe_one(record, source, now):
 
 
 def main():
-    duffel_http.token()  # fail fast with a clear message if DUFFEL_TOKEN is missing or wrong
+    # Fail fast with a clear message if DUFFEL_TOKEN is missing, not allowed in
+    # this environment, or a test token — which can't quote a live order.
+    if duffel_http.mode() != "live":
+        sys.exit("Refusing to run: observe.py quotes live orders only, and DUFFEL_TOKEN is a test token. "
+                 "Run it with the staging live token (APP_ENV=staging, DUFFEL_LIVE_SEARCH_ENABLED=true, "
+                 "DUFFEL_LIVE_ORDERS_ENABLED=true — an exchange quote is order-change traffic).")
 
     source = DuffelPriceSource()
     now = datetime.now(timezone.utc)

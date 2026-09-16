@@ -296,6 +296,9 @@ def test_upsert_order_round_trips_every_writable_value(acct):
         "stripe_payment_intent_id": "pi_test_abc",
         "payment_capture_failed_at": "2026-08-25T12:00:00+00:00",
         "payment_capture_error": "test capture error",
+        # 'test', never 'live': migration 030 refuses to delete a live order,
+        # and this test deletes its order below.
+        "duffel_mode": "test",
     }
     assert set(values) == set(db._ORDER_COLS), "test fixture drifted from _ORDER_COLS"
 

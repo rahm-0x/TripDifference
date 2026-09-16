@@ -28,6 +28,7 @@
         <td>
           {% if kind == 'execution' %}<span class="tag tag-terra">execution</span>
           {% elif kind == 'eligibility' %}<span class="tag tag-mute">eligibility</span>
+          {% elif kind == 'live_guard' %}<span class="tag tag-danger">live guard</span>
           {% else %}<span class="tag tag-mute">decision</span>{% endif %}
         </td>
         <td class="mono">{{ r.order_id[-8:] }}</td>
@@ -63,6 +64,13 @@
               {{ r.execution.replace('_',' ') }}</span>
           </td>
           <td style="font-size:13px">{{ r.detail }}</td>
+
+        {% elif kind == 'live_guard' %}
+          <td colspan="3" class="muted mono" style="font-size:12.5px">
+            {{ r.amount or '—' }} {{ r.currency }} · {{ r.source }}
+          </td>
+          <td><span class="tag tag-danger">refused</span></td>
+          <td style="font-size:13px"><b>{{ r.reason }}</b> — {{ r.detail }}</td>
 
         {% else %}
           <td colspan="3" class="muted" style="font-size:12.5px">

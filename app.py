@@ -24,16 +24,20 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from flask import (Flask, flash, get_flashed_messages, redirect, render_template,
+from flask import (Flask, abort, flash, get_flashed_messages, redirect, render_template,
                    request, send_from_directory, session, url_for)
 
 import requests
 
 import auth
 import billing
+import config
 import db
 import duffel_http
 import eligibility
+import live_guard
+import live_search
+import offer_eligibility
 import parsing
 import paths
 import policy
@@ -46,6 +50,15 @@ from prices import (DuffelPriceSource, Route, SimulatedPriceSource,
 
 HERE = Path(__file__).parent
 PORT = 8000
+
+# Environment guards, at startup rather than on the first request that would
+# touch the wrong thing: a live Duffel flag or token anywhere but staging
+# (production above all), a non-sk_test_ Stripe key on staging, and a database
+# that doesn't match APP_ENV (staging must use the staging project, production
+# must not).
+duffel_http.startup_check()
+billing.startup_check()
+db.startup_check()
 
 # Divert the audit trail from decisions.log into Postgres. engine.py keeps its
 # file behaviour when handed an explicit path, which is what the tests use.
@@ -135,7 +148,22 @@ def inject_globals():
                       "next": next_step}
     return {"user": auth.view_model(user), "card": card, "onboarding": onboarding,
             "policy": DEFAULT_POLICY, "profile": auth.profile_of(user),
-            "csrf_token": auth.csrf_token()}
+            "csrf_token": auth.csrf_token(),
+            # templates/_live_banner.html, included by every full-page template:
+            # 'orders' (real tickets, real money), 'search' (live fares, no
+            # orders), or None
+            "live_banner": _live_banner(),
+            "app_env": config.APP_ENV}
+
+
+def _live_banner():
+    if config.APP_ENV != "staging":
+        return None
+    if config.DUFFEL_LIVE_ORDERS_ENABLED:
+        return "orders"
+    if config.DUFFEL_LIVE_SEARCH_ENABLED:
+        return "search"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -967,11 +995,12 @@ def search():
 
     try:
         # Fresh offer request every search — they are single use (FINDINGS.md §4).
-        data = duffel_http.request("POST", "/air/offer_requests", body={
+        # Through live_search, so a live one counts against the staging budget.
+        data = live_search.offer_request({
             "data": {"slices": slices,
                      "passengers": [{"type": "adult"}] * form["adults"],
                      "cabin_class": form["cabin"]}
-        }, params={"return_offers": "true"}, label="ui_search")
+        }, source="search", account_id=_account(), params={"return_offers": "true"}, label="ui_search")
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form=form, error=str(exc))
 
@@ -995,6 +1024,78 @@ def search():
     return render_template("results.html", nav="search", offers=offers, form=form,
                            total=total,
                            unmonitorable=sum(1 for o in offers if not o["monitorable"]))
+
+
+# ---------------------------------------------------------------------------
+# staging: which live fares could be rebooked on a price drop
+# ---------------------------------------------------------------------------
+
+_IATA = re.compile(r"^[A-Z]{3}$")
+
+
+@app.route("/eligibility")
+def eligibility_page():
+    """Staging only (404 elsewhere, before any sign-in redirect): search Duffel
+    and list every offer with its change/refund conditions and the verdict
+    offer_eligibility derives from eligibility.assess(). GET, like /search —
+    nothing here writes anything but the search log."""
+    if config.APP_ENV != "staging":
+        abort(404)
+    return _eligibility_view()
+
+
+@auth.login_required
+def _eligibility_view():
+    form = {
+        "origin": request.args.get("origin", "").strip().upper(),
+        "destination": request.args.get("destination", "").strip().upper(),
+        "date": request.args.get("date", "").strip(),
+        "cabin": request.args.get("cabin", "economy"),
+        "passengers": _adults(request.args.get("passengers")),
+    }
+    try:
+        mode = duffel_http.mode()
+    except RuntimeError as exc:
+        mode, mode_error = None, str(exc)
+    else:
+        mode_error = None
+    context = {"nav": "eligibility", "form": form, "cabins": offer_eligibility.CABINS,
+               "budget": live_search.budget(), "mode": mode, "error": mode_error,
+               "results": None, "verdicts": offer_eligibility.VERDICTS}
+
+    if mode_error or not any((form["origin"], form["destination"], form["date"])):
+        return render_template("eligibility.html", **context)
+
+    problems = []
+    if not (_IATA.match(form["origin"]) and _IATA.match(form["destination"])):
+        problems.append("origin and destination must be 3-letter IATA codes")
+    try:
+        datetime.strptime(form["date"], "%Y-%m-%d")
+    except ValueError:
+        problems.append("date must be YYYY-MM-DD")
+    if form["cabin"] not in offer_eligibility.CABINS:
+        problems.append("unknown cabin")
+    if problems:
+        return render_template("eligibility.html", **{**context, "error": "; ".join(problems).capitalize() + "."}), 400
+
+    try:
+        result = offer_eligibility.search(
+            origin=form["origin"], destination=form["destination"], departure_date=form["date"],
+            cabin=form["cabin"], passengers=form["passengers"], source="eligibility",
+            account_id=_account())
+    except (DuffelError, RuntimeError) as exc:
+        return render_template("eligibility.html", **{**context, "budget": live_search.budget(),
+                                                      "error": str(exc)})
+
+    for row in result["rows"]:
+        slices = [v for v in (slice_view(s) for s in row["offer"].get("slices", [])) if v]
+        row["legs"] = slices
+        row["raw_conditions"] = json.dumps({"offer": row["offer_conditions"],
+                                            "slices": row["slice_conditions"]}, indent=2, sort_keys=True)
+    carriers = sorted({r["carrier"] for r in result["rows"] if r["carrier"]})
+    return render_template("eligibility.html", **{
+        **context, "budget": live_search.budget(), "results": result,
+        "counts": offer_eligibility.verdict_counts(result["rows"]), "carriers": carriers})
 
 
 # ---------------------------------------------------------------------------
@@ -1232,6 +1333,26 @@ def book():
     if existing:
         return redirect(url_for("trip_booked", order_id=existing["order_id"]))
 
+    # --- staging live spend. The token decides the mode, read once and stored
+    # on the order. A live ticket is allowlisted, capped, and recorded in the
+    # live_spend ledger (live_guard.reserve) before the card is even
+    # authorized; a refusal is audited there and nothing else happens.
+    duffel_mode = duffel_http.mode()
+    spend = None
+    if duffel_mode == "live" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
+        # duffel_http would refuse the order call anyway; refusing here means
+        # no spend is reserved and no card is authorized first.
+        return render_template("payment.html", nav="search", offer=offer_view(offer),
+                               people=people, error=duffel_http.live_orders_refusal()), 403
+    if duffel_mode == "live":
+        try:
+            spend = live_guard.reserve(
+                "booking", account_id=account_id, email=auth.current_user()["email"],
+                amount=offer["total_amount"], currency=offer["total_currency"], reference=offer_id)
+        except live_guard.LiveSpendRejected as exc:
+            return render_template("payment.html", nav="search", offer=offer_view(offer),
+                                   people=people, error=f"Live booking refused: {exc.detail}"), 403
+
     # --- payment: authorize now, capture only once Duffel confirms the
     # order exists. idempotency_key means a retried request (network blip,
     # double click) returns the same authorization rather than creating a
@@ -1241,27 +1362,32 @@ def book():
             account_id, amount=offer["total_amount"], currency=offer["total_currency"],
             idempotency_key=f"book-{offer_id}")
     except billing.CardError as exc:
+        live_guard.release(spend)
         return render_template("payment.html", nav="search", offer=offer_view(offer),
                                people=people, error=f"Payment failed: {exc}"), 402
 
+    order_body = {
+        "data": {
+            "type": "instant",
+            "selected_offers": [offer_id],
+            # Each traveler is matched to one of the offer's passenger ids.
+            # Sending the same details for every seat, which is what the
+            # single-passenger version did, books several copies of one person.
+            "passengers": [{"id": seat["id"], **person}
+                           for seat, person in zip(seats, people)],
+            # TD's own Duffel balance still funds the actual purchase — a
+            # working buffer topped up separately, not a float extended
+            # to the customer. The company's card is charged above, in
+            # the same request; this call is unchanged from before.
+            "payments": [{"type": "balance", "currency": offer["total_currency"],
+                          "amount": offer["total_amount"]}],
+        }
+    }
     try:
-        order = duffel_http.request("POST", "/air/orders", body={
-            "data": {
-                "type": "instant",
-                "selected_offers": [offer_id],
-                # Each traveler is matched to one of the offer's passenger ids.
-                # Sending the same details for every seat, which is what the
-                # single-passenger version did, books several copies of one person.
-                "passengers": [{"id": seat["id"], **person}
-                               for seat, person in zip(seats, people)],
-                # TD's own Duffel balance still funds the actual purchase — a
-                # working buffer topped up separately, not a float extended
-                # to the customer. The company's card is charged above, in
-                # the same request; this call is unchanged from before.
-                "payments": [{"type": "balance", "currency": offer["total_currency"],
-                              "amount": offer["total_amount"]}],
-            }
-        }, label="ui_book")
+        # A live payment is refused inside duffel_http.request unless this
+        # reservation covers it (None in test mode, which needs none).
+        with live_guard.authorized(spend):
+            order = duffel_http.request("POST", "/air/orders", body=order_body, label="ui_book")
     except (DuffelError, RuntimeError) as exc:
         # The hold must never become a charge for a ticket that doesn't
         # exist. Cancel, don't capture-then-refund: an authorization that
@@ -1269,6 +1395,9 @@ def book():
         # charge-then-refund is two lines and a support ticket for a
         # ticket that was never issued.
         billing.cancel_authorization(intent.id)
+        # Duffel answered with an error (or the request was never sent), so no
+        # ticket was issued on this attempt: the reservation is released.
+        live_guard.release(spend)
         if isinstance(exc, DuffelError) and "offer_request_already_booked" in (exc.codes or []):
             # Almost always a double-submitted Pay button. The first attempt
             # succeeded, so show that booking rather than an error implying the
@@ -1317,7 +1446,9 @@ def book():
         "fare_conditions": fare_conditions,
         "stripe_payment_intent_id": intent.id,
         "cost_center_id": cost_center_id,
+        "duffel_mode": duffel_mode,
     })
+    live_guard.settle(spend, order_id=order["id"])
 
     # A free observation of this carrier's real available_actions, every
     # time — the same near-zero-marginal-cost idea as fare-observation data.
@@ -1420,6 +1551,9 @@ def _activity_label(row):
         else:
             title = "Recovery executed"
         return {"title": title, "detail": row.get("detail", "")}
+    if kind == "live_guard":
+        return {"title": "Live exchange blocked by staging spend controls",
+                "detail": row.get("detail", "")}
     # decision
     if row.get("outcome") == "reshop":
         return {"title": "Lower fare found", "detail": row.get("reason", "")}
@@ -2166,13 +2300,26 @@ def execute(order_id, action):
             delta = Decimal(change["change_total_amount"])
             # Docs: no payment object needed when change_total <= 0.
             body = {"data": {}}
+            spend = None
             if delta > 0:
                 body = {"data": {"payment": {"type": "balance",
                                              "currency": change["change_total_currency"],
                                              "amount": str(delta)}}}
-            result = duffel_http.request(
-                "POST", f"/air/order_changes/{change['id']}/actions/confirm",
-                body=body, label="ui_change_confirm")
+                if duffel_http.mode() == "live":
+                    # A live top-up is live spend: same allowlist and caps as a
+                    # live booking, reserved before the confirm call.
+                    spend = live_guard.reserve(
+                        "exchange_topup", account_id=record["account_id"],
+                        email=auth.current_user()["email"], amount=delta,
+                        currency=change["change_total_currency"], order_id=order_id,
+                        reference=change["id"])
+            with live_guard.authorized(spend):
+                result = duffel_http.request(
+                    "POST", f"/air/order_changes/{change['id']}/actions/confirm",
+                    body=body, label="ui_change_confirm")
+            # A confirm that raised may still have landed, so a reservation is
+            # only ever settled here, never released on that path.
+            live_guard.settle(spend)
             note = f"exchange confirmed at {result.get('confirmed_at')}, change_total {delta}"
             savings = None
             if delta < 0:
@@ -2232,6 +2379,12 @@ def execute(order_id, action):
             savings = {"old_amount": str(paid), "new_amount": str(paid - refunded),
                       "realized_savings": str(refunded),
                       "delivery_type": delivery_type, "delivery_detail": delivery_detail}
+    except live_guard.LiveSpendRejected as exc:
+        # Refused before the confirm call: the order change was created but
+        # never confirmed, so nothing landed. Release the claim so the exchange
+        # can be retried once the caps allow; the refusal is already audited.
+        db.release_execution(attempt["id"])
+        return refuse(f"Live exchange refused: {exc.detail}")
     except (DuffelError, RuntimeError) as exc:
         # The order-change *create* call is safe to retry; a failed confirm is
         # not, because the exchange may have landed anyway. Only release the
