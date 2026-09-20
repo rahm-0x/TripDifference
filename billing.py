@@ -1,6 +1,7 @@
 """
-Stripe: card-on-file for card-gating (eligibility.assess's has_card), and
-the purchase charge itself under the merchant-of-record model.
+Stripe: card-on-file, required to buy a ticket (book() refuses without one),
+and the purchase charge itself under the merchant-of-record model. Eligibility
+never consults it — that is a fact about the fare, not about the account.
 
 Unlike duffel_http.py's raw-requests style, this uses Stripe's official
 Python SDK — the supported integration path for a Vercel-Marketplace-
@@ -14,18 +15,48 @@ import stripe
 
 import config
 import db
+import duffel_http
 
 
 def startup_check():
-    """Run at app import. Staging may book live Duffel tickets, but its Stripe
-    key must be a test key — a staging deploy never charges a real card."""
+    """Run at app import. Stripe's mode has to match Duffel's, so a real card is
+    never charged for a sandbox ticket and a real ticket is never bought without
+    a real charge.
+
+    Staging is the one deliberate exception: it may hold a live Duffel token, but
+    its Stripe key must still be a test key — a staging deploy never charges a
+    real card. DUFFEL_LIVE_ORDERS_ENABLED (default false) and live_guard's caps
+    are what bound that mismatch.
+    """
+    key = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+
     if config.APP_ENV == "staging":
-        key = os.environ.get("STRIPE_SECRET_KEY", "").strip()
         if not key.startswith("sk_test_"):
             raise RuntimeError("Refusing to start: APP_ENV=staging requires STRIPE_SECRET_KEY to start "
                                f"with 'sk_test_' (got '{key[:8]}...')" if key else
                                "Refusing to start: APP_ENV=staging requires STRIPE_SECRET_KEY "
                                "(an sk_test_ key), and it is not set")
+        return
+
+    # production and dev. 'missing'/'unrecognised' are duffel_http.startup_check's
+    # to refuse, and it has already run by the time app.py reaches this one.
+    duffel_mode = duffel_http.configured_token_mode()
+
+    # Production is sandbox-only — duffel_http.check_token refuses a live token
+    # anywhere but staging — so this is the direction that can bite today: a real
+    # card charged for a ticket Duffel never really issued.
+    if duffel_mode == "test" and key.startswith("sk_live_"):
+        raise RuntimeError(
+            "Refusing to start: DUFFEL_TOKEN is a sandbox token but STRIPE_SECRET_KEY is live "
+            f"(APP_ENV={config.APP_ENV}) — a real card would be charged for a ticket that was "
+            "never really issued.")
+
+    # The other direction, which starts mattering the day production is allowed a
+    # live token: a real ticket off TD's own Duffel balance, nothing real collected.
+    if duffel_mode == "live" and not key.startswith("sk_live_"):
+        raise RuntimeError(
+            "Refusing to start: DUFFEL_TOKEN is a live token but STRIPE_SECRET_KEY is not live "
+            f"(APP_ENV={config.APP_ENV}) — a real ticket would be bought with no real charge.")
 
 
 class CardError(RuntimeError):

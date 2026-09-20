@@ -308,8 +308,6 @@ def test_guards_fail_at_import_not_on_a_request(env, refusal):
     ("staging", "sk_live_abc", False),
     ("staging", "rk_test_abc", False),
     ("staging", "", False),
-    ("production", "sk_live_abc", True),
-    ("dev", "sk_live_abc", True),
 ])
 def test_staging_requires_a_stripe_test_key(monkeypatch, app_env, key, ok):
     monkeypatch.setenv("APP_ENV", app_env)
@@ -318,6 +316,28 @@ def test_staging_requires_a_stripe_test_key(monkeypatch, app_env, key, ok):
         billing.startup_check()
     else:
         with pytest.raises(RuntimeError, match="sk_test_"):
+            billing.startup_check()
+
+
+# Outside staging, Stripe's mode has to match Duffel's: a real card is never
+# charged for a sandbox ticket, and a real ticket is never bought without a real
+# charge. Production is sandbox-only today, so the first direction is the live one.
+@pytest.mark.parametrize("app_env,token,key,refusal", [
+    ("production", TEST_TOKEN, "sk_live_x", "never really issued"),
+    ("dev", TEST_TOKEN, "sk_live_x", "never really issued"),
+    ("production", TEST_TOKEN, "sk_test_x", None),
+    ("dev", TEST_TOKEN, "", None),
+    ("production", LIVE_TOKEN, "sk_test_x", "no real charge"),
+    ("production", LIVE_TOKEN, "sk_live_x", None),
+])
+def test_stripe_mode_must_match_duffel_mode(monkeypatch, app_env, token, key, refusal):
+    monkeypatch.setenv("APP_ENV", app_env)
+    monkeypatch.setenv("DUFFEL_TOKEN", token)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", key)
+    if refusal is None:
+        billing.startup_check()
+    else:
+        with pytest.raises(RuntimeError, match=refusal):
             billing.startup_check()
 
 
