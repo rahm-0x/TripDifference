@@ -936,36 +936,17 @@ def index():
 # _offer_rank_price into the 20 actually shown. A single-offer fetch is not an
 # offer request, so none of this counts against STAGING_MAX_MONTHLY_SEARCHES
 # (live_search.py) — it costs latency, not budget.
-SEARCH_REFETCH_LIMIT = 20
-
-
-def _with_change_conditions(offers, limit=SEARCH_REFETCH_LIMIT):
-    """`offers`, with the cheapest `limit` null-conditions entries replaced by
-    their individually fetched versions. Anything that fails to refetch is left
-    as it was and assesses as CONDITIONS_MISSING, which is the honest answer —
-    unknown beats assumed (eligibility.py gate 2)."""
-    def price(offer):
-        try:
-            return Decimal(str(offer.get("total_amount")))
-        except (InvalidOperation, ValueError, TypeError):
-            return Decimal("Infinity")
-
-    filled = list(offers)
-    spent = 0
-    for i in sorted(range(len(filled)), key=lambda i: price(filled[i])):
-        if spent >= limit:
-            break
-        if (filled[i].get("conditions") or {}).get("change_before_departure") is not None:
-            continue
-        spent += 1
-        try:
-            fresh = duffel_http.request("GET", f"/air/offers/{filled[i]['id']}",
-                                        label="ui_search_conditions")
-        except (DuffelError, RuntimeError):
-            continue
-        if fresh:
-            filled[i] = fresh
-    return filled
+# Duffel waits on every supplier before answering, and the slowest are NDC
+# carriers that publish no structured change conditions anyway — so waiting on
+# them costs seconds and returns offers eligibility can say nothing about.
+# Measured on JFK->LHR 2026-11-19: uncapped, 12.0s for 295 offers of which 141
+# (48%) carried conditions; at 4000ms, 9.3s for 103 offers of which 103 (100%)
+# did. Fewer offers, all of them assessable, and a third off the wait.
+#
+# Refetching the null ones individually (GET /air/offers/:id) does not help:
+# on that same search it filled in 0 of 154 and added 6.6s. Null in the search
+# response means the airline published nothing, not that Duffel withheld it.
+SUPPLIER_TIMEOUT_MS = "4000"
 
 
 def _offer_rank_price(o):
@@ -1044,11 +1025,13 @@ def search():
             "data": {"slices": slices,
                      "passengers": [{"type": "adult"}] * form["adults"],
                      "cabin_class": form["cabin"]}
-        }, source="search", account_id=_account(), params={"return_offers": "true"}, label="ui_search")
+        }, source="search", account_id=_account(),
+            params={"return_offers": "true", "supplier_timeout": SUPPLIER_TIMEOUT_MS},
+            label="ui_search")
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form=form, error=str(exc))
 
-    raw = _with_change_conditions(data.get("offers", []))
+    raw = data.get("offers", [])
     rules = db.policy_rules_active(_account())
     capability_map = db.carrier_capabilities_for(
         (o.get("owner") or {}).get("iata_code") for o in raw)
