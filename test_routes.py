@@ -52,7 +52,10 @@ def test_every_route_off_the_allowlist_requires_login():
             checked += 1
             if not (resp.status_code == 302 and "/login" in resp.headers.get("Location", "")):
                 unprotected.append(f"{method} {rule.rule} (endpoint {rule.endpoint}) -> {resp.status_code}")
-    assert checked > 40, "the walk should cover the whole app"
+    # A floor, so a broken walk that checks nothing cannot pass. The real
+    # assertion is `unprotected` below. Was >40 before the email-import
+    # routes were removed took this from 45 to 40.
+    assert checked >= 35, "the walk should cover the whole app"
     assert not unprotected, "reachable without signing in:\n  " + "\n  ".join(unprotected)
 
 

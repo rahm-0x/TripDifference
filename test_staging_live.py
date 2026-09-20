@@ -275,7 +275,9 @@ def test_database_must_match_app_env(monkeypatch, app_env, pooled, direct, refus
     ({"APP_ENV": "production", "DUFFEL_TOKEN": LIVE_TOKEN, "STRIPE_SECRET_KEY": "sk_live_x"}, "LIVE token"),
     ({"APP_ENV": "staging", "DUFFEL_LIVE_SEARCH_ENABLED": "true", "DUFFEL_TOKEN": LIVE_TOKEN,
       "STRIPE_SECRET_KEY": "sk_live_x"}, "sk_test_"),
-    ({"APP_ENV": "production", "DUFFEL_TOKEN": TEST_TOKEN, "STRIPE_SECRET_KEY": "sk_live_x",
+    # sk_test_ so billing.startup_check (which runs first) passes and the
+    # database guard is the one under test here.
+    ({"APP_ENV": "production", "DUFFEL_TOKEN": TEST_TOKEN, "STRIPE_SECRET_KEY": "sk_test_x",
       "POSTGRES_URL": STAGING_POOLED, "POSTGRES_URL_NON_POOLING": ""}, "is the staging database"),
     ({"APP_ENV": "staging", "DUFFEL_TOKEN": TEST_TOKEN, "STRIPE_SECRET_KEY": "sk_test_x",
       "POSTGRES_URL": PRODUCTION_POOLED, "POSTGRES_URL_NON_POOLING": ""}, "not the staging database"),

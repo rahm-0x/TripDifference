@@ -144,15 +144,15 @@ def _onboarding_steps(user, card, counts):
         {"done": bool(user.get("given_name") and user.get("family_name")),
          "title": "Complete your profile", "sub": "Tell us your name so tickets match your ID.",
          "cta": "Finish profile", "url": url_for("onboarding_profile")},
-        {"done": counts["bookings"] > 0,
-         "title": "Add your first reservation", "sub": "We track prices and claim savings when fares drop.",
-         "cta": "Add reservation", "url": url_for("trips")},
         {"done": bool(card),
-         "title": "Link a card", "sub": "No card, no active monitoring — required to claim savings.",
+         "title": "Link a card", "sub": "Required to buy a ticket — charged when you book.",
          "cta": "Link a card", "url": url_for("onboarding_payment")},
         {"done": counts["travelers"] > 0,
          "title": "Add a traveler", "sub": "Saved passenger details speed up future bookings.",
          "cta": "Add traveler", "url": url_for("travelers")},
+        {"done": counts["bookings"] > 0,
+         "title": "Book your first flight", "sub": "We watch the fare and rebook you if it drops.",
+         "cta": "Search flights", "url": url_for("search")},
     ]
 
 
