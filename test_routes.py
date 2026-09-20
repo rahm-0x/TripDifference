@@ -28,7 +28,6 @@ EXPECTED_PUBLIC = {
     "index", "login", "signup",
     "google_auth_start", "google_auth_callback",
     "static", "logo",
-    "resend_inbound",
 }
 
 

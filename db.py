@@ -399,26 +399,6 @@ def upsert_order(record, account_id):
         return _to_record(cur.fetchone())
 
 
-def create_manual_order(account_id, *, traveler_id, seg_origin, seg_destination,
-                         seg_flight_number, seg_cabin, carrier, booking_reference,
-                         departure_date, paid, currency, fare_type):
-    """A reservation with no Duffel order behind it — booked with the airline
-    directly, added by hand. No `raw` payload exists to derive display fields
-    from, so the segment is stored for real instead (see migration 010).
-    """
-    order_id = "manual_" + secrets.token_urlsafe(8)
-    return upsert_order({
-        "order_id": order_id, "source": "manual", "fare_type": fare_type,
-        "raw": {}, "monitoring": False,
-        "traveler_id": traveler_id or None,
-        "seg_origin": seg_origin, "seg_destination": seg_destination,
-        "seg_flight_number": seg_flight_number, "seg_cabin": seg_cabin,
-        "carrier": carrier, "booking_reference": booking_reference,
-        "route": f"{seg_origin}-{seg_destination}", "itinerary": seg_flight_number,
-        "departure_date": departure_date or None,
-        "paid": paid, "currency": currency,
-    }, account_id)
-
 
 # ---------------------------------------------------------------------------
 # idempotency for the calls that move money
@@ -596,8 +576,9 @@ def account_save_payment_method(account_id, *, stripe_payment_method_id, brand,
 
 
 def account_card(account_id):
-    """None until a card is on file — the shape eligibility.assess's
-    has_card gate and every template that shows the card both key off."""
+    """None until a card is on file — the shape book()'s purchase gate and
+    every template that shows the card both key off. Eligibility does not
+    consult it: a fare's changeability has nothing to do with the viewer."""
     row = q("""SELECT card_brand, card_last4, card_exp_month, card_exp_year
                 FROM accounts WHERE id = %s AND stripe_payment_method_id IS NOT NULL""",
             (account_id,), fetch="one")
@@ -615,27 +596,7 @@ def account_card(account_id):
 # email capture layer
 # ---------------------------------------------------------------------------
 
-def email_import_sources(account_id):
-    return q("""SELECT * FROM email_import_sources WHERE account_id = %s
-                ORDER BY created_at""", (account_id,), fetch="all")
 
-
-def email_import_source_create(account_id, kind, address, status="pending"):
-    return q("""INSERT INTO email_import_sources (account_id, kind, address, status)
-                VALUES (%s, %s, %s, %s) RETURNING *""",
-            (account_id, kind, address, status), fetch="one")
-
-
-def email_import_source_authorized(account_id, from_address):
-    """Is `from_address` on this account's allowlist of forwarding senders?
-    Routing (which account a forwarded email belongs to) comes from the
-    `to` address's plus-addressed account_id, decoded before this is
-    called — this only answers whether that account has vouched for the
-    sender, so a stranger can't forward junk into someone else's reservations."""
-    return q("""SELECT 1 FROM email_import_sources
-                WHERE account_id = %s AND kind = 'forwarding'
-                  AND lower(address) = lower(%s) AND status = 'active'""",
-            (account_id, from_address), fetch="one") is not None
 
 
 def start_session(user_id):

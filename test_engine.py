@@ -344,7 +344,7 @@ def test_evaluate_never_prices_a_change_for_a_manual_reservation():
         "seg_flight_number": "701", "seg_cabin": "economy",
         "carrier": "Alaska Airlines", "booking_reference": "ILBTXL",
         "departure_date": "2026-08-29",
-    }, has_card=True)
+    })
     d = run(order, MarketOnlySource())
     assert d.outcome is Outcome.SKIP
     assert d.reason is Reason.NO_EXECUTION_MECHANISM
@@ -662,24 +662,20 @@ def test_cash_fare_type_is_the_default_and_unaffected():
     assert elig.assess(order_payload(), fare_type="cash").state is Eligibility.MONITORING
 
 
-def test_no_payment_method_blocks_monitoring_even_with_perfect_conditions():
-    """Card-gating: no card on file means no active monitoring, full stop —
-    same shape as the points-fare gate, checked before fare conditions."""
-    a = elig.assess(order_payload(), has_card=False)
-    assert a.state is Eligibility.NOT_ELIGIBLE
-    assert a.reason is EligibilityReason.NO_PAYMENT_METHOD
-    assert a.should_poll is False
-
-
-def test_has_card_defaults_true_and_is_unaffected():
+def test_eligibility_never_asks_about_a_card():
+    """Card-gating is gone: whether the account has a card on file is a fact
+    about the viewer, not the fare. It is enforced at purchase (book()
+    refuses without one), which is the only place it can actually matter."""
+    import inspect
+    assert "has_card" not in inspect.signature(elig.assess).parameters
     assert elig.assess(order_payload()).state is Eligibility.MONITORING
-    assert elig.assess(order_payload(), has_card=True).state is Eligibility.MONITORING
 
 
-def test_manual_reservation_with_no_duffel_order_is_eligible_on_fare_type_and_card_alone():
-    """A reservation with no Duffel order behind it (email import / manual
-    entry) has no conditions.change_before_departure to check — eligibility
-    is fare_type + card only, per the target spec's model."""
+def test_manual_reservation_with_no_duffel_order_is_eligible_on_fare_type_alone():
+    """A reservation with no Duffel order behind it has no
+    conditions.change_before_departure to check — eligibility is fare_type
+    alone. It still can't be exchanged: the engine skips it with
+    NO_EXECUTION_MECHANISM, which is a separate gate."""
     a = elig.assess({})
     assert a.state is Eligibility.MONITORING
     assert a.reason is EligibilityReason.CUSTOMER_SOURCED
@@ -687,9 +683,6 @@ def test_manual_reservation_with_no_duffel_order_is_eligible_on_fare_type_and_ca
 
     a = elig.assess({}, fare_type="points")
     assert a.reason is EligibilityReason.POINTS_FARE
-
-    a = elig.assess({}, has_card=False)
-    assert a.reason is EligibilityReason.NO_PAYMENT_METHOD
 
 
 def test_engine_skips_ineligible_without_pricing():

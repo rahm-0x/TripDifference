@@ -146,7 +146,7 @@ class OrderSnapshot:
     has_duffel_order: bool = True
 
     @classmethod
-    def from_duffel(cls, order, fare_type="cash", has_card=True, fallback=None):
+    def from_duffel(cls, order, fare_type="cash", fallback=None):
         """Build from a raw Duffel order payload, or — when `order` is empty
         (a reservation with no Duffel order behind it: email import / manual
         entry) — from `fallback`, the stored order-record columns app.py's
@@ -172,7 +172,7 @@ class OrderSnapshot:
                 void_window_ends_at=None,
                 booking_reference=fb.get("booking_reference", "") or "",
                 carrier_name=fb.get("carrier", "") or "",
-                eligibility=eligibility.assess(order, fare_type=fare_type, has_card=has_card),
+                eligibility=eligibility.assess(order, fare_type=fare_type),
                 has_duffel_order=False,
             )
 
@@ -224,7 +224,7 @@ class OrderSnapshot:
             void_window_ends_at=_parse_dt(order.get("void_window_ends_at")),
             booking_reference=order.get("booking_reference", ""),
             carrier_name=(order.get("owner") or {}).get("name", ""),
-            eligibility=eligibility.assess(order, fare_type=fare_type, has_card=has_card),
+            eligibility=eligibility.assess(order, fare_type=fare_type),
         )
 
 

@@ -14,9 +14,6 @@ Login / activate are presentation screens. They do not gate anything: this is a
 single-operator rig and adding real auth would only get in the way.
 """
 
-import base64
-import hashlib
-import hmac
 import json
 import os
 import re
@@ -38,7 +35,6 @@ import eligibility
 import live_guard
 import live_search
 import offer_eligibility
-import parsing
 import paths
 import policy
 import supabase_auth
@@ -118,9 +114,6 @@ PUBLIC_ENDPOINTS = frozenset({
     "login", "signup",
     "google_auth_start", "google_auth_callback",   # auth callbacks
     "static", "logo",                              # static
-    # Server-to-server: Resend can't hold a session. Authenticated by its Svix
-    # signature instead (_verify_resend_signature), and refused without one.
-    "resend_inbound",
 })
 
 
@@ -257,7 +250,7 @@ def slice_view(sl):
 LIKELY_MONITORING_RANK_DISCOUNT = Decimal("0.15")
 
 
-def offer_view(offer, policy_rules=None, has_card=None, carrier_capability_map=None):
+def offer_view(offer, policy_rules=None, carrier_capability_map=None):
     """
     Duffel offer → view model.
 
@@ -269,24 +262,20 @@ def offer_view(offer, policy_rules=None, has_card=None, carrier_capability_map=N
     unless carrier_capability says this carrier has never once honoured
     that claim on a real order, in which case it's NOT_ELIGIBLE outright.
 
-    policy_rules/has_card let a caller checking many offers (search()) fetch
-    the account's active rules and card status once rather than once per
-    offer; a single-offer caller (fetch_offer_view) leaves them None and
-    this fetches for itself. carrier_capability_map is the same batching
+    policy_rules lets a caller checking many offers (search()) fetch the
+    account's active rules once rather than once per offer; a single-offer
+    caller (fetch_offer_view) leaves it None and this fetches for itself. carrier_capability_map is the same batching
     idea, keyed by carrier IATA code. policy_result is advisory only here —
     nothing renders policy_enforcement/policy_result yet (Phase 4 UI); the
     hard gate lives in book().
     """
     slices = [v for v in (slice_view(s) for s in offer.get("slices", [])) if v]
-    if has_card is None:
-        has_card = bool(db.account_card(_account()))
     carrier_iata = (offer.get("owner") or {}).get("iata_code")
     if carrier_capability_map is not None:
         capability = carrier_capability_map.get(carrier_iata)
     else:
         capability = db.carrier_capability_for(carrier_iata)
-    a = eligibility.assess(offer, fare_type="cash", has_card=has_card,
-                           carrier_capability=capability)
+    a = eligibility.assess(offer, fare_type="cash", carrier_capability=capability)
     rules = policy_rules if policy_rules is not None else db.policy_rules_active(_account())
     decision = policy.evaluate_with_rules(rules, offer)
     first = slices[0] if slices else {}
@@ -327,15 +316,6 @@ def _account():
     return user["account_id"] if user else None
 
 
-def _forward_to_address(account_id):
-    """Plus-addressed so routing an inbound forward needs no DB lookup —
-    the account_id is right there in the address. Resend inbound isn't
-    enabled yet (docs/bolt-on-pivot.md), so this renders even before it is;
-    the address just won't receive anything until that dashboard step's done."""
-    domain = os.environ.get("RESEND_EMAIL_DOMAIN", "tripdifference.com")
-    return f"trips+{account_id}@{domain}"
-
-
 def load_orders():
     return db.load_orders(_account())
 
@@ -351,9 +331,8 @@ def upsert_order(record):
 def snapshot_of(record):
     # `fallback` only matters when raw is empty (a manual/imported
     # reservation with no Duffel order behind it).
-    has_card = bool(db.account_card(record.get("account_id")))
     return OrderSnapshot.from_duffel(record["raw"], fare_type=record.get("fare_type") or "cash",
-                                     has_card=has_card, fallback=record)
+                                     fallback=record)
 
 
 def _manual_leg_view(record):
@@ -393,9 +372,8 @@ def trip_view(record):
     snap = snapshot_of(record)
     d = record.get("last_decision") or {}
     pax = (raw.get("passengers") or [{}])[0]
-    # has_card hardcoded True until Stripe lands — see eligibility.assess's
-    # docstring; snapshot_of() already computed the same assessment onto
-    # snap.eligibility, reused here rather than assessed twice.
+    # snapshot_of() already computed this assessment onto snap.eligibility,
+    # reused here rather than assessed twice.
     a = snap.eligibility
     return {
         "eligibility": {
@@ -853,7 +831,7 @@ def onboarding_profile():
             return render_template("onboarding_profile.html", hide_nav=True, form=form,
                                    error="First and last name are required."), 400
         db.complete_profile(user["id"], user["account_id"], **form)
-        return redirect(url_for("onboarding_reservations"))
+        return redirect(url_for("onboarding_payment"))
     return render_template("onboarding_profile.html", hide_nav=True, form={
         "given_name": user["given_name"], "middle_name": user.get("middle_name", ""),
         "family_name": user["family_name"],
@@ -861,29 +839,6 @@ def onboarding_profile():
         "referral_source": user.get("referral_source", ""),
         "invite_code": user.get("invite_code", ""),
     })
-
-
-@app.route("/onboarding/reservations", methods=["GET"])
-@auth.login_required
-def onboarding_reservations():
-    acct = _account()
-    return render_template("onboarding_reservations.html", hide_nav=True,
-                           travelers=db.travelers(acct),
-                           forward_to=_forward_to_address(acct),
-                           sources=db.email_import_sources(acct))
-
-
-@app.route("/auth/gmail/start")
-@auth.login_required
-def gmail_auth_start():
-    """Scaffolded, not functional. gmail.readonly is a sensitive Google
-    scope requiring Google's manual app-verification process — see
-    docs/bolt-on-pivot.md. This records intent so Settings/onboarding can
-    show 'pending' honestly rather than a dead button; there's nothing to
-    poll until that verification clears."""
-    user = auth.current_user()
-    db.email_import_source_create(_account(), "google", user["email"], status="pending")
-    return redirect(request.referrer or url_for("onboarding_reservations"))
 
 
 @app.route("/onboarding/payment", methods=["GET"])
@@ -1052,10 +1007,9 @@ def search():
 
     raw = data.get("offers", [])
     rules = db.policy_rules_active(_account())
-    has_card = bool(db.account_card(_account()))
     capability_map = db.carrier_capabilities_for(
         (o.get("owner") or {}).get("iata_code") for o in raw)
-    offers = [offer_view(o, policy_rules=rules, has_card=has_card,
+    offers = [offer_view(o, policy_rules=rules,
                          carrier_capability_map=capability_map) for o in raw]
 
     # Sort by value after reshop, not raw price — see _offer_rank_price.
@@ -1456,8 +1410,7 @@ def book():
         return render_template("results.html", nav="search", offers=None, form={},
                                error=str(exc))
 
-    has_card = True  # gated above; this line never reaches here without one
-    snap = OrderSnapshot.from_duffel(order, has_card=has_card)
+    snap = OrderSnapshot.from_duffel(order)
 
     # Gate monitoring on fare conditions at booking time. Never default to on.
     assessment = snap.eligibility
@@ -1767,8 +1720,6 @@ def settings():
                                        phone_number=request.form.get("phone_number", "").strip())
         return redirect(url_for("settings"))
     return render_template("settings.html", nav="settings", account_user=user,
-                           forward_to=_forward_to_address(acct),
-                           sources=db.email_import_sources(acct),
                            company=db.account_company_fields(acct),
                            cost_centers=db.cost_centers_for_account(acct))
 
@@ -1819,82 +1770,6 @@ def cost_center_edit(cost_center_id):
         budget_period=request.form.get("budget_period") or None,
         active=request.form.get("active") == "on")
     return redirect(url_for("cost_centers_page"))
-
-
-@app.route("/settings/email-sources", methods=["POST"])
-@auth.login_required
-def email_source_add():
-    """Authorize a personal address to forward confirmations to this
-    account's forward-to address — the allowlist the inbound webhook
-    checks against, not the forward-to address itself (that's derived,
-    see _forward_to_address)."""
-    address = request.form.get("address", "").strip().lower()
-    if address:
-        db.email_import_source_create(_account(), "forwarding", address, status="active")
-    return redirect(request.referrer or url_for("settings"))
-
-
-def _verify_resend_signature(secret, svix_id, svix_timestamp, svix_signature, body):
-    """Svix-style HMAC verification — the scheme Resend's webhooks use.
-    `secret` is the whsec_-prefixed signing secret from Resend's dashboard;
-    `svix_signature` may carry multiple space-separated `v1,<sig>` entries."""
-    if not (secret and svix_id and svix_timestamp and svix_signature):
-        return False
-    key = base64.b64decode(secret.removeprefix("whsec_"))
-    signed = f"{svix_id}.{svix_timestamp}.{body.decode()}".encode()
-    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
-    return any(
-        hmac.compare_digest(expected, part.split(",", 1)[1])
-        for part in svix_signature.split() if part.startswith("v1,")
-    )
-
-
-@app.route("/webhooks/resend/inbound", methods=["POST"])
-def resend_inbound():
-    """Forwarding-inbox intake. No @auth.login_required — this is a
-    server-to-server webhook, trusted by signature instead of a session,
-    same model Duffel's own calls already use.
-
-    Payload shape is Resend's inbound-email event; the exact field names
-    should be double-checked against a real delivered event once inbound
-    routing is actually enabled (docs/bolt-on-pivot.md — MX record not
-    live yet), since this was written against the documented shape, not a
-    captured one.
-    """
-    if not _verify_resend_signature(
-        os.environ.get("RESEND_WEBHOOK_SECRET", ""),
-        request.headers.get("svix-id", ""), request.headers.get("svix-timestamp", ""),
-        request.headers.get("svix-signature", ""), request.get_data(),
-    ):
-        return "", 401
-
-    payload = request.get_json(silent=True) or {}
-    data = payload.get("data") or {}
-    to_field = data.get("to")
-    to_addr = (to_field[0] if isinstance(to_field, list) else to_field) or ""
-    from_addr = (data.get("from") or "").lower()
-
-    # trips+{account_id}@domain — the account_id is right there, no lookup.
-    m = re.match(r"trips\+([0-9a-f-]{36})@", to_addr)
-    if not m:
-        return "", 200  # not addressed to a forward-to address; ignore quietly
-    account_id = m.group(1)
-
-    if not db.email_import_source_authorized(account_id, from_addr):
-        return "", 200  # unrecognized sender — don't let a stranger inject reservations
-
-    parsed = parsing.parse_confirmation(data.get("subject", ""),
-                                        data.get("text") or data.get("html") or "")
-    record = db.create_manual_order(
-        account_id, traveler_id=None,
-        seg_origin=parsed["seg_origin"], seg_destination=parsed["seg_destination"],
-        seg_flight_number=parsed["seg_flight_number"], seg_cabin="economy",
-        carrier=parsed["carrier"], booking_reference=parsed["booking_reference"],
-        departure_date=parsed["departure_date"] or None,
-        paid=parsed["paid"], currency="USD", fare_type="cash",
-    )
-    log_eligibility(record["order_id"], snapshot_of(record).eligibility)
-    return "", 200
 
 
 # ---------------------------------------------------------------------------
@@ -1990,59 +1865,6 @@ def traveler_edit(traveler_id):
 def traveler_remove(traveler_id):
     db.traveler_delete(traveler_id, _account())
     return redirect(url_for("travelers"))
-
-
-@app.route("/reservations/new", methods=["POST"])
-@auth.login_required
-def reservation_new():
-    """Add Reservation — a reservation booked with the airline directly, not
-    through TD. No Duffel order exists to derive display fields from, so the
-    segment is stored as real columns (migration 010) rather than being
-    parsed from a `raw` payload that doesn't exist for this source."""
-    form = {k: request.form.get(k, "").strip() for k in (
-        "booking_reference", "traveler_id", "carrier", "seg_origin",
-        "seg_destination", "seg_flight_number", "seg_cabin",
-        "departure_date", "paid", "currency", "fare_type")}
-    form["seg_origin"] = form["seg_origin"].upper()
-    form["seg_destination"] = form["seg_destination"].upper()
-    form["seg_flight_number"] = form["seg_flight_number"].upper()
-
-    problem = None
-    if not form["booking_reference"]:
-        problem = "A booking or confirmation number is required."
-    elif not (form["seg_origin"] and form["seg_destination"]):
-        problem = "Origin and destination are required."
-    elif not form["carrier"]:
-        problem = "Airline is required."
-    paid = None
-    if not problem:
-        try:
-            paid = Decimal(form["paid"])
-            if paid <= 0:
-                raise InvalidOperation
-        except InvalidOperation:
-            problem = "Enter a valid amount paid."
-
-    if problem:
-        flash(problem, "reservation_error")
-        return redirect(request.referrer or url_for("trips"))
-
-    record = db.create_manual_order(
-        _account(), traveler_id=form["traveler_id"] or None,
-        seg_origin=form["seg_origin"], seg_destination=form["seg_destination"],
-        seg_flight_number=form["seg_flight_number"], seg_cabin=form["seg_cabin"] or "economy",
-        carrier=form["carrier"], booking_reference=form["booking_reference"],
-        departure_date=form["departure_date"] or None,
-        paid=paid, currency=(form["currency"] or "USD").upper(),
-        fare_type=form["fare_type"] if form["fare_type"] in ("cash", "points") else "cash",
-    )
-    # Same audit entry point book() uses — so the Activity Timeline shows an
-    # "Added to monitoring" (or not-eligible) event for this reservation too,
-    # not just for reservations booked through us.
-    log_eligibility(record["order_id"], snapshot_of(record).eligibility)
-    if request.form.get("next") == "onboarding":
-        return redirect(url_for("onboarding_payment"))
-    return redirect(url_for("trip_detail", order_id=record["order_id"]))
 
 
 @app.route("/trips")

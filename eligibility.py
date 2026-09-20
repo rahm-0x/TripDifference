@@ -49,7 +49,6 @@ class Eligibility(str, Enum):
 
 class EligibilityReason(str, Enum):
     POINTS_FARE = "points_fare"
-    NO_PAYMENT_METHOD = "no_payment_method"
     CUSTOMER_SOURCED = "customer_sourced"
     CHANGES_ALLOWED = "changes_allowed"
     CHANGES_LIKELY_ALLOWED = "changes_likely_allowed"
@@ -68,8 +67,6 @@ CUSTOMER_COPY = {
     EligibilityReason.POINTS_FARE:
         "This was booked with points, not cash, so there's no fare difference "
         "for us to recover.",
-    EligibilityReason.NO_PAYMENT_METHOD:
-        "Link a card and we'll start watching this fare for a price drop.",
     EligibilityReason.CUSTOMER_SOURCED:
         "We're watching this fare and will let you know if a cheaper option "
         "appears.",
@@ -148,7 +145,7 @@ def _decimal(value):
         return None
 
 
-def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_card=True,
+def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash",
            carrier_capability=None):
     """
     `order` is a raw Duffel order payload, a raw Duffel *offer* payload
@@ -157,10 +154,11 @@ def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_car
     import / manual entry). `fare_type` is 'cash' or 'points' — every fare
     Duffel's cash-offer search can book is 'cash' by construction, so the
     default holds for every order this app has ever booked itself; only a
-    customer-sourced reservation can actually be 'points'. `has_card`
-    defaults True so nothing regresses ahead of real Stripe wiring —
-    card-gating (business rule: no card on file, no active monitoring) is
-    enforced here once a real value is passed in.
+    customer-sourced reservation can actually be 'points'. Whether the
+    account has a card on file is deliberately *not* asked here: eligibility
+    is a fact about the fare, not about the viewer. The card is required to
+    buy a ticket (app.book() refuses without one), which is the only point
+    where it actually matters.
 
     `carrier_capability` is an optional `{"confirmed": int, "denied": int}`
     of real `available_actions` observations gathered from this carrier's
@@ -172,11 +170,6 @@ def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash", has_car
         return Assessment(
             Eligibility.NOT_ELIGIBLE, EligibilityReason.POINTS_FARE,
             "fare_type is 'points' — no cash fare difference to recover")
-
-    if not has_card:
-        return Assessment(
-            Eligibility.NOT_ELIGIBLE, EligibilityReason.NO_PAYMENT_METHOD,
-            "no payment method on file — card-gating blocks active monitoring")
 
     if not order:
         # No Duffel order to read changeability/penalty conditions from —

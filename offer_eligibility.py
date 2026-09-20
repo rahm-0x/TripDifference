@@ -27,8 +27,8 @@ conditions_source:
   refetch_failed null, and the single-offer fetch errored
   not_refetched  null, and not fetched again: past REFETCH_LIMIT for this search
 
-assess() is called with has_card=True: this is about the fare, not the viewer's
-card on file.
+Eligibility is a fact about the fare, never about the viewer — assess() asks
+nothing about the account looking at it.
 """
 
 from decimal import Decimal, InvalidOperation
@@ -140,7 +140,7 @@ def evaluate_offers(offers, *, capability_map, fetch_offer, refetch_limit=REFETC
                     else:
                         source = "still_null"
         iata = (offer.get("owner") or {}).get("iata_code")
-        assessment = eligibility.assess(offer, fare_type="cash", has_card=True,
+        assessment = eligibility.assess(offer, fare_type="cash",
                                         carrier_capability=capability_map.get(iata))
         rows.append(_row(offer, assessment, source))
     rows.sort(key=lambda r: (VERDICTS.index(r["verdict"]), _decimal(r["price"]) or Decimal("Infinity")))

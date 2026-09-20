@@ -108,45 +108,11 @@
     </div>
     <a href="{{ url_for('onboarding_payment') }}" class="btn btn-ghost btn-sm">Update card</a>
     {% else %}
-    <p class="muted" style="margin:0 0 12px">No card on file — active monitoring is paused until one is linked.</p>
+    <p class="muted" style="margin:0 0 12px">No card on file — you'll need one to book, but fares are watched either way.</p>
     <a href="{{ url_for('onboarding_payment') }}" class="btn">Link a card</a>
     {% endif %}
   </div>
 
-  <div class="card">
-    <div class="chart-head" style="margin-bottom:14px">
-      <h3>Manage reservation imports</h3>
-    </div>
-
-    <div class="pm-row" style="padding-top:0">
-      <b>Forwarding inbox</b>
-      <span class="muted">Forward confirmations to this address:</span>
-      <div class="static-value mono" style="font-size:13px; margin-top:4px">{{ forward_to }}</div>
-    </div>
-    <form method="post" action="{{ url_for('email_source_add') }}" style="margin:10px 0">
-      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-      <div style="display:flex; gap:8px">
-        <input name="address" type="email" placeholder="Authorize a sender, e.g. you@gmail.com"
-               style="flex:1" required>
-        <button type="submit" class="btn btn-sm">Add</button>
-      </div>
-    </form>
-    {% for s in sources if s.kind == 'forwarding' %}
-    <div class="muted mono" style="font-size:12px; padding:3px 0">{{ s.address }}</div>
-    {% endfor %}
-
-    <div class="pm-row">
-      <b>Gmail auto-import</b>
-      <span class="muted">
-        {% set google = sources|selectattr('kind', 'equalto', 'google')|first %}
-        {% if google %}Awaiting Google verification — connected as {{ google.address }}
-        {% else %}Not connected{% endif %}
-      </span>
-    </div>
-    {% if not google %}
-    <a href="{{ url_for('gmail_auth_start') }}" class="btn btn-ghost btn-sm">Connect with Google</a>
-    {% endif %}
-  </div>
 </div>
 
 <style>
