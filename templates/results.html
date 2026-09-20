@@ -140,7 +140,13 @@
         </div>
       {% elif o.eligibility_state == 'likely_monitoring' %}
         <span class="tag tag-sage-soft"><span class="dot-hollow"></span>Likely monitorable</span>
-        <div class="fl-meta" style="line-height:1.4">Confirmed after booking.</div>
+        <div class="fl-meta" style="line-height:1.4">
+          {% if o.change_penalty is none %}Change fee not published.
+          {% elif o.change_penalty == '0.00' %}Changes are free on this fare.
+          {% else %}Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}{% if o.change_penalty_pct %} ({{ o.change_penalty_pct }} of fare){% endif %}.
+          {% endif %}
+          Confirmed after booking.
+        </div>
       {% else %}
         <span class="tag tag-mute">{{ o.eligibility_label }}</span>
         <div class="fl-meta" style="line-height:1.4">{{ o.eligibility_copy }}</div>

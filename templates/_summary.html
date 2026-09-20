@@ -43,8 +43,18 @@
       <div class="card-flat" style="background:var(--sage-wash); border-color:rgba(22,163,74,.22); padding:12px">
         <div class="tag tag-sage-soft" style="margin-bottom:6px"><span class="dot-hollow"></span>Likely monitorable</div>
         <div style="font-size:12.5px; color:var(--green); line-height:1.5">
-          Confirmed after booking — we'll watch this fare and rebook you if it
-          drops by more than {{ policy.min_saving }} {{ offer.currency }}.
+          {% if offer.change_penalty is none %}
+            {{ offer.carrier }} publishes no change fee for this fare.
+          {% elif offer.change_penalty == '0.00' %}
+            {{ offer.carrier }} allows free changes on this fare.
+          {% else %}
+            {{ offer.carrier }} charges {{ offer.change_penalty }}
+            {{ offer.change_penalty_currency }} to change this fare{% if offer.change_penalty_pct %},
+            {{ offer.change_penalty_pct }} of what you're paying{% endif %}.
+          {% endif %}
+          Whether the ticket can actually be changed is only confirmed once it's
+          issued. We'll watch the fare and rebook you if it drops by more than
+          {{ policy.min_saving }} {{ offer.currency }}.
         </div>
       </div>
       {% else %}

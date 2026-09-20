@@ -291,6 +291,13 @@ def offer_view(offer, policy_rules=None, carrier_capability_map=None):
         "eligibility_reason": a.reason.value,
         "eligibility_label": a.label,
         "eligibility_copy": a.customer_copy,
+        # The airline's own published change fee, as assess() read it. Real
+        # live data — showing it beats generic copy, and a 0.00 penalty
+        # ("changes are free") is a different story to an unpublished one.
+        "change_penalty": str(a.penalty) if a.penalty is not None else None,
+        "change_penalty_currency": a.penalty_currency,
+        "change_penalty_pct": (f"{a.penalty_ratio:.0%}"
+                               if a.penalty_ratio is not None else None),
         "policy_enforcement": decision.enforcement,
         "policy_result": decision.to_json(),
         # flattened, for the results row
