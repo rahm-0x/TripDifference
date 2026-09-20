@@ -925,6 +925,49 @@ def index():
     return render_template("landing.html", deals=PLACEHOLDER_DEALS)
 
 
+# Duffel returns no change conditions in a bulk search response — they only
+# come back from GET /air/offers/:id. Without refetching, every fare in search
+# assesses as CONDITIONS_MISSING ("the airline didn't publish change rules for
+# this fare"), whatever the carrier's real rules are. /eligibility has always
+# refetched (offer_eligibility.evaluate_offers); search now does too.
+#
+# Bounded, because a search can return a couple of hundred offers and each
+# refetch is its own request. Cheapest first: those are the ones that survive
+# _offer_rank_price into the 20 actually shown. A single-offer fetch is not an
+# offer request, so none of this counts against STAGING_MAX_MONTHLY_SEARCHES
+# (live_search.py) — it costs latency, not budget.
+SEARCH_REFETCH_LIMIT = 20
+
+
+def _with_change_conditions(offers, limit=SEARCH_REFETCH_LIMIT):
+    """`offers`, with the cheapest `limit` null-conditions entries replaced by
+    their individually fetched versions. Anything that fails to refetch is left
+    as it was and assesses as CONDITIONS_MISSING, which is the honest answer —
+    unknown beats assumed (eligibility.py gate 2)."""
+    def price(offer):
+        try:
+            return Decimal(str(offer.get("total_amount")))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal("Infinity")
+
+    filled = list(offers)
+    spent = 0
+    for i in sorted(range(len(filled)), key=lambda i: price(filled[i])):
+        if spent >= limit:
+            break
+        if (filled[i].get("conditions") or {}).get("change_before_departure") is not None:
+            continue
+        spent += 1
+        try:
+            fresh = duffel_http.request("GET", f"/air/offers/{filled[i]['id']}",
+                                        label="ui_search_conditions")
+        except (DuffelError, RuntimeError):
+            continue
+        if fresh:
+            filled[i] = fresh
+    return filled
+
+
 def _offer_rank_price(o):
     """search()'s value-after-reshop sort key: rank by price, but a fare
     that can never be recovered (Basic Economy and similar) ranks below one
@@ -1005,7 +1048,7 @@ def search():
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", offers=None, form=form, error=str(exc))
 
-    raw = data.get("offers", [])
+    raw = _with_change_conditions(data.get("offers", []))
     rules = db.policy_rules_active(_account())
     capability_map = db.carrier_capabilities_for(
         (o.get("owner") or {}).get("iata_code") for o in raw)
