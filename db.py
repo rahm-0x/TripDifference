@@ -301,7 +301,7 @@ _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin",
                "cost_center_id", "refundable", "fare_conditions",
                "stripe_payment_intent_id", "payment_capture_failed_at",
-               "payment_capture_error", "duffel_mode")
+               "payment_capture_error", "duffel_mode", "last_checked_at")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario", "fare_conditions"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
@@ -1304,6 +1304,38 @@ def airline_credits_for_account(account_id):
 # ---------------------------------------------------------------------------
 # the difference band — real price history, never a fabricated curve
 # ---------------------------------------------------------------------------
+
+def orders_due_a_check(limit):
+    """The scheduler's work queue: monitored orders across every real account,
+    least-recently-checked first (never-checked sorts first, NULLS FIRST), at
+    most `limit` of them.
+
+    Deliberately not scoped to one account — this is the cron, not a tenant
+    view, and it is the one reader here that legitimately spans accounts.
+    Every per-request reader still takes account_id as a required parameter.
+
+    Test accounts are excluded the same way user_by_email does it, so a
+    __pytest__ account's rows can never reach Duffel.
+    """
+    return q("""SELECT o.order_id, o.account_id
+                  FROM orders o JOIN accounts a ON a.id = o.account_id
+                 WHERE o.monitoring AND o.executed IS NULL
+                   AND a.name <> %s
+              ORDER BY o.last_checked_at NULLS FIRST
+                 LIMIT %s""",
+             (TEST_ACCOUNT_NAME, limit), fetch="all")
+
+
+def account_actor_email(account_id):
+    """The email the scheduler acts as for an account, for live_guard's
+    allowlist check. A cron has no signed-in user, but an unattended live
+    spend still has to belong to someone — this keeps STAGING_ALLOWED_EMAILS
+    meaningful instead of adding a bypass around it. Oldest user on the
+    account, which is the one who created it."""
+    row = q("""SELECT email FROM users WHERE account_id = %s
+             ORDER BY created_at LIMIT 1""", (account_id,), fetch="one")
+    return row["email"] if row else ""
+
 
 def monitored_orders_with_history(account_id):
     """Every currently-monitored order, each with its own market_best time

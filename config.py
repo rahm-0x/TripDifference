@@ -22,6 +22,15 @@ read).
   STAGING_MAX_DAILY_USD         Decimal > 0, or None when unset/invalid
   STAGING_ALLOWED_EMAILS        frozenset of lowercased emails (comma-separated);
                                 empty means nobody
+  RESHOP_AUTOPILOT_ENABLED      True only when exactly "true" (default false). Lets the
+                                /cron/reshop scheduler execute an exchange with no human
+                                confirmation. A kill switch: turning it off stops
+                                unattended execution without a redeploy. The engine's own
+                                gates still apply either way — nothing executes unless
+                                change_total is negative and the saving clears min_saving.
+  CRON_SECRET                   shared secret the scheduler must present as a bearer
+                                token; "" means unset, and /cron/reshop then refuses every
+                                request rather than running unauthenticated.
 """
 
 import os
@@ -67,6 +76,10 @@ def _usd(name):
     return value if value.is_finite() and value > 0 else None
 
 
+def _cron_secret():
+    return os.environ.get("CRON_SECRET", "").strip()
+
+
 def _allowed_emails():
     raw = os.environ.get("STAGING_ALLOWED_EMAILS", "")
     return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
@@ -96,6 +109,8 @@ _READERS = {
     "STAGING_MAX_ORDER_USD": lambda: _usd("STAGING_MAX_ORDER_USD"),
     "STAGING_MAX_DAILY_USD": lambda: _usd("STAGING_MAX_DAILY_USD"),
     "STAGING_ALLOWED_EMAILS": _allowed_emails,
+    "RESHOP_AUTOPILOT_ENABLED": lambda: _flag("RESHOP_AUTOPILOT_ENABLED"),
+    "CRON_SECRET": _cron_secret,
 }
 
 

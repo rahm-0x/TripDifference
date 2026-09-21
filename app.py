@@ -14,9 +14,11 @@ Login / activate are presentation screens. They do not gate anything: this is a
 single-operator rig and adding real auth would only get in the way.
 """
 
+import hmac
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -114,6 +116,9 @@ PUBLIC_ENDPOINTS = frozenset({
     "login", "signup",
     "google_auth_start", "google_auth_callback",   # auth callbacks
     "static", "logo",                              # static
+    # Server-to-server: Vercel Cron can't hold a session. Authenticated by a
+    # CRON_SECRET bearer token instead, and refused without one.
+    "cron_reshop",
 })
 
 
@@ -2006,7 +2011,8 @@ def _run_cycle(order_id, source):
     if not record:
         return None
     d = evaluate(snapshot_of(record), source, policy=DEFAULT_POLICY)
-    upsert_order({"order_id": order_id, "last_decision": {
+    upsert_order({"order_id": order_id, "last_checked_at": datetime.now(timezone.utc),
+                  "last_decision": {
         "ts": d.ts, "source": d.source, "outcome": d.outcome.value, "reason": d.reason.value,
         "detail": d.detail,
         "market_best": str(d.market_best) if d.market_best is not None else None,
@@ -2023,6 +2029,64 @@ def _run_cycle(order_id, source):
         "net_to_customer": str(d.net_to_customer) if d.net_to_customer is not None else None,
     }})
     return d
+
+
+# ---------------------------------------------------------------------------
+# the scheduler — the only thing here that runs without someone clicking
+# ---------------------------------------------------------------------------
+
+# One invocation has 60s (vercel.json maxDuration) and a live market search
+# measures 9-12s, so only a handful of orders fit. Stop well short of the
+# ceiling: an invocation killed mid-order leaves that order's cursor unstamped
+# and still first in the queue next time, starving everything behind it.
+CRON_BUDGET_SECONDS = 45
+CRON_MAX_ORDERS = 8
+
+
+@app.route("/cron/reshop")
+def cron_reshop():
+    """Run a reshop cycle over the orders due one, least-recently-checked first.
+
+    No session: Vercel Cron presents CRON_SECRET as a bearer token, which is why
+    this endpoint is in PUBLIC_ENDPOINTS — and therefore in test_routes.py's
+    EXPECTED_PUBLIC too, or the route walk fails. An unset secret refuses every
+    request rather than leaving the scheduler open.
+
+    Decides only. Acting on a RESHOP decision is execute()'s job and still needs
+    a human; see RESHOP_AUTOPILOT_ENABLED for where that changes.
+    """
+    # Strictly the documented shape Vercel Cron sends. removeprefix() alone is a
+    # no-op when the prefix is absent, which quietly accepted a bare secret in
+    # the Authorization header — one accepted format, not two.
+    secret = config.CRON_SECRET
+    header = request.headers.get("Authorization", "")
+    presented = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
+    if not secret or not presented or not hmac.compare_digest(presented, secret):
+        return {"error": "unauthorized"}, 401
+
+    started = time.monotonic()
+    source = get_price_source("duffel")
+    checked, reshop_decided, errors = [], [], []
+
+    for row in db.orders_due_a_check(CRON_MAX_ORDERS):
+        if time.monotonic() - started > CRON_BUDGET_SECONDS:
+            break
+        order_id = row["order_id"]
+        try:
+            d = _run_cycle(order_id, source)
+        except (DuffelError, RuntimeError) as exc:
+            # One bad order must not block the queue behind it: stamp it anyway
+            # so the cursor moves on and the rest get their turn.
+            upsert_order({"order_id": order_id,
+                          "last_checked_at": datetime.now(timezone.utc)})
+            errors.append({"order_id": order_id, "error": str(exc)[:200]})
+            continue
+        checked.append(order_id)
+        if d is not None and d.outcome is Outcome.RESHOP:
+            reshop_decided.append(order_id)
+
+    return {"checked": checked, "reshop_decided": reshop_decided, "errors": errors,
+            "elapsed_seconds": round(time.monotonic() - started, 1)}
 
 
 @app.route("/orders/<order_id>/simulate", methods=["POST"])

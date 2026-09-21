@@ -1,7 +1,7 @@
 """
 Every route requires a signed-in session except the ones app.PUBLIC_ENDPOINTS
 names — landing, login, signup, the Google auth callbacks, static files, and the
-signature-authenticated Resend webhook — and /healthz/env reports what a
+CRON_SECRET-authenticated reshop scheduler — and /healthz/env reports what a
 deployment is running as without exposing a secret.
 
 The route-map walk sends one anonymous request per rule and method, with
@@ -28,6 +28,7 @@ EXPECTED_PUBLIC = {
     "index", "login", "signup",
     "google_auth_start", "google_auth_callback",
     "static", "logo",
+    "cron_reshop",
 }
 
 
@@ -66,6 +67,66 @@ def test_the_routes_that_were_open_now_require_login():
                          ("POST", "/orders/ord_x/execute/cancel")):
         resp = anonymous.open(path, method=method)
         assert resp.status_code == 302 and "/login" in resp.headers["Location"], (method, path)
+
+
+def test_cron_refuses_without_the_secret(monkeypatch):
+    """The scheduler is the one endpoint with no session behind it, so the
+    bearer check is the whole of its authentication. An unset CRON_SECRET must
+    refuse everything rather than leaving it open."""
+    anonymous = app_module.app.test_client()
+
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    assert anonymous.get("/cron/reshop").status_code == 401
+    assert anonymous.get("/cron/reshop",
+                         headers={"Authorization": "Bearer anything"}).status_code == 401
+
+    monkeypatch.setenv("CRON_SECRET", "s3cret")
+    assert anonymous.get("/cron/reshop").status_code == 401
+    assert anonymous.get("/cron/reshop",
+                         headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert anonymous.get("/cron/reshop",
+                         headers={"Authorization": "s3cret"}).status_code == 401
+
+
+def test_cron_runs_with_the_secret_and_touches_nothing_when_idle(monkeypatch):
+    """With a good token and an empty queue it must do nothing at all — no
+    Duffel call, no execution — and say so."""
+    monkeypatch.setenv("CRON_SECRET", "s3cret")
+    monkeypatch.setattr(app_module.db, "orders_due_a_check", lambda limit: [])
+
+    def _no_cycles(*a, **k):
+        raise AssertionError("an empty queue must not run a cycle")
+    monkeypatch.setattr(app_module, "_run_cycle", _no_cycles)
+
+    resp = app_module.app.test_client().get(
+        "/cron/reshop", headers={"Authorization": "Bearer s3cret"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["checked"] == [] and body["reshop_decided"] == [] and body["errors"] == []
+
+
+def test_cron_keeps_going_when_one_order_fails(monkeypatch):
+    """A single bad order must not block the queue behind it: it is stamped as
+    checked anyway so the cursor moves past it, and the run continues."""
+    monkeypatch.setenv("CRON_SECRET", "s3cret")
+    monkeypatch.setattr(app_module.db, "orders_due_a_check",
+                        lambda limit: [{"order_id": "ord_bad", "account_id": "a"},
+                                       {"order_id": "ord_ok", "account_id": "a"}])
+    stamped = []
+    monkeypatch.setattr(app_module, "upsert_order",
+                        lambda rec: stamped.append(rec["order_id"]))
+
+    def _cycle(order_id, source):
+        if order_id == "ord_bad":
+            raise RuntimeError("duffel exploded")
+        return None
+    monkeypatch.setattr(app_module, "_run_cycle", _cycle)
+
+    body = app_module.app.test_client().get(
+        "/cron/reshop", headers={"Authorization": "Bearer s3cret"}).get_json()
+    assert body["checked"] == ["ord_ok"]
+    assert [e["order_id"] for e in body["errors"]] == ["ord_bad"]
+    assert stamped == ["ord_bad"], "the failing order still has to move the cursor"
 
 
 def test_healthz_env_reports_identity_without_secrets(logged_in):
