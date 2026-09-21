@@ -339,12 +339,12 @@ def load_orders():
     return db.load_orders(_account())
 
 
-def find_order(order_id):
-    return db.find_order(order_id, _account())
+def find_order(order_id, account_id=None):
+    return db.find_order(order_id, account_id or _account())
 
 
-def upsert_order(record):
-    return db.upsert_order(record, _account())
+def upsert_order(record, account_id=None):
+    return db.upsert_order(record, account_id or _account())
 
 
 def snapshot_of(record):
@@ -2006,8 +2006,8 @@ def toggle_monitor(order_id):
     return redirect(url_for("orders"))
 
 
-def _run_cycle(order_id, source):
-    record = find_order(order_id)
+def _run_cycle(order_id, source, account_id=None):
+    record = find_order(order_id, account_id)
     if not record:
         return None
     d = evaluate(snapshot_of(record), source, policy=DEFAULT_POLICY)
@@ -2027,7 +2027,7 @@ def _run_cycle(order_id, source):
         "recovered": str(d.recovered) if d.recovered is not None else None,
         "service_fee": str(d.service_fee) if d.service_fee is not None else None,
         "net_to_customer": str(d.net_to_customer) if d.net_to_customer is not None else None,
-    }})
+    }}, account_id)
     return d
 
 
@@ -2066,26 +2066,46 @@ def cron_reshop():
 
     started = time.monotonic()
     source = get_price_source("duffel")
-    checked, reshop_decided, errors = [], [], []
+    autopilot = config.RESHOP_AUTOPILOT_ENABLED
+    checked, reshop_decided, executed, errors = [], [], [], []
 
     for row in db.orders_due_a_check(CRON_MAX_ORDERS):
         if time.monotonic() - started > CRON_BUDGET_SECONDS:
             break
-        order_id = row["order_id"]
+        order_id, account_id = row["order_id"], row["account_id"]
         try:
-            d = _run_cycle(order_id, source)
+            d = _run_cycle(order_id, source, account_id)
         except (DuffelError, RuntimeError) as exc:
             # One bad order must not block the queue behind it: stamp it anyway
             # so the cursor moves on and the rest get their turn.
             upsert_order({"order_id": order_id,
-                          "last_checked_at": datetime.now(timezone.utc)})
+                          "last_checked_at": datetime.now(timezone.utc)}, account_id)
             errors.append({"order_id": order_id, "error": str(exc)[:200]})
             continue
         checked.append(order_id)
-        if d is not None and d.outcome is Outcome.RESHOP:
-            reshop_decided.append(order_id)
+        if d is None or d.outcome is not Outcome.RESHOP:
+            continue
+        reshop_decided.append(order_id)
+        if not autopilot:
+            continue
 
-    return {"checked": checked, "reshop_decided": reshop_decided, "errors": errors,
+        # The engine already decided this is worth doing: change_total is
+        # negative and the saving clears min_saving. Executing here is the only
+        # thing in this app that moves a real ticket with nobody watching, so
+        # it still goes through the same _execute_action the CONFIRM path does
+        # — same claim, same live_guard caps, same audit trail.
+        try:
+            ok, message = _execute_action(
+                find_order(order_id, account_id), "exchange",
+                db.account_actor_email(account_id))
+        except (DuffelError, RuntimeError) as exc:
+            errors.append({"order_id": order_id, "error": str(exc)[:200]})
+            continue
+        (executed if ok else errors).append(
+            {"order_id": order_id, "detail" if ok else "error": message[:200]})
+
+    return {"checked": checked, "reshop_decided": reshop_decided,
+            "executed": executed, "autopilot": autopilot, "errors": errors,
             "elapsed_seconds": round(time.monotonic() - started, 1)}
 
 
@@ -2208,29 +2228,31 @@ def confirm_action(order_id, action):
     return render_template("confirm_action.html", nav="ops", order=record, action=action)
 
 
-@app.route("/orders/<order_id>/execute/<action>", methods=["POST"])
-@auth.login_required
-def execute(order_id, action):
-    """Step 2 of 2. Requires the typed confirmation from the previous page."""
-    record = find_order(order_id)
-    if not record:
-        return redirect(url_for("orders"))
-    if record.get("source") != "td_rebook":
-        return redirect(url_for("orders"))
-    if record.get("executed"):
-        # Already in a terminal state — refuse rather than let a second
-        # exchange or cancel reach Duffel for an order that's done.
-        return redirect(url_for("trip_detail", order_id=order_id))
+def _execute_action(record, action, actor_email):
+    """The Duffel/billing half of an execution, with no request in scope.
 
-    def refuse(msg):
-        return render_template("confirm_action.html", nav="ops", order=record,
-                               action=action, error=msg)
+    Called by execute() after a human types CONFIRM, and by the scheduler when
+    RESHOP_AUTOPILOT_ENABLED is on. One copy on purpose: two would drift, and
+    this is the code that moves a real traveller's ticket.
+
+    Returns (ok, message) — message is the refusal on failure, the execution
+    note on success. `actor_email` is whose allowlist entry authorises any live
+    spend: the signed-in user for the route, the account's owner for the cron
+    (db.account_actor_email), so STAGING_ALLOWED_EMAILS still means something
+    on an unattended run rather than being bypassed.
+    """
+    order_id = record["order_id"]
+
+    # Re-checked here, not just in the route: the cron reaches this function
+    # directly, and a second exchange on a finished order must be impossible
+    # from either caller.
+    if record.get("source") != "td_rebook":
+        return False, "not a TD-issued booking — nothing here can be exchanged"
+    if record.get("executed"):
+        return False, "this order has already been executed"
 
     if config.APP_ENV == "staging" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
-        return refuse(duffel_http.staging_orders_refusal())
-
-    if request.form.get("confirm_text", "").strip().upper() != "CONFIRM":
-        return refuse("Type CONFIRM exactly to proceed.")
+        return False, duffel_http.staging_orders_refusal()
 
     # For the delivery_detail copy below — card-gating means this should
     # always exist by the time an exchange executes, but a card removed
@@ -2239,12 +2261,12 @@ def execute(order_id, action):
 
     last = record.get("last_decision") or {}
     if last.get("source") == "simulated":
-        return refuse("Last decision came from the simulated source. "
+        return False, ("Last decision came from the simulated source. "
                       "Run a live cycle before executing anything real.")
 
     offer_id = last.get("change_offer_id") or ""
     if action == "exchange" and not offer_id:
-        return refuse("no change offer on the last decision — run a live cycle first")
+        return False, ("no change offer on the last decision — run a live cycle first")
 
     # Reserve the right to call Duffel exactly once for this (order, action,
     # offer). A double submit loses the INSERT race and stops here rather than
@@ -2263,8 +2285,11 @@ def execute(order_id, action):
     except db.AlreadyAttempted as dup:
         prior = dup.attempt
         if prior["status"] == "succeeded":
-            return redirect(url_for("trip_detail", order_id=order_id))
-        return refuse(f"This {action} was already submitted "
+            # Not an error: this exact (order, action, offer) already landed.
+            # The route used to redirect straight to the trip here, which is
+            # the same outcome a success returns.
+            return True, f"{action} already succeeded"
+        return False, (f"This {action} was already submitted "
                       f"({prior['status']}). Check the order before retrying.")
 
     extra = {}
@@ -2287,7 +2312,7 @@ def execute(order_id, action):
                     # live booking, reserved before the confirm call.
                     spend = live_guard.reserve(
                         "exchange_topup", account_id=record["account_id"],
-                        email=auth.current_user()["email"], amount=delta,
+                        email=actor_email, amount=delta,
                         currency=change["change_total_currency"], order_id=order_id,
                         reference=change["id"])
             with live_guard.authorized(spend):
@@ -2361,7 +2386,7 @@ def execute(order_id, action):
         # never confirmed, so nothing landed. Release the claim so the exchange
         # can be retried once the caps allow; the refusal is already audited.
         db.release_execution(attempt["id"])
-        return refuse(f"Live exchange refused: {exc.detail}")
+        return False, (f"Live exchange refused: {exc.detail}")
     except (DuffelError, RuntimeError) as exc:
         # The order-change *create* call is safe to retry; a failed confirm is
         # not, because the exchange may have landed anyway. Only release the
@@ -2380,7 +2405,7 @@ def execute(order_id, action):
             "execution": "failed", "detail": str(exc),
             "currency": record.get("currency") or "",
         })
-        return refuse(str(exc))
+        return False, (str(exc))
 
     db.finish_execution(attempt["id"], "succeeded", note=note,
                         duffel_change_id=duffel_change_id, result=result)
@@ -2449,6 +2474,33 @@ def execute(order_id, action):
 
     upsert_order({"order_id": order_id, "raw": fresh, "monitoring": False,
                   "executed": note, "paid": fresh["total_amount"], **extra})
+    return True, note
+
+
+@app.route("/orders/<order_id>/execute/<action>", methods=["POST"])
+@auth.login_required
+def execute(order_id, action):
+    """Step 2 of 2. Requires the typed confirmation from the previous page."""
+    record = find_order(order_id)
+    if not record:
+        return redirect(url_for("orders"))
+    if record.get("source") != "td_rebook":
+        return redirect(url_for("orders"))
+    if record.get("executed"):
+        # Already in a terminal state — refuse rather than let a second
+        # exchange or cancel reach Duffel for an order that's done.
+        return redirect(url_for("trip_detail", order_id=order_id))
+
+    def refuse(msg):
+        return render_template("confirm_action.html", nav="ops", order=record,
+                               action=action, error=msg)
+
+    if request.form.get("confirm_text", "").strip().upper() != "CONFIRM":
+        return refuse("Type CONFIRM exactly to proceed.")
+
+    ok, message = _execute_action(record, action, auth.current_user()["email"])
+    if not ok:
+        return refuse(message)
     return redirect(url_for("trip_detail", order_id=order_id))
 
 

@@ -114,9 +114,9 @@ def test_cron_keeps_going_when_one_order_fails(monkeypatch):
                                        {"order_id": "ord_ok", "account_id": "a"}])
     stamped = []
     monkeypatch.setattr(app_module, "upsert_order",
-                        lambda rec: stamped.append(rec["order_id"]))
+                        lambda rec, account_id=None: stamped.append(rec["order_id"]))
 
-    def _cycle(order_id, source):
+    def _cycle(order_id, source, account_id=None):
         if order_id == "ord_bad":
             raise RuntimeError("duffel exploded")
         return None
@@ -127,6 +127,69 @@ def test_cron_keeps_going_when_one_order_fails(monkeypatch):
     assert body["checked"] == ["ord_ok"]
     assert [e["order_id"] for e in body["errors"]] == ["ord_bad"]
     assert stamped == ["ord_bad"], "the failing order still has to move the cursor"
+
+
+def _reshop_cron(monkeypatch, executed_calls):
+    """A cron run where the single queued order decides RESHOP. Records any
+    _execute_action call into `executed_calls` instead of touching Duffel."""
+    monkeypatch.setenv("CRON_SECRET", "s3cret")
+    monkeypatch.setattr(app_module.db, "orders_due_a_check",
+                        lambda limit: [{"order_id": "ord_1", "account_id": "acct_1"}])
+    monkeypatch.setattr(app_module, "upsert_order", lambda rec, account_id=None: None)
+    monkeypatch.setattr(app_module, "find_order",
+                        lambda order_id, account_id=None: {"order_id": order_id})
+    monkeypatch.setattr(app_module.db, "account_actor_email", lambda a: "owner@example.com")
+
+    class _D:
+        outcome = app_module.Outcome.RESHOP
+    monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: _D())
+
+    def _exec(record, action, actor_email):
+        executed_calls.append((record["order_id"], action, actor_email))
+        return True, "exchanged"
+    monkeypatch.setattr(app_module, "_execute_action", _exec)
+
+    return app_module.app.test_client().get(
+        "/cron/reshop", headers={"Authorization": "Bearer s3cret"}).get_json()
+
+
+def test_autopilot_off_decides_but_never_executes(monkeypatch):
+    """The flag is the kill switch. Off means a RESHOP decision is recorded and
+    left for a human, with nothing reaching the execution path at all."""
+    monkeypatch.delenv("RESHOP_AUTOPILOT_ENABLED", raising=False)
+    calls = []
+    body = _reshop_cron(monkeypatch, calls)
+    assert body["autopilot"] is False
+    assert body["reshop_decided"] == ["ord_1"]
+    assert body["executed"] == []
+    assert calls == [], "autopilot off must not reach _execute_action"
+
+
+def test_autopilot_on_executes_as_the_account_owner(monkeypatch):
+    """On, the cron exchanges unattended — through the same _execute_action the
+    CONFIRM path uses, acting as the account owner so live_guard's allowlist
+    still applies rather than being bypassed."""
+    monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
+    calls = []
+    body = _reshop_cron(monkeypatch, calls)
+    assert body["autopilot"] is True
+    assert body["reshop_decided"] == ["ord_1"]
+    assert [e["order_id"] for e in body["executed"]] == ["ord_1"]
+    assert calls == [("ord_1", "exchange", "owner@example.com")]
+
+
+def test_execute_action_refuses_an_already_executed_order():
+    """The guard has to live in _execute_action, not just the route: the cron
+    calls it directly and a second exchange on a finished order must be
+    impossible from either caller."""
+    ok, message = app_module._execute_action(
+        {"order_id": "ord_1", "source": "td_rebook", "executed": "done earlier"},
+        "exchange", "owner@example.com")
+    assert ok is False and "already been executed" in message
+
+    ok, message = app_module._execute_action(
+        {"order_id": "ord_1", "source": "manual"}, "exchange", "owner@example.com")
+    assert ok is False and "TD-issued" in message
 
 
 def test_healthz_env_reports_identity_without_secrets(logged_in):

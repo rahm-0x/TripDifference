@@ -299,6 +299,10 @@ def test_upsert_order_round_trips_every_writable_value(acct):
         # 'test', never 'live': migration 030 refuses to delete a live order,
         # and this test deletes its order below.
         "duffel_mode": "test",
+        # The scheduler's cursor (migration 032). Round-tripped like any other
+        # column: the cron reads it back to order its queue, so a coercion bug
+        # here would quietly reorder what gets checked.
+        "last_checked_at": "2026-09-20T08:00:00+00:00",
     }
     assert set(values) == set(db._ORDER_COLS), "test fixture drifted from _ORDER_COLS"
 
@@ -314,7 +318,7 @@ def test_upsert_order_round_trips_every_writable_value(acct):
             assert row[col] == values[col], col
         elif col in ("traveler_id", "cost_center_id"):
             assert str(row[col]) == str(values[col]), col
-        elif col == "payment_capture_failed_at":
+        elif col in ("payment_capture_failed_at", "last_checked_at"):
             # timestamptz round-trips as a datetime, not the ISO string
             # that was written — presence is what this test cares about.
             assert row[col] is not None, col
