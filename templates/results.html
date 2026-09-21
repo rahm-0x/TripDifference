@@ -96,10 +96,9 @@
 <div class="notice notice-terra" style="margin-bottom:16px">
   <span>⚠</span>
   <div>
-    <b>{{ unmonitorable }} of these fares can't be monitored.</b>
-    Restricted fares — Basic Economy and similar — don't permit changes after
-    ticketing, so there is no way to rebook them if the price drops. Each is
-    marked below with the real reason.
+    <b>{{ unmonitorable }} of the {{ offers|length }} fares shown can't be rebooked.</b>
+    Either the airline doesn't permit changes after ticketing, or it publishes
+    no change rules for that fare. Each one says which, below.
   </div>
 </div>
 {% endif %}
@@ -133,23 +132,20 @@
     </div>
 
     <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start; max-width:220px;">
-      {% if o.eligibility_reason == 'carrier_single_denial' %}
-        <span class="tag tag-credit"><span class="dot-hollow"></span>Likely monitorable</span>
-        <div class="fl-meta" style="color:var(--credit); line-height:1.4">
-          This carrier denied one real change request — ranked without optimism.
-        </div>
-      {% elif o.eligibility_state == 'likely_monitoring' %}
-        <span class="tag tag-sage-soft"><span class="dot-hollow"></span>Likely monitorable</span>
-        <div class="fl-meta" style="line-height:1.4">
-          {% if o.change_penalty is none %}Change fee not published.
-          {% elif o.change_penalty == '0.00' %}Changes are free on this fare.
-          {% else %}Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}{% if o.change_penalty_pct %} ({{ o.change_penalty_pct }} of fare){% endif %}.
-          {% endif %}
-          Confirmed after booking.
-        </div>
+      {% if o.change_penalty == '0.00' %}
+        <span class="tag tag-sage-soft">Changes free</span>
+        <div class="fl-meta" style="line-height:1.4">No fee to change this fare.</div>
+      {% elif o.change_penalty %}
+        <span class="tag tag-sage-soft">Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}</span>
+        {% if o.change_penalty_pct %}
+        <div class="fl-meta" style="line-height:1.4">{{ o.change_penalty_pct }} of this fare.</div>
+        {% endif %}
+      {% elif o.eligibility_reason in ('no_change_action', 'change_not_allowed') %}
+        <span class="tag tag-mute">Not changeable</span>
+        <div class="fl-meta" style="line-height:1.4">{{ o.carrier }} doesn't permit changes after ticketing.</div>
       {% else %}
-        <span class="tag tag-mute">{{ o.eligibility_label }}</span>
-        <div class="fl-meta" style="line-height:1.4">{{ o.eligibility_copy }}</div>
+        <span class="tag tag-mute">Change fee not published</span>
+        <div class="fl-meta" style="line-height:1.4">{{ o.carrier }} publishes no change rules for this fare.</div>
       {% endif %}
       {% if o.policy_enforcement == 'block' %}
         <span class="tag tag-alert">Blocked by policy</span>

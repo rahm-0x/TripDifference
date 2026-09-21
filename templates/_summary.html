@@ -32,36 +32,36 @@
     </div>
 
     <div style="margin-top:14px">
-      {% if offer.eligibility_reason == 'carrier_single_denial' %}
-      <div class="card-flat" style="background:var(--credit-wash); border-color:#E0D0AE; padding:12px">
-        <div class="tag tag-credit" style="margin-bottom:6px"><span class="dot-hollow"></span>Likely monitorable</div>
-        <div style="font-size:12.5px; color:var(--credit); line-height:1.5">
-          {{ offer.eligibility_copy }}
+      {% if offer.change_penalty == '0.00' %}
+      <div class="card-flat" style="background:var(--sage-wash); border-color:rgba(22,163,74,.22); padding:12px">
+        <div class="tag tag-sage-soft" style="margin-bottom:6px">Changes free</div>
+        <div style="font-size:12.5px; color:var(--green); line-height:1.5">
+          {{ offer.carrier }} charges nothing to change this fare.
         </div>
       </div>
-      {% elif offer.eligibility_state == 'likely_monitoring' %}
+      {% elif offer.change_penalty %}
       <div class="card-flat" style="background:var(--sage-wash); border-color:rgba(22,163,74,.22); padding:12px">
-        <div class="tag tag-sage-soft" style="margin-bottom:6px"><span class="dot-hollow"></span>Likely monitorable</div>
+        <div class="tag tag-sage-soft" style="margin-bottom:6px">Change fee {{ offer.change_penalty }} {{ offer.change_penalty_currency }}</div>
         <div style="font-size:12.5px; color:var(--green); line-height:1.5">
-          {% if offer.change_penalty is none %}
-            {{ offer.carrier }} publishes no change fee for this fare.
-          {% elif offer.change_penalty == '0.00' %}
-            {{ offer.carrier }} allows free changes on this fare.
-          {% else %}
-            {{ offer.carrier }} charges {{ offer.change_penalty }}
-            {{ offer.change_penalty_currency }} to change this fare{% if offer.change_penalty_pct %},
-            {{ offer.change_penalty_pct }} of what you're paying{% endif %}.
-          {% endif %}
-          Whether the ticket can actually be changed is only confirmed once it's
-          issued. We'll watch the fare and rebook you if it drops by more than
-          {{ policy.min_saving }} {{ offer.currency }}.
+          {{ offer.carrier }} charges {{ offer.change_penalty }}
+          {{ offer.change_penalty_currency }} to change this fare{% if offer.change_penalty_pct %},
+          {{ offer.change_penalty_pct }} of the {{ offer.amount }} {{ offer.currency }}
+          you're paying{% endif %}.
+        </div>
+      </div>
+      {% elif offer.eligibility_reason in ('no_change_action', 'change_not_allowed') %}
+      <div class="card-flat" style="padding:12px">
+        <div class="tag tag-mute" style="margin-bottom:6px">Not changeable</div>
+        <div style="font-size:12.5px; color:var(--ink-soft); line-height:1.5">
+          {{ offer.carrier }} doesn't permit changes after ticketing, so this fare
+          can't be rebooked if the price drops.
         </div>
       </div>
       {% else %}
       <div class="card-flat" style="padding:12px">
-        <div class="tag tag-mute" style="margin-bottom:6px">{{ offer.eligibility_label }}</div>
+        <div class="tag tag-mute" style="margin-bottom:6px">Change fee not published</div>
         <div style="font-size:12.5px; color:var(--ink-soft); line-height:1.5">
-          {{ offer.eligibility_copy }}
+          {{ offer.carrier }} publishes no change rules for this fare.
         </div>
       </div>
       {% endif %}
