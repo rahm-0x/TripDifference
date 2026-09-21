@@ -249,6 +249,13 @@ def slice_view(sl):
 # not a verified fact. Tunable; not derived from anything.
 LIKELY_MONITORING_RANK_DISCOUNT = Decimal("0.15")
 
+# A fare whose change rules the airline never published can't be assessed at
+# all, so no savings claim can be made about it. Ranked as if it cost this much
+# more, to keep assessable fares above it at a similar price. Smaller than the
+# discount above: not publishing rules is an absence of information, not
+# evidence the fare is bad, so a materially cheaper one should still win.
+UNPUBLISHED_CONDITIONS_RANK_PENALTY = Decimal("0.10")
+
 
 def offer_view(offer, policy_rules=None, carrier_capability_map=None):
     """
@@ -988,6 +995,10 @@ def _offer_rank_price(o):
     if o["eligibility_state"] == "likely_monitoring" \
             and o.get("eligibility_reason") != "carrier_single_denial":
         return amount * (1 - LIKELY_MONITORING_RANK_DISCOUNT)
+    # Nothing published to assess — ranked below fares that can be judged.
+    if o.get("eligibility_reason") in ("conditions_missing", "penalty_unknown",
+                                       "penalty_currency_mismatch"):
+        return amount * (1 + UNPUBLISHED_CONDITIONS_RANK_PENALTY)
     return amount
 
 

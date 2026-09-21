@@ -132,20 +132,26 @@
     </div>
 
     <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start; max-width:220px;">
-      {% if o.change_penalty == '0.00' %}
+      {% if o.monitorable and o.change_penalty == '0.00' %}
         <span class="tag tag-sage-soft">Changes free</span>
-        <div class="fl-meta" style="line-height:1.4">No fee to change this fare.</div>
-      {% elif o.change_penalty %}
+        <div class="fl-meta" style="line-height:1.4">We can rebook this if the fare drops.</div>
+      {% elif o.monitorable %}
         <span class="tag tag-sage-soft">Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}</span>
-        {% if o.change_penalty_pct %}
-        <div class="fl-meta" style="line-height:1.4">{{ o.change_penalty_pct }} of this fare.</div>
-        {% endif %}
+        <div class="fl-meta" style="line-height:1.4">
+          {% if o.change_penalty_pct %}{{ o.change_penalty_pct }} of this fare — {% endif %}low
+          enough to rebook on a drop.
+        </div>
+      {% elif o.eligibility_reason == 'penalty_too_high' %}
+        <span class="tag tag-mute">Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}</span>
+        <div class="fl-meta" style="line-height:1.4">
+          {% if o.change_penalty_pct %}{{ o.change_penalty_pct }} of this fare — {% endif %}too
+          high for a price drop to pay it back.
+        </div>
       {% elif o.eligibility_reason in ('no_change_action', 'change_not_allowed') %}
         <span class="tag tag-mute">Not changeable</span>
         <div class="fl-meta" style="line-height:1.4">{{ o.carrier }} doesn't permit changes after ticketing.</div>
       {% else %}
-        <span class="tag tag-mute">Change fee not published</span>
-        <div class="fl-meta" style="line-height:1.4">{{ o.carrier }} publishes no change rules for this fare.</div>
+        <div class="fl-meta" style="line-height:1.4; opacity:.5">No published change rules.</div>
       {% endif %}
       {% if o.policy_enforcement == 'block' %}
         <span class="tag tag-alert">Blocked by policy</span>
