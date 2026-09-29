@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import app as app_module
 import db
 import duffel_http
 import live_search
@@ -399,3 +400,92 @@ def test_scan_rejects_a_bad_routes_file(tmp_path):
     bad.write_text("origin,destination,date\nLHR,JFK,01/12/2026\n")
     with pytest.raises(SystemExit, match="YYYY-MM-DD"):
         scan.read_routes(bad)
+
+
+# ---------------------------------------------------------------------------
+# the /search page — one flight, every fare type it's sold in
+# ---------------------------------------------------------------------------
+
+def _fare_type(base, suffix, brand, amount, penalty, currency="GBP"):
+    """`base` resold as another fare type: same flight, its own brand, price
+    and change fee — the way Duffel returns one offer per fare type."""
+    fare = offer(base)
+    fare["id"] = f"{fare['id']}_{suffix}"
+    fare["total_amount"] = amount
+    for sl in fare["slices"]:
+        sl["fare_brand_name"] = brand
+    for conditions in (fare["conditions"], fare["slices"][0]["conditions"]):
+        conditions["change_before_departure"] = {
+            "allowed": True, "penalty_amount": penalty, "penalty_currency": currency}
+    return fare
+
+
+def _lufthansa_fare_types():
+    """One LH flight in three fare types, as live search returns it."""
+    return [_fare_type("zero_fee_other_currency", "flex", "Economy Flex", "918.99", "0.00"),
+            _fare_type("zero_fee_other_currency", "light", "Economy Light", "579.20", "300"),
+            offer("zero_fee_other_currency")]  # Economy Green, 819.48, 0.00 GBP
+
+
+@pytest.mark.parametrize("name,kind", [
+    ("changeable_no_fee", "free"),
+    ("changeable_with_penalty", "fee"),
+    ("non_changeable_basic_economy", "not_allowed"),
+    ("null_conditions", "unpublished"),
+    ("zero_fee_other_currency", "free"),
+])
+def test_change_fee_kind_is_what_the_airline_published(name, kind):
+    view = app_module.offer_view(offer(name), policy_rules=[], carrier_capability_map={})
+    assert view["change_fee_kind"] == kind
+
+
+def test_a_zero_fee_stays_free_when_the_carrier_never_honoured_a_change():
+    """The published rule and whether we'd count on it are separate facts:
+    the fare is still 'No change fee', it just isn't monitorable."""
+    view = app_module.offer_view(offer("changeable_no_fee"), policy_rules=[],
+                                 carrier_capability_map={"ZZ": {"confirmed": 0, "denied": 2}})
+    assert view["eligibility_reason"] == "carrier_never_confirmed_change"
+    assert (view["change_fee_kind"], view["monitorable"]) == ("free", False)
+
+
+def test_fares_of_one_flight_group_together_cheapest_first():
+    views = [app_module.offer_view(o, policy_rules=[], carrier_capability_map={})
+             for o in _lufthansa_fare_types()
+             + [offer("non_changeable_basic_economy"), offer("null_conditions")]]
+    views.sort(key=app_module._offer_rank_price)
+    flights = app_module.group_by_flight(views)
+
+    assert len(flights) == 3
+    lh = next(f for f in flights if f["carrier"] == "Lufthansa")
+    assert [o["fare_name"] for o in lh["fares"]] == ["Economy Light", "Economy Green", "Economy Flex"]
+    assert (lh["from_amount"], lh["free_change_from"]) == ("579.20", "819.48")
+    assert [f["free_change_from"] for f in flights if f is not lh] == [None, None]
+    # A flight sits where its best-ranked fare ranked.
+    first_rank = {o["flight_key"]: i for i, o in reversed(list(enumerate(views)))}
+    assert [f["flight_key"] for f in flights] == sorted(first_rank, key=first_rank.get)
+
+
+def test_search_page_lists_every_fare_type_under_its_flight(monkeypatch, logged_in):
+    client, _ = logged_in
+    monkeypatch.setenv("DUFFEL_TOKEN", "duffel_test_" + "0" * 32)
+    fares = _lufthansa_fare_types() + [offer("non_changeable_basic_economy"), offer("null_conditions")]
+    fake, calls = fake_duffel(fares)
+    with patch("duffel_http.requests.request", side_effect=fake):
+        resp = client.get("/search?origin=LHR&destination=JFK&date=2026-10-15&cabin=economy")
+    assert resp.status_code == 200
+    assert calls == [("POST", "/air/offer_requests")]
+    page = resp.get_data(as_text=True)
+
+    assert page.count('class="flight"') == 3
+    assert "3 flights" in page and "5 fares" in page
+    assert "1 of 3 flights are sold in a fare type with no change fee." in page
+    assert 'data-filter="free" disabled' not in page
+    # Lufthansa's three fare types, cheapest first: Light, Green, Flex.
+    flex, light, green = (page.index(f'value="{f["id"]}"') for f in fares[:3])
+    assert light < green < flex
+    for text in ("Economy Light", "Change fee 300 GBP", "Charged in GBP",
+                 "Economy Green", "Economy Flex", "No change fee", "Not changeable",
+                 "No published change rules."):
+        assert text in page, text
+    # Every fare stays selectable on its own.
+    assert page.count('name="offer_id"') == 5

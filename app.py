@@ -262,6 +262,49 @@ LIKELY_MONITORING_RANK_DISCOUNT = Decimal("0.15")
 UNPUBLISHED_CONDITIONS_RANK_PENALTY = Decimal("0.10")
 
 
+def change_fee_kind(a):
+    """What the airline published about changing a fare, as assess() read it:
+    'free', 'fee', 'not_allowed' or 'unpublished'. Only the published rule —
+    whether a change could pay for itself is should_poll's question, and a
+    'free' fare from a carrier that has never honoured a change is still
+    'free' here."""
+    if a.reason in (eligibility.EligibilityReason.NO_CHANGE_ACTION,
+                    eligibility.EligibilityReason.CHANGE_NOT_ALLOWED):
+        return "not_allowed"
+    if a.penalty is None:
+        return "unpublished"
+    return "free" if a.penalty == 0 else "fee"
+
+
+def _fare_name(offer, slices):
+    """The fare type a buyer picks between — the airline's brand ("Economy
+    Light", "Economy Flex"), or, for a carrier that publishes none, the cabin
+    it markets the seat as."""
+    brands = list(dict.fromkeys(s["fare_brand"] for s in slices if s.get("fare_brand")))
+    if brands:
+        return " / ".join(brands)
+    for sl in offer.get("slices", []):
+        for seg in sl.get("segments") or []:
+            for pax in seg.get("passengers") or []:
+                name = pax.get("cabin_class_marketing_name") or \
+                    (pax.get("cabin_class") or "").replace("_", " ").capitalize()
+                if name:
+                    return name
+    return "Fare"
+
+
+def _flight_key(offer):
+    """Same seller, same flights, same departure times. Duffel returns one
+    offer per fare type, so this is what several offers share when they are
+    the same flight sold at different fares."""
+    owner = (offer.get("owner") or {}).get("iata_code") or ""
+    legs = ",".join(
+        f"{(seg.get('marketing_carrier') or {}).get('iata_code', '')}"
+        f"{seg.get('marketing_carrier_flight_number', '')}@{seg.get('departing_at', '')}"
+        for sl in offer.get("slices", []) for seg in sl.get("segments") or [])
+    return f"{owner}|{legs}"
+
+
 def offer_view(offer, policy_rules=None, carrier_capability_map=None):
     """
     Duffel offer → view model.
@@ -298,6 +341,8 @@ def offer_view(offer, policy_rules=None, carrier_capability_map=None):
         "currency": offer["total_currency"],
         "slices": slices,
         "fare_brand": first.get("fare_brand"),
+        "fare_name": _fare_name(offer, slices),
+        "flight_key": _flight_key(offer),
         "monitorable": a.should_poll,
         "eligibility_state": a.state.value,
         "eligibility_reason": a.reason.value,
@@ -310,6 +355,7 @@ def offer_view(offer, policy_rules=None, carrier_capability_map=None):
         "change_penalty_currency": a.penalty_currency,
         "change_penalty_pct": (f"{a.penalty_ratio:.0%}"
                                if a.penalty_ratio is not None else None),
+        "change_fee_kind": change_fee_kind(a),
         "policy_enforcement": decision.enforcement,
         "policy_result": decision.to_json(),
         # flattened, for the results row
@@ -1007,6 +1053,40 @@ def _offer_rank_price(o):
     return amount
 
 
+# What a flight shows once, above its fare types — every fare of one flight
+# shares these (same seller, same segments, same times).
+_FLIGHT_FIELDS = ("flight_key", "carrier", "currency", "slices", "origin", "destination",
+                  "depart", "arrive", "duration", "duration_min", "stops", "next_day",
+                  "flight_numbers", "depart_sort")
+
+
+def group_by_flight(offers):
+    """Ranked offer views → one entry per flight, each listing every fare type
+    it's sold in, cheapest first.
+
+    Duffel returns a flight once per fare type — a Lufthansa itinerary comes
+    back as Economy Light (300 GBP change fee) through Economy Flex (none) —
+    so a flat list showed the same flight up to five times and pushed its
+    no-change-fee fare types off the page. A flight keeps the position of its
+    best-ranked fare, so the ranking in _offer_rank_price still orders the
+    page. `free_change_from` is the cheapest fare type on the flight with no
+    published change fee, or None.
+    """
+    flights = {}
+    for o in offers:
+        flight = flights.get(o["flight_key"])
+        if flight is None:
+            flight = flights[o["flight_key"]] = {**{k: o[k] for k in _FLIGHT_FIELDS},
+                                                 "fares": []}
+        flight["fares"].append(o)
+    for flight in flights.values():
+        flight["fares"].sort(key=lambda o: Decimal(o["amount"]))
+        free = [o for o in flight["fares"] if o["change_fee_kind"] == "free"]
+        flight["from_amount"] = flight["fares"][0]["amount"]
+        flight["free_change_from"] = free[0]["amount"] if free else None
+    return list(flights.values())
+
+
 @app.route("/search", methods=["GET"])
 @auth.login_required
 def search():
@@ -1029,10 +1109,10 @@ def search():
 
     # Arriving from the sidebar with nothing filled in yet is not an error.
     if not any((form["origin"], form["destination"], form["date"])):
-        return render_template("results.html", nav="search", offers=None, form=form)
+        return render_template("results.html", nav="search", flights=None, form=form)
 
     if not (form["origin"] and form["destination"] and form["date"]):
-        return render_template("results.html", nav="search", offers=None, form=form,
+        return render_template("results.html", nav="search", flights=None, form=form,
                                error="Origin, destination and departure date are required.")
 
     slices = [{"origin": form["origin"], "destination": form["destination"],
@@ -1052,7 +1132,7 @@ def search():
             params={"return_offers": "true", "supplier_timeout": SUPPLIER_TIMEOUT_MS},
             label="ui_search")
     except (DuffelError, RuntimeError) as exc:
-        return render_template("results.html", nav="search", offers=None, form=form, error=str(exc))
+        return render_template("results.html", nav="search", flights=None, form=form, error=str(exc))
 
     raw = data.get("offers", [])
     rules = db.policy_rules_active(_account())
@@ -1063,16 +1143,18 @@ def search():
 
     # Sort by value after reshop, not raw price — see _offer_rank_price.
     offers.sort(key=_offer_rank_price)
-    total = len(offers)
-    offers = offers[:20]
     # The single best-value offer, flagged for display — the cheapest one
     # that can actually be monitored, if any can be.
     best_id = next((o["id"] for o in offers if o["monitorable"]), None)
     for o in offers:
         o["best_value"] = (o["id"] == best_id)
-    return render_template("results.html", nav="search", offers=offers, form=form,
-                           total=total,
-                           unmonitorable=sum(1 for o in offers if not o["monitorable"]))
+    # Every flight goes to the page, not a top slice of fares: the page shows
+    # them a page at a time, and the no-change-fee filter has to see all of
+    # them, not just the ones that ranked first.
+    flights = group_by_flight(offers)
+    return render_template("results.html", nav="search", flights=flights, form=form,
+                           fare_count=len(offers),
+                           free_change_flights=sum(1 for f in flights if f["free_change_from"]))
 
 
 # ---------------------------------------------------------------------------
@@ -1265,7 +1347,7 @@ def passenger_step():
                                saved=_saved_travelers_for_picker(_account()),
                                cost_centers=db.cost_centers_for_account(_account(), active_only=True))
     except (DuffelError, RuntimeError) as exc:
-        return render_template("results.html", nav="search", offers=None, form={},
+        return render_template("results.html", nav="search", flights=None, form={},
                                error=f"{exc} — offers expire; search again.")
 
 
@@ -1287,7 +1369,7 @@ def payment_step():
                                offer=fetch_offer_view(offer_id), people=people,
                                cost_center_id=cost_center_id)
     except (DuffelError, RuntimeError) as exc:
-        return render_template("results.html", nav="search", offers=None, form={},
+        return render_template("results.html", nav="search", flights=None, form={},
                                error=f"{exc} — offers expire; search again.")
 
 
@@ -1325,7 +1407,7 @@ def book():
     try:
         offer = duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer")
     except (DuffelError, RuntimeError) as exc:
-        return render_template("results.html", nav="search", offers=None, form={},
+        return render_template("results.html", nav="search", flights=None, form={},
                                error=f"{exc} — offers expire; search again.")
 
     seats = offer.get("passengers", []) or [{}]
@@ -1452,11 +1534,11 @@ def book():
             existing = db.order_for_offer(account_id, offer_id)
             if existing:
                 return redirect(url_for("trip_booked", order_id=existing["order_id"]))
-            return render_template("results.html", nav="search", offers=None, form={},
+            return render_template("results.html", nav="search", flights=None, form={},
                                    error="That search has already been booked from — "
                                          "offers are single use. Search again for fresh "
                                          "prices.")
-        return render_template("results.html", nav="search", offers=None, form={},
+        return render_template("results.html", nav="search", flights=None, form={},
                                error=str(exc))
 
     snap = OrderSnapshot.from_duffel(order)

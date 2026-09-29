@@ -72,110 +72,165 @@
   </div>
 </div>
 
-{% if offers is not none %}
+{% if flights is not none %}
 <div class="page-head" style="display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap;">
   <div>
-    <h2>{{ total }} flights</h2>
+    <h2>{{ flights|length }} flight{{ 's' if flights|length != 1 }}</h2>
     <p style="margin-top:4px">
+      {{ fare_count }} fare{{ 's' if fare_count != 1 }} ·
       {{ form.origin }} → {{ form.destination }} · {{ form.date }}
       {% if form.return_date %} · returning {{ form.return_date }}{% endif %}
       · {{ form.cabin.replace('_',' ') }}
     </p>
   </div>
-  <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
-    <span class="lbl" style="margin:0">Sort</span>
-    <div class="sortbar">
-      <button type="button" class="sort on" data-sort="price">Price</button>
-      <button type="button" class="sort" data-sort="depart">Departure</button>
-      <button type="button" class="sort" data-sort="duration">Duration</button>
+  <div style="margin-left:auto; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span class="lbl" style="margin:0">Show</span>
+      <div class="sortbar">
+        <button type="button" class="filt on" data-filter="all">All fares</button>
+        <button type="button" class="filt" data-filter="free" {{ 'disabled' if not free_change_flights }}>No change fee</button>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span class="lbl" style="margin:0">Sort</span>
+      <div class="sortbar">
+        <button type="button" class="sort on" data-sort="rank"
+                title="Ranked by price after weighing whether each fare could be rebooked on a price drop.">Best value</button>
+        <button type="button" class="sort" data-sort="price">Price</button>
+        <button type="button" class="sort" data-sort="depart">Departure</button>
+        <button type="button" class="sort" data-sort="duration">Duration</button>
+      </div>
     </div>
   </div>
 </div>
 
-{% if unmonitorable %}
-<div class="notice notice-terra" style="margin-bottom:16px">
-  <span>⚠</span>
+{% if flights %}
+<div class="notice {{ 'notice-cash' if free_change_flights }}" style="margin-bottom:16px">
   <div>
-    <b>{{ unmonitorable }} of the {{ offers|length }} fares shown can't be rebooked.</b>
-    Either the airline doesn't permit changes after ticketing, or it publishes
-    no change rules for that fare. Each one says which, below.
+    {% if free_change_flights %}
+    <b>{{ free_change_flights }} of {{ flights|length }} flights are sold in a fare type with no change fee.</b>
+    {% else %}
+    <b>None of these flights is sold in a fare type with no change fee.</b>
+    {% endif %}
+    Airlines sell the same flight in several fare types, each with its own
+    change fee — every flight below lists all of them.
   </div>
 </div>
 {% endif %}
 
 <div class="card" style="padding:0" id="results">
-  {% for o in offers %}
-  <div class="fl {{ 'fl-rec' if o.best_value }}" data-price="{{ o.amount }}" data-depart="{{ o.depart_sort }}" data-duration="{{ o.duration_min }}">
-    <div class="fl-carrier">
-      {% if o.best_value %}
-      <div class="rec-flag" style="margin-bottom:3px"
-           title="Ranked by price after weighing eligibility — a likely-monitorable fare is ranked as if it were 15% cheaper than face value, reflecting the fare drop we'd expect to recover.">
-        Best value after reshop
+  {% for f in flights %}
+  <div class="flight" data-rank="{{ loop.index }}" data-price="{{ f.from_amount }}"
+       data-free-price="{{ f.free_change_from or '' }}" data-depart="{{ f.depart_sort }}"
+       data-duration="{{ f.duration_min }}" data-free="{{ 1 if f.free_change_from else 0 }}">
+    <div class="fl">
+      <div class="fl-carrier">
+        <b>{{ f.carrier }}</b>
+        {% for leg in f.slices %}<div class="mono muted">{{ leg.flight_numbers }}</div>{% endfor %}
       </div>
-      {% endif %}
-      <b>{{ o.carrier }}</b>
-      <div class="mono muted">{{ o.flight_numbers }}</div>
-      {% if o.fare_brand %}<div class="fl-meta">{{ o.fare_brand }}</div>{% endif %}
-    </div>
 
-    <div>
-      <div class="fl-times">
-        <span class="t">{{ o.depart }}</span>
-        <span class="fl-line"></span>
-        <span class="t">{{ o.arrive }}</span>
-      </div>
-      <div class="fl-meta">
-        {{ o.origin }} → {{ o.destination }} · {{ o.duration }} ·
-        {% if o.stops == 0 %}Non-stop{% else %}{{ o.stops }} stop{{ 's' if o.stops > 1 }}{% endif %}
-        {% if o.next_day %} · <span style="color:var(--terra-dark)">+1 day</span>{% endif %}
-      </div>
-    </div>
-
-    <div style="display:flex; flex-direction:column; gap:5px; align-items:flex-start; max-width:220px;">
-      {% if o.monitorable and o.change_penalty == '0.00' %}
-        <span class="tag tag-sage-soft">Changes free</span>
-        <div class="fl-meta" style="line-height:1.4">We can rebook this if the fare drops.</div>
-      {% elif o.monitorable %}
-        <span class="tag tag-sage-soft">Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}</span>
-        <div class="fl-meta" style="line-height:1.4">
-          {% if o.change_penalty_pct %}{{ o.change_penalty_pct }} of this fare — {% endif %}low
-          enough to rebook on a drop.
+      <div>
+        {% for leg in f.slices %}
+        <div {% if not loop.first %}style="margin-top:10px"{% endif %}>
+          <div class="fl-times">
+            <span class="t">{{ leg.depart }}</span>
+            <span class="fl-line"></span>
+            <span class="t">{{ leg.arrive }}</span>
+          </div>
+          <div class="fl-meta">
+            {% if f.slices|length > 1 %}{{ 'Return' if loop.index > 1 else 'Outbound' }} · {% endif %}
+            {{ leg.origin }} → {{ leg.destination }} · {{ leg.duration }} ·
+            {% if leg.stops == 0 %}Non-stop{% else %}{{ leg.stops }} stop{{ 's' if leg.stops > 1 }}{% endif %}
+            {% if leg.next_day %} · <span style="color:var(--terra-dark)">+1 day</span>{% endif %}
+          </div>
         </div>
-      {% elif o.eligibility_reason == 'penalty_too_high' %}
-        <span class="tag tag-mute">Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}</span>
-        <div class="fl-meta" style="line-height:1.4">
-          {% if o.change_penalty_pct %}{{ o.change_penalty_pct }} of this fare — {% endif %}too
-          high for a price drop to pay it back.
-        </div>
-      {% elif o.eligibility_reason in ('no_change_action', 'change_not_allowed') %}
-        <span class="tag tag-mute">Not changeable</span>
-        <div class="fl-meta" style="line-height:1.4">{{ o.carrier }} doesn't permit changes after ticketing.</div>
-      {% else %}
-        <div class="fl-meta" style="line-height:1.4; opacity:.5">No published change rules.</div>
-      {% endif %}
-      {% if o.policy_enforcement == 'block' %}
-        <span class="tag tag-alert">Blocked by policy</span>
-      {% elif o.policy_enforcement == 'require_approval' %}
-        <span class="tag tag-credit">Needs approval</span>
-      {% elif o.policy_enforcement == 'advise' %}
-        <span class="tag tag-terra">Policy note</span>
-      {% endif %}
+        {% endfor %}
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-start;">
+        {% if f.free_change_from %}
+        <span class="tag tag-sage-soft">No change fee</span>
+        <div class="fl-meta" style="margin:0">from {{ f.free_change_from }} {{ f.currency }}</div>
+        {% endif %}
+      </div>
+
+      <div class="fl-act" style="text-align:right">
+        <div class="fl-meta" style="margin:0">{{ f.fares|length }} fare type{{ 's' if f.fares|length != 1 }}, from</div>
+        <div class="price">{{ f.from_amount }}<span class="cur">{{ f.currency }}</span></div>
+      </div>
     </div>
 
-    <div class="fl-act" style="display:flex; align-items:center; justify-content:flex-end; gap:14px;">
-      <div style="text-align:right">
-        <div class="price">{{ o.amount }}<span class="cur">{{ o.currency }}</span></div>
-      </div>
-      <form method="post" action="{{ url_for('passenger_step') }}">
-      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <div class="fares">
+      {% for o in f.fares %}
+      <form class="fare-card {{ 'rec' if o.best_value }} {{ 'fare-free' if o.change_fee_kind == 'free' and o.monitorable }}"
+            data-free="{{ 1 if o.change_fee_kind == 'free' else 0 }}"
+            method="post" action="{{ url_for('passenger_step') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <input type="hidden" name="offer_id" value="{{ o.id }}">
+        <div>
+          {% if o.best_value %}
+          <div class="rec-flag" style="margin-bottom:3px"
+               title="Ranked by price after weighing eligibility — a likely-monitorable fare is ranked as if it were 15% cheaper than face value, reflecting the fare drop we'd expect to recover.">
+            Best value after reshop
+          </div>
+          {% endif %}
+          <div class="fare-name">{{ o.fare_name }}</div>
+          <div class="fare-price">{{ o.amount }}<span class="cur">{{ o.currency }}</span></div>
+        </div>
+
+        <div class="fare-chips">
+          {% if o.change_fee_kind == 'free' %}
+            <span class="tag {{ 'tag-sage' if o.monitorable else 'tag-mute' }}">No change fee</span>
+          {% elif o.change_fee_kind == 'fee' %}
+            <span class="tag {{ 'tag-sage-soft' if o.monitorable else 'tag-mute' }}">Change fee {{ o.change_penalty }} {{ o.change_penalty_currency }}</span>
+          {% elif o.change_fee_kind == 'not_allowed' %}
+            <span class="tag tag-mute">Not changeable</span>
+          {% endif %}
+          {% if o.policy_enforcement == 'block' %}
+            <span class="tag tag-alert">Blocked by policy</span>
+          {% elif o.policy_enforcement == 'require_approval' %}
+            <span class="tag tag-credit">Needs approval</span>
+          {% elif o.policy_enforcement == 'advise' %}
+            <span class="tag tag-terra">Policy note</span>
+          {% endif %}
+        </div>
+
+        <div class="fare-note" {% if o.change_fee_kind == 'unpublished' %}style="opacity:.6"{% endif %}>
+          {% if o.change_fee_kind == 'free' and o.monitorable %}
+            We can rebook this if the fare drops.
+          {% elif o.change_fee_kind == 'fee' and o.monitorable %}
+            {% if o.change_penalty_pct %}{{ o.change_penalty_pct }} of this fare — {% endif %}low
+            enough to rebook on a drop.
+          {% elif o.eligibility_reason == 'penalty_too_high' %}
+            {% if o.change_penalty_pct %}{{ o.change_penalty_pct }} of this fare — {% endif %}too
+            high for a price drop to pay it back.
+          {% elif o.eligibility_reason == 'penalty_currency_mismatch' %}
+            Charged in {{ o.change_penalty_currency }}, so it can't be weighed against
+            a {{ o.currency }} fare.
+          {% elif o.eligibility_reason == 'carrier_never_confirmed_change' %}
+            {{ o.carrier }} hasn't allowed a change on any ticket we've seen issued.
+          {% elif o.change_fee_kind == 'not_allowed' %}
+            No changes after ticketing.
+          {% elif o.eligibility_reason == 'penalty_unknown' %}
+            Changes allowed, but no fee published.
+          {% elif o.change_fee_kind == 'unpublished' %}
+            No published change rules.
+          {% else %}
+            {{ o.eligibility_copy }}
+          {% endif %}
+        </div>
+
         <button type="submit" class="btn-sm" {{ 'disabled title="Blocked by travel policy"' | safe if o.policy_enforcement == 'block' }}>Select</button>
       </form>
+      {% endfor %}
     </div>
   </div>
   {% else %}
   <div style="padding:36px; text-align:center" class="muted">No flights found for that search.</div>
   {% endfor %}
+</div>
+<div style="text-align:center; margin-top:14px">
+  <button type="button" class="btn-ghost btn-sm" id="moreBtn" style="display:none"></button>
 </div>
 {% endif %}
 
@@ -200,11 +255,18 @@
   .swap:hover { background:var(--terra-wash); color:var(--gold); border-color:rgba(59,91,219,.22); }
   .sortbar { display:flex; gap:4px; background:var(--surface-2); padding:3px;
              border-radius:99px; border:1px solid var(--line-soft); }
-  .sort { padding:6px 14px; font-size:13px; font-weight:600; border-radius:99px;
-          background:transparent; color:var(--ink-soft); }
-  .sort:hover { background:transparent; color:var(--ink); }
-  .sort.on { background:var(--surface); color:var(--terra-dark); box-shadow:var(--shadow); }
-  .fl-rec { border-color:var(--gold); box-shadow:inset 0 0 0 1px var(--gold); background:var(--surface); }
+  .sort, .filt { padding:6px 14px; font-size:13px; font-weight:600; border-radius:99px;
+                background:transparent; color:var(--ink-soft); }
+  .sort:hover, .filt:hover { background:transparent; color:var(--ink); }
+  .sort.on, .filt.on { background:var(--surface); color:var(--terra-dark); box-shadow:var(--shadow); }
+  .filt:disabled { background:transparent; color:var(--muted-2); opacity:.6; cursor:not-allowed; }
+  .flight { border-bottom:1px solid var(--line-soft); }
+  .flight:last-child { border-bottom:0; }
+  .flight .fl { border-bottom:0; padding-bottom:4px; }
+  .flight .fares { margin:0; padding:0 16px 16px; }
+  .fare-card .btn-sm { margin-top:auto; align-self:flex-start; padding:7px 14px; }
+  .fare-card.fare-free { border-color:rgba(61,122,83,.45); background:var(--sage-wash); }
+  .fare-card.fare-dim { opacity:.4; }
 </style>
 
 <script>
@@ -223,15 +285,47 @@
   document.querySelectorAll('input[name=trip_type]').forEach(r => r.addEventListener('change', syncTrip));
   syncTrip();
 
-  // Client-side sort: avoids re-issuing an offer request just to reorder rows.
+  // Client-side sort and filter: avoids re-issuing an offer request (single
+  // use, and a live one counts against the staging budget) just to reorder
+  // or narrow what's already on the page.
   const box = document.getElementById('results');
-  document.querySelectorAll('.sort').forEach(btn => btn.addEventListener('click', () => {
-    document.querySelectorAll('.sort').forEach(b => b.classList.toggle('on', b === btn));
-    const key = btn.dataset.sort;
-    [...box.querySelectorAll('.fl')]
-      .sort((x, y) => parseFloat(x.dataset[key]) - parseFloat(y.dataset[key]))
-      .forEach(el => box.appendChild(el));
-  }));
+  const moreBtn = document.getElementById('moreBtn');
+  const PAGE = 20;
+  let sortKey = 'rank', filter = 'all', shown = PAGE;
+
+  function render() {
+    const rows = [...box.querySelectorAll('.flight')];
+    // With the filter on, "Price" means the cheapest no-change-fee fare.
+    const key = (sortKey === 'price' && filter === 'free') ? 'freePrice' : sortKey;
+    const val = el => { const n = parseFloat(el.dataset[key]); return isNaN(n) ? Infinity : n; };
+    rows.sort((x, y) => (val(x) > val(y)) - (val(x) < val(y)))
+        .forEach(el => box.appendChild(el));
+    let matched = 0;
+    rows.forEach(el => {
+      const match = filter === 'all' || el.dataset.free === '1';
+      if (match) matched++;
+      el.style.display = match && matched <= shown ? '' : 'none';
+      el.querySelectorAll('.fare-card').forEach(card =>
+        card.classList.toggle('fare-dim', filter === 'free' && card.dataset.free !== '1'));
+    });
+    const more = matched - Math.min(matched, shown);
+    moreBtn.style.display = more > 0 ? '' : 'none';
+    moreBtn.textContent = `Show ${more} more flight${more === 1 ? '' : 's'}`;
+  }
+
+  function pick(selector, btn) {
+    document.querySelectorAll(selector).forEach(b => b.classList.toggle('on', b === btn));
+  }
+  if (box) {
+    document.querySelectorAll('.sort').forEach(btn => btn.addEventListener('click', () => {
+      pick('.sort', btn); sortKey = btn.dataset.sort; render();
+    }));
+    document.querySelectorAll('.filt').forEach(btn => btn.addEventListener('click', () => {
+      pick('.filt', btn); filter = btn.dataset.filter; shown = PAGE; render();
+    }));
+    moreBtn.addEventListener('click', () => { shown = Infinity; render(); });
+    render();
+  }
 </script>
 
 {% endblock %}
