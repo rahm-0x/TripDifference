@@ -30,7 +30,7 @@ import duffel_http
 import live_search
 import offer_eligibility as oe
 import paths
-from test_money_path import acct, client, logged_in  # noqa: F401
+from test_money_path import CSRF, acct, client, logged_in  # noqa: F401
 
 ROOT = Path(__file__).resolve().parent
 OFFERS = json.loads((ROOT / "test_fixtures" / "duffel_offers.json").read_text())
@@ -489,3 +489,117 @@ def test_search_page_lists_every_fare_type_under_its_flight(monkeypatch, logged_
         assert text in page, text
     # Every fare stays selectable on its own.
     assert page.count('name="offer_id"') == 5
+
+
+# ---------------------------------------------------------------------------
+# what each fare type includes for its price
+# ---------------------------------------------------------------------------
+
+def _including(fare, bags=None, **slice_conditions):
+    """`fare` with a baggage allowance on every segment ({type: quantity}; {}
+    is a published "none") and the given per-slice conditions."""
+    for sl in fare["slices"]:
+        sl["conditions"].update(slice_conditions)
+        for seg in sl["segments"]:
+            for pax in seg["passengers"]:
+                if bags is not None:
+                    pax["baggages"] = [{"type": t, "quantity": n} for t, n in bags.items()]
+    return fare
+
+
+def _benefit_states(fare):
+    return {b["name"]: b["state"] for b in app_module.fare_benefits(fare)}
+
+
+def test_fare_benefits_list_what_the_airline_published():
+    fare = _including(offer("zero_fee_other_currency"), bags={"carry_on": 1, "checked": 2},
+                      advance_seat_selection=True, priority_boarding=False)
+    # The same rows in the same order for every fare; the unpublished one
+    # carries no claim, only its name.
+    assert [(b["state"], b["text"] or b["name"]) for b in app_module.fare_benefits(fare)] == [
+        ("yes", "1 carry-on bag"), ("yes", "2 checked bags"),
+        ("yes", "Advance seat selection"), ("yes", "Refundable, 200 GBP fee"),
+        ("no", "No priority boarding"), ("unknown", "priority check-in")]
+
+    # The price covers every traveler; the allowance is each one's.
+    fare["passengers"] = fare["passengers"] * 2
+    assert app_module.fare_benefits(fare)[0]["text"] == "1 carry-on bag each"
+
+
+@pytest.mark.parametrize("refund,text", [
+    ({"allowed": True, "penalty_amount": "0.00", "penalty_currency": "GBP"}, "Refundable, no fee"),
+    ({"allowed": True, "penalty_amount": None, "penalty_currency": None}, "Refundable, fee not published"),
+    ({"allowed": False, "penalty_amount": None, "penalty_currency": None}, "Non-refundable"),
+])
+def test_refund_terms_read_as_published(refund, text):
+    fare = offer("zero_fee_other_currency")
+    fare["conditions"]["refund_before_departure"] = refund
+    assert text in [b["text"] for b in app_module.fare_benefits(fare)]
+
+
+def test_an_unpublished_benefit_is_never_reported_as_not_included():
+    """Null from Duffel is the airline publishing nothing. Only a published
+    false, an empty baggage list or `allowed: false` is a 'no'."""
+    # Duffel Airways: nothing but "refunds not allowed".
+    assert _benefit_states(offer("changeable_no_fee")) == {
+        "carry-on bag": "unknown", "checked bag": "unknown", "advance seat selection": "unknown",
+        "refunds": "no", "priority boarding": "unknown", "priority check-in": "unknown"}
+    # TAP Discount: three published falses, no refund rules.
+    assert _benefit_states(_including(offer("null_conditions"), bags={})) == {
+        "carry-on bag": "no", "checked bag": "no", "advance seat selection": "no",
+        "refunds": "unknown", "priority boarding": "no", "priority check-in": "no"}
+
+
+def test_a_bag_counts_only_as_far_as_every_flight_of_the_trip_includes_it():
+    fare = _including(offer("zero_fee_other_currency"), bags={"carry_on": 1, "checked": 2})
+    first, second = (seg["passengers"][0] for seg in fare["slices"][0]["segments"])
+    checked = lambda: next(b for b in app_module.fare_benefits(fare) if b["name"] == "checked bag")
+
+    first["baggages"] = [{"type": "carry_on", "quantity": 1}, {"type": "checked", "quantity": 1}]
+    assert (checked()["state"], checked()["text"]) == ("yes", "1 checked bag")
+    first["baggages"] = [{"type": "carry_on", "quantity": 1}]
+    assert (checked()["state"], checked()["text"]) == ("part", "Checked bag on some flights only")
+    # One segment with no published allowance leaves the whole fare unknown.
+    del second["baggages"]
+    assert _benefit_states(fare)["checked bag"] == "unknown"
+
+
+def test_search_page_lists_what_each_fare_type_includes(monkeypatch, logged_in):
+    client, _ = logged_in
+    monkeypatch.setenv("DUFFEL_TOKEN", "duffel_test_" + "0" * 32)
+    flex, light, green = _lufthansa_fare_types()
+    _including(flex, bags={"carry_on": 1, "checked": 1}, advance_seat_selection=True)
+    _including(light, bags={"carry_on": 1}, advance_seat_selection=False)
+    light["conditions"]["refund_before_departure"] = {
+        "allowed": False, "penalty_amount": None, "penalty_currency": None}
+    fake, _ = fake_duffel([flex, light, green])
+    with patch("duffel_http.requests.request", side_effect=fake):
+        resp = client.get("/search?origin=LHR&destination=JFK&date=2026-10-15&cabin=economy")
+    assert resp.status_code == 200
+    page = resp.get_data(as_text=True)
+
+    assert page.count('class="benefits"') == 3
+    for text in ('<li class="b-yes">1 checked bag</li>', '<li class="b-no">No checked bag</li>',
+                 '<li class="b-yes">Advance seat selection</li>',
+                 '<li class="b-no">No advance seat selection</li>',
+                 '<li class="b-no">Non-refundable</li>',
+                 '<li class="b-yes">Refundable, 200 GBP fee</li>',
+                 # Economy Green, as recorded: refund terms and nothing else.
+                 "Not published: carry-on bag, checked bag, advance seat selection, "
+                 "priority boarding, priority check-in"):
+        assert text in page, text
+
+
+def test_booking_summary_lists_what_the_selected_fare_includes(monkeypatch, logged_in):
+    client, _ = logged_in
+    monkeypatch.setenv("DUFFEL_TOKEN", "duffel_test_" + "0" * 32)
+    fare = _including(offer("zero_fee_other_currency"), bags={"carry_on": 1, "checked": 1})
+    fake, calls = fake_duffel([fare])
+    with patch("duffel_http.requests.request", side_effect=fake):
+        resp = client.post("/book/passenger", data={"offer_id": fare["id"], "_csrf": CSRF})
+    assert resp.status_code == 200
+    assert calls == [("GET", f"/air/offers/{fare['id']}")]
+    page = resp.get_data(as_text=True)
+    for text in ('<li class="b-yes">1 checked bag</li>', '<li class="b-yes">Refundable, 200 GBP fee</li>',
+                 "Not published: advance seat selection, priority boarding, priority check-in"):
+        assert text in page, text

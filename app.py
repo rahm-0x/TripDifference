@@ -276,6 +276,100 @@ def change_fee_kind(a):
     return "free" if a.penalty == 0 else "fee"
 
 
+def _across_trip(values):
+    """One answer for a whole fare from a fact the airline publishes per
+    slice: the value when every slice agrees, 'part' when they disagree, and
+    None when any slice is unpublished — a fare can't be said to include
+    something on the strength of half the trip."""
+    values = list(values)
+    if not values or any(v is None for v in values):
+        return None
+    return values[0] if all(v == values[0] for v in values) else "part"
+
+
+def _bag_count(offer, kind):
+    """Bags of `kind` ('carry_on' or 'checked') each traveler gets on every
+    flight of the trip — the smallest allowance across segments, since that's
+    what can be taken the whole way. 'part' when some flights include one and
+    others none; None when the airline published no allowance at all (an
+    empty list is a published "none", a missing one isn't)."""
+    counts = []
+    for sl in offer.get("slices", []):
+        for seg in sl.get("segments") or []:
+            for pax in seg.get("passengers") or []:
+                bags = pax.get("baggages")
+                if bags is None:
+                    return None
+                counts.append(sum(b.get("quantity") or 0 for b in bags if b.get("type") == kind))
+    if not counts:
+        return None
+    return "part" if min(counts) == 0 < max(counts) else min(counts)
+
+
+def _benefit(name, state, text=None):
+    """One row of fare_benefits(). `name` is what the row is about, and is
+    what the page lists when the airline published nothing for it."""
+    return {"name": name, "state": state,
+            "text": text or {"yes": name.capitalize(), "no": f"No {name}",
+                             "part": f"{name.capitalize()} on some flights only",
+                             "unknown": ""}[state]}
+
+
+def fare_benefits(offer):
+    """What a fare type includes for its price, as the airline published it —
+    the same rows in the same order for every fare, so the fare types of one
+    flight read across. The change fee isn't here: assess() reads that, and
+    the page shows it on its own.
+
+    Each row's state is 'yes', 'no', 'part' (some flights of the trip only) or
+    'unknown'. Null from Duffel means the airline published nothing, which is
+    not "not included" and is never shown as that. Wifi, power and legroom
+    aren't here either: they belong to the aircraft, not the fare type, and
+    come back identical for every fare of a flight."""
+    each = " each" if len(offer.get("passengers") or []) > 1 else ""
+    rows = []
+    for kind, name in (("carry_on", "carry-on bag"), ("checked", "checked bag")):
+        count = _bag_count(offer, kind)
+        if count is None:
+            rows.append(_benefit(name, "unknown"))
+        elif count == "part":
+            rows.append(_benefit(name, "part"))
+        elif count == 0:
+            rows.append(_benefit(name, "no"))
+        else:
+            rows.append(_benefit(name, "yes", f"{count} {name}{'s' if count > 1 else ''}{each}"))
+
+    def published(field, name):
+        included = _across_trip((sl.get("conditions") or {}).get(field)
+                                for sl in offer.get("slices", []))
+        return _benefit(name, {True: "yes", False: "no", "part": "part", None: "unknown"}[included])
+
+    rows.append(published("advance_seat_selection", "advance seat selection"))
+
+    refund = (offer.get("conditions") or {}).get("refund_before_departure")
+    if refund is None:
+        rows.append(_benefit("refunds", "unknown"))
+    elif not refund.get("allowed"):
+        rows.append(_benefit("refunds", "no", "Non-refundable"))
+    else:
+        fee, currency = refund.get("penalty_amount"), refund.get("penalty_currency") or ""
+        try:
+            free = fee is not None and Decimal(str(fee)) == 0
+        except InvalidOperation:
+            free = False
+        if fee is None:
+            text = "Refundable, fee not published"
+        elif free:
+            text = "Refundable, no fee"
+        else:
+            text = f"Refundable, {f'{fee} {currency}'.strip()} fee"
+        rows.append(_benefit("refunds", "yes", text))
+
+    rows.append(published("priority_boarding", "priority boarding"))
+    rows.append(published("priority_check_in", "priority check-in"))
+    return rows
+
+
 def _fare_name(offer, slices):
     """The fare type a buyer picks between — the airline's brand ("Economy
     Light", "Economy Flex"), or, for a carrier that publishes none, the cabin
@@ -356,6 +450,7 @@ def offer_view(offer, policy_rules=None, carrier_capability_map=None):
         "change_penalty_pct": (f"{a.penalty_ratio:.0%}"
                                if a.penalty_ratio is not None else None),
         "change_fee_kind": change_fee_kind(a),
+        "benefits": fare_benefits(offer),
         "policy_enforcement": decision.enforcement,
         "policy_result": decision.to_json(),
         # flattened, for the results row

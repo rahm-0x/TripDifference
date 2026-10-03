@@ -220,6 +220,8 @@
           {% endif %}
         </div>
 
+        {% with benefits = o.benefits %}{% include "_fare_benefits.html" %}{% endwith %}
+
         <button type="submit" class="btn-sm" {{ 'disabled title="Blocked by travel policy"' | safe if o.policy_enforcement == 'block' }}>Select</button>
       </form>
       {% endfor %}

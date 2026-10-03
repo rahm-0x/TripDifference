@@ -1,0 +1,16 @@
+{# What a fare includes for its price — offer_view()'s `benefits`, passed in
+   as `benefits`. Used on each fare card and on the summary rail. What the
+   airline didn't publish is listed as that, never as "not included". #}
+{% set unpublished = benefits | selectattr('state', 'equalto', 'unknown') | map(attribute='name') | list %}
+<div class="benefits">
+  {% if unpublished|length < benefits|length %}
+  <ul>
+    {% for b in benefits if b.state != 'unknown' %}
+    <li class="b-{{ b.state }}">{{ b.text }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if unpublished %}
+  <div class="b-unpublished">Not published: {{ unpublished | join(', ') }}</div>
+  {% endif %}
+</div>

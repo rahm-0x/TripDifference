@@ -24,6 +24,11 @@
     {% if offer.fare_brand %}
     <div class="fl-meta" style="margin-bottom:12px">Fare: {{ offer.fare_brand }}</div>
     {% endif %}
+    {% if offer.benefits %}
+    <div style="margin-bottom:14px">
+      {% with benefits = offer.benefits %}{% include "_fare_benefits.html" %}{% endwith %}
+    </div>
+    {% endif %}
 
     <div style="display:flex; justify-content:space-between; align-items:baseline;
                 padding-top:14px; border-top:1px solid var(--line);">
