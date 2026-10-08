@@ -179,6 +179,8 @@ def inject_globals():
             # 'orders' (real tickets, real money), 'search' (live fares, no
             # orders), or None
             "live_banner": _live_banner(),
+            # whether a recheck exchanges on its own or leaves it for CONFIRM
+            "autopilot": config.RESHOP_AUTOPILOT_ENABLED,
             "app_env": config.APP_ENV}
 
 
@@ -2229,6 +2231,10 @@ def _run_cycle(order_id, source, account_id=None):
 # and still first in the queue next time, starving everything behind it.
 CRON_BUDGET_SECONDS = 45
 CRON_MAX_ORDERS = 8
+# An exchange cut off by that ceiling can land at the airline with nothing
+# recorded here, so an automatic one is never started this late in a run. The
+# decision stands; a later run, or a person, picks it up.
+CRON_EXECUTE_BY_SECONDS = 30
 
 
 @app.route("/cron/reshop")
@@ -2240,8 +2246,8 @@ def cron_reshop():
     EXPECTED_PUBLIC too, or the route walk fails. An unset secret refuses every
     request rather than leaving the scheduler open.
 
-    Decides only. Acting on a RESHOP decision is execute()'s job and still needs
-    a human; see RESHOP_AUTOPILOT_ENABLED for where that changes.
+    Decides only, unless RESHOP_AUTOPILOT_ENABLED is on — then a RESHOP
+    decision is exchanged in the same run, as the account's owner.
     """
     # Strictly the documented shape Vercel Cron sends. removeprefix() alone is a
     # no-op when the prefix is absent, which quietly accepted a bare secret in
@@ -2258,13 +2264,15 @@ def cron_reshop():
     return {**result, "autopilot": autopilot}
 
 
-def _recheck(rows, source, *, autopilot=False):
+def _recheck(rows, source, *, autopilot=False, actor_email=None):
     """Run a reshop cycle over `rows` (order_id and account_id), in the order
     given, until CRON_BUDGET_SECONDS is spent. One copy for the scheduler and
-    the ops console's "Recheck all fares", so both walk the queue the same way:
-    whatever a run doesn't reach is still first in line for the next one.
+    "Recheck all fares", so both walk the queue the same way: whatever a run
+    doesn't reach is still first in line for the next one.
 
-    Decides only, unless `autopilot`.
+    Decides only, unless `autopilot` — then each RESHOP decision is exchanged
+    straight away, unattended (see _execute_action), as `actor_email` or, with
+    none given, the account's owner.
     """
     started = time.monotonic()
     checked, reshop_decided, executed, errors = [], [], [], []
@@ -2289,15 +2297,18 @@ def _recheck(rows, source, *, autopilot=False):
         if not autopilot:
             continue
 
+        if time.monotonic() - started > CRON_EXECUTE_BY_SECONDS:
+            continue
+
         # The engine already decided this is worth doing: change_total is
         # negative and the saving clears min_saving. Executing here is the only
         # thing in this app that moves a real ticket with nobody watching, so
         # it still goes through the same _execute_action the CONFIRM path does
-        # — same claim, same live_guard caps, same audit trail.
+        # — same claim, same audit trail — and is held to a refund on top.
         try:
             ok, message = _execute_action(
                 find_order(order_id, account_id), "exchange",
-                db.account_actor_email(account_id))
+                actor_email or db.account_actor_email(account_id), unattended=True)
         except (DuffelError, RuntimeError) as exc:
             errors.append({"order_id": order_id, "error": str(exc)[:200]})
             continue
@@ -2320,8 +2331,10 @@ def recheck_all():
     for one account, now. Same queue order and time budget, so a long list is
     worked through over successive runs rather than timing out partway.
 
-    Never executes, whatever RESHOP_AUTOPILOT_ENABLED says: a person asked for
-    a recheck, and an exchange from here still goes through CONFIRM.
+    With RESHOP_AUTOPILOT_ENABLED on it rebooks as it goes, exactly as the
+    scheduler would: a refund that clears the floor is exchanged in this
+    request, as the person who pressed the button. Off, it only decides, and
+    the exchange waits for CONFIRM on the trip page.
     """
     # Back to whichever page the button was on — Reservations, a trip, or ops.
     back = _safe_next(request.form.get("next") or url_for("orders"))
@@ -2330,17 +2343,30 @@ def recheck_all():
         flash("No fares are being monitored, so there was nothing to recheck.", "recheck")
         return redirect(back)
 
-    result = _recheck(rows, get_price_source("duffel"))
-    checked, ready, errors = result["checked"], result["reshop_decided"], result["errors"]
-    waiting = len(rows) - len(checked) - len(errors)
+    result = _recheck(rows, get_price_source("duffel"), autopilot=config.RESHOP_AUTOPILOT_ENABLED,
+                      actor_email=auth.current_user()["email"])
+    checked, ready, done = result["checked"], result["reshop_decided"], result["executed"]
+    # An order whose cycle ran but whose exchange then failed is in both
+    # `checked` and `errors`; one that could not be checked is only in `errors`.
+    failed = [e for e in result["errors"] if e["order_id"] in checked]
+    unchecked = [e for e in result["errors"] if e["order_id"] not in checked]
+    settled = {e["order_id"] for e in done + failed}
+    pending = [order_id for order_id in ready if order_id not in settled]
+    waiting = len(rows) - len(checked) - len(unchecked)
 
     parts = []
     if checked:
         parts.append(f"Rechecked {_fares(len(checked))}.")
-        parts.append(f"{len(ready)} can be exchanged for a refund — review below." if ready
-                     else "No exchange would pay right now.")
-    if errors:
-        parts.append(f"{_fares(len(errors))} could not be checked: {errors[0]['error']}")
+        if done:
+            parts.append(f"{len(done)} rebooked automatically.")
+        if pending:
+            parts.append(f"{len(pending)} can be exchanged for a refund — open the trip to review it.")
+        if not ready:
+            parts.append("No exchange would pay right now.")
+    if failed:
+        parts.append(f"{len(failed)} automatic rebooking did not go through: {failed[0]['error']}")
+    if unchecked:
+        parts.append(f"{_fares(len(unchecked))} could not be checked: {unchecked[0]['error']}")
     if waiting:
         parts.append(f"{_fares(waiting)} still to go — recheck again to continue.")
     flash(" ".join(parts), "recheck")
@@ -2449,10 +2475,10 @@ def confirm_action(order_id, action):
     return render_template("confirm_action.html", nav="ops", order=record, action=action)
 
 
-def _execute_action(record, action, actor_email):
+def _execute_action(record, action, actor_email, *, unattended=False):
     """The Duffel/billing half of an execution, with no request in scope.
 
-    Called by execute() after a human types CONFIRM, and by the scheduler when
+    Called by execute() after a human types CONFIRM, and by a recheck when
     RESHOP_AUTOPILOT_ENABLED is on. One copy on purpose: two would drift, and
     this is the code that moves a real traveller's ticket.
 
@@ -2461,6 +2487,11 @@ def _execute_action(record, action, actor_email):
     spend: the signed-in user for the route, the account's owner for the cron
     (db.account_actor_email), so STAGING_ALLOWED_EMAILS still means something
     on an unattended run rather than being bypassed.
+
+    `unattended` means nobody looked at the quote first. It only ever
+    exchanges, only on the engine's own RESHOP decision, and only if the change
+    Duffel then creates is still a refund that clears the floor — it never
+    pays to exchange. Paying for one stays a choice a person makes at CONFIRM.
     """
     order_id = record["order_id"]
 
@@ -2488,6 +2519,11 @@ def _execute_action(record, action, actor_email):
     offer_id = last.get("change_offer_id") or ""
     if action == "exchange" and not offer_id:
         return False, ("no change offer on the last decision — recheck fares first")
+
+    # A skip at +40.00 carries a change offer too, so the offer alone is not
+    # the engine saying yes.
+    if unattended and (action != "exchange" or last.get("outcome") != Outcome.RESHOP.value):
+        return False, "automatic rebooking only acts on the engine's own reshop decision"
 
     # Reserve the right to call Duffel exactly once for this (order, action,
     # offer). A double submit loses the INSERT race and stops here rather than
@@ -2521,6 +2557,21 @@ def _execute_action(record, action, actor_email):
                 "data": {"selected_order_change_offer": offer_id}}, label="ui_change_create")
             duffel_change_id = change["id"]
             delta = Decimal(change["change_total_amount"])
+            if unattended and -delta < DEFAULT_POLICY.min_saving:
+                # Not the refund the engine decided on. The change was created
+                # but never confirmed, so nothing landed: release the claim and
+                # leave the ticket as it is.
+                db.release_execution(attempt["id"])
+                message = (f"automatic rebooking stopped: the airline now quotes {delta} "
+                           f"{change['change_total_currency']} to exchange, not a refund of at least "
+                           f"{DEFAULT_POLICY.min_saving}")
+                db.audit_append({
+                    "kind": "execution", "order_id": order_id, "action": action,
+                    "source": last.get("source") or "operator",
+                    "execution": "failed", "detail": message,
+                    "currency": record.get("currency") or "",
+                })
+                return False, message
             # Docs: no payment object needed when change_total <= 0.
             body = {"data": {}}
             spend = None
@@ -2639,6 +2690,7 @@ def _execute_action(record, action, actor_email):
         "old_paid": record.get("paid"),
     }
 
+    event = None
     if savings:
         # The account's real rate, never the module-level 0.25 constant —
         # savings_events.commission_rate exists precisely so a per-account
@@ -2682,9 +2734,14 @@ def _execute_action(record, action, actor_email):
     # before the row that carries it: audit_events is append-only (no
     # UPDATE), so this is the one chance to attach it, but a transient
     # failure here must not cost the execution/savings/credit trail
-    # already committed above.
-    fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
-    audit_payload["new_paid"] = fresh.get("total_amount")
+    # already committed above — nor stop the order below being marked
+    # executed, which is what keeps a landed exchange from being rechecked
+    # and exchanged again.
+    try:
+        fresh = duffel_http.request("GET", f"/air/orders/{order_id}", label="ui_order_refresh")
+    except (DuffelError, RuntimeError):
+        fresh = None
+    audit_payload["new_paid"] = fresh.get("total_amount") if fresh else None
 
     # The audit trail — an execution is the single most audit-worthy thing
     # this system does, and until now it left no trace here at all.
@@ -2693,9 +2750,50 @@ def _execute_action(record, action, actor_email):
     # already logs before a human ever confirms anything.
     db.audit_append(audit_payload)
 
-    upsert_order({"order_id": order_id, "raw": fresh, "monitoring": False,
-                  "executed": note, "paid": fresh["total_amount"], **extra})
+    # The order's own account, not the session's: the scheduler has no session,
+    # and without one this write failed after the exchange had already landed.
+    done = {"order_id": order_id, "monitoring": False, "executed": note, **extra}
+    if fresh:
+        done.update(raw=fresh, paid=fresh["total_amount"])
+    upsert_order(done, record["account_id"])
+
+    # Last, once the order says what happened: a payout that fails leaves a
+    # finished, recorded exchange with money still owed, never the reverse.
+    if event and savings["delivery_type"] == "refund_to_card":
+        _pay_out(record, event)
     return True, note
+
+
+def _pay_out(record, event):
+    """Pass a cash recovery on to the card that paid for the ticket. The
+    airline's refund went to TD's Duffel balance, which bought the ticket, so
+    this is the step that makes 'refunded to card' true.
+
+    The whole recovery goes back; the commission on it is invoiced separately
+    and never netted off (see invoice_lines). Never raises and never undoes
+    anything: a payout that cannot be made is recorded on the savings event
+    (payout_failed_at / payout_error, migration 033) for resolution, the same
+    way a failed capture is recorded on an order whose ticket is already issued.
+    """
+    try:
+        amount = Decimal(str(event["realized_savings"]))
+        if amount <= 0:
+            return
+        intent = record.get("stripe_payment_intent_id")
+        if not intent:
+            db.savings_event_payout_failed(event["id"], "no card charge on record for this order")
+            return
+        try:
+            # Keyed on the savings event, so a retry returns the same refund
+            # rather than paying the same recovery twice.
+            refund = billing.refund_to_card(intent, amount=amount,
+                                            idempotency_key=f"savings-{event['id']}")
+        except RuntimeError as exc:  # billing.CardError, or no Stripe key configured
+            db.savings_event_payout_failed(event["id"], exc)
+            return
+        db.savings_event_paid_out(event["id"], refund.id)
+    except Exception as exc:  # e.g. the database, or migration 033 not applied yet
+        print(f"  payout for savings event {event.get('id')} not recorded: {type(exc).__name__}: {exc}")
 
 
 @app.route("/orders/<order_id>/execute/<action>", methods=["POST"])

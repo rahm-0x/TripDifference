@@ -22,12 +22,15 @@ read).
   STAGING_MAX_DAILY_USD         Decimal > 0, or None when unset/invalid
   STAGING_ALLOWED_EMAILS        frozenset of lowercased emails (comma-separated);
                                 empty means nobody
-  RESHOP_AUTOPILOT_ENABLED      True only when exactly "true" (default false). Lets the
-                                /cron/reshop scheduler execute an exchange with no human
+  RESHOP_AUTOPILOT_ENABLED      True only when exactly "true" (default false). Lets every
+                                recheck — the /cron/reshop scheduler and the "Recheck all
+                                fares" button — execute an exchange with no human
                                 confirmation. A kill switch: turning it off stops
-                                unattended execution without a redeploy. The engine's own
-                                gates still apply either way — nothing executes unless
-                                change_total is negative and the saving clears min_saving.
+                                unattended execution. The engine's own gates still apply
+                                either way — nothing executes unless change_total is
+                                negative and the saving clears min_saving — and an
+                                unattended exchange is checked against the same floor
+                                again at the moment it would be confirmed.
   CRON_SECRET                   shared secret the scheduler must present as a bearer
                                 token; "" means unset, and /cron/reshop then refuses every
                                 request rather than running unauthenticated.

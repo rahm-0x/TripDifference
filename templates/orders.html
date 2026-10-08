@@ -33,6 +33,7 @@
   <button type="submit" class="btn btn-sm">Recheck all fares</button>
   <span class="muted" style="font-size:12.5px">
     Every monitored order, least recently checked first.
+    {% if autopilot %}A refund of {{ policy.min_saving }} or more is rebooked automatically.{% endif %}
   </span>
 </form>
 {% endif %}

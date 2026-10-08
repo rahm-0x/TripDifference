@@ -184,3 +184,24 @@ def cancel_authorization(payment_intent_id):
     """Step 3b — Duffel failed; release the hold. Never captured, so
     there's nothing for the customer to see or dispute."""
     return _client().PaymentIntent.cancel(payment_intent_id)
+
+
+# ---------------------------------------------------------------------------
+# passing a recovery on — a partial refund of the purchase charge
+# ---------------------------------------------------------------------------
+
+def refund_to_card(payment_intent_id, *, amount, idempotency_key):
+    """Refund `amount` of a captured fare to the card that paid it. This is
+    how a cash recovery reaches the company: the airline's refund lands in
+    TD's Duffel balance (which paid for the ticket), never on their card.
+
+    idempotency_key should be derived from the savings event, so a retry of
+    the same recovery returns the same refund instead of paying it twice.
+    Stripe itself refuses a refund larger than what was captured.
+    """
+    try:
+        return _client().Refund.create(payment_intent=payment_intent_id,
+                                       amount=_to_minor_units(amount),
+                                       idempotency_key=idempotency_key)
+    except stripe.error.StripeError as exc:
+        raise CardError(str(exc)) from exc

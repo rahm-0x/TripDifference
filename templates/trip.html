@@ -55,6 +55,9 @@
     <b>Credited {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
     {% elif ev.delivery_type == 'forfeited' %}
     <b>The fare dropped, but nothing was recovered.</b> {{ ev.delivery_detail }}
+    {% elif ev.payout_failed_at %}
+    <b>Recovered {{ ev.realized_savings }} {{ ev.currency }} on this ticket.</b>
+    The refund to your {{ ev.delivery_detail }} has not gone through yet — we're resolving it.
     {% else %}
     <b>Refunded {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
     {% endif %}
@@ -235,6 +238,7 @@
         <dl class="meta">
           <div><dt>Last checked</dt><dd>{{ trip.last_checked or 'Never' }}</dd></div>
           <div><dt>Savings floor</dt><dd>{{ policy.min_saving }} {{ trip.currency }}</dd></div>
+          <div><dt>Rebooking</dt><dd>{{ 'Automatic' if autopilot else 'After you confirm' }}</dd></div>
           <div><dt>Stops</dt><dd>{{ policy.departure_buffer_hours }}h before departure</dd></div>
           {% if card %}
           <div><dt>Refunds to</dt><dd>{{ card.brand }} ···· {{ card.last4 }}</dd></div>

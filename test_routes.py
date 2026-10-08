@@ -148,8 +148,8 @@ def _reshop_cron(monkeypatch, executed_calls):
         outcome = app_module.Outcome.RESHOP
     monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: _D())
 
-    def _exec(record, action, actor_email):
-        executed_calls.append((record["order_id"], action, actor_email))
+    def _exec(record, action, actor_email, unattended=False):
+        executed_calls.append((record["order_id"], action, actor_email, unattended))
         return True, "exchanged"
     monkeypatch.setattr(app_module, "_execute_action", _exec)
 
@@ -179,7 +179,8 @@ def test_autopilot_on_executes_as_the_account_owner(monkeypatch):
     assert body["autopilot"] is True
     assert body["reshop_decided"] == ["ord_1"]
     assert [e["order_id"] for e in body["executed"]] == ["ord_1"]
-    assert calls == [("ord_1", "exchange", "owner@example.com")]
+    # unattended: nobody looked at the quote, so it is held to a refund
+    assert calls == [("ord_1", "exchange", "owner@example.com", True)]
 
 
 def _monitored(account_id, **fields):
@@ -215,23 +216,79 @@ def test_recheck_all_covers_every_monitored_order_on_the_account_and_no_other(lo
     assert "Recheck all fares" in page and "Run live cycle" not in page
 
 
-def test_recheck_all_never_executes_even_with_autopilot_on(logged_in, monkeypatch):
-    """Autopilot is the scheduler's switch. A person clicking recheck gets a
-    decision to review; the exchange still goes through CONFIRM."""
+class _Reshop:
+    outcome = app_module.Outcome.RESHOP
+
+
+def test_recheck_all_with_autopilot_off_decides_and_leaves_the_exchange_for_confirm(logged_in, monkeypatch):
     client, account = logged_in
     _monitored(account["account_id"])
-    monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
-
-    class _D:
-        outcome = app_module.Outcome.RESHOP
-    monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: _D())
+    monkeypatch.delenv("RESHOP_AUTOPILOT_ENABLED", raising=False)
+    monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: _Reshop())
 
     def _no_execution(*a, **k):
-        raise AssertionError("a recheck must not reach _execute_action")
+        raise AssertionError("autopilot off must not reach _execute_action")
     monkeypatch.setattr(app_module, "_execute_action", _no_execution)
 
     client.post("/orders/recheck", data={"_csrf": CSRF})
     assert "Rechecked 1 fare. 1 can be exchanged for a refund" in client.get("/orders").get_data(as_text=True)
+
+
+def test_recheck_all_with_autopilot_on_rebooks_as_the_person_who_pressed_it(logged_in, monkeypatch):
+    """The same switch the scheduler obeys. On, a refund that clears the floor
+    is exchanged in the same request — unattended, so held to a refund."""
+    client, account = logged_in
+    order = _monitored(account["account_id"])
+    monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
+    monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: _Reshop())
+    calls = []
+
+    def _exec(record, action, actor_email, unattended=False):
+        calls.append((record["order_id"], action, actor_email, unattended))
+        return True, "exchange confirmed"
+    monkeypatch.setattr(app_module, "_execute_action", _exec)
+
+    client.post("/orders/recheck", data={"_csrf": CSRF})
+    assert calls == [(order["order_id"], "exchange", account["email"], True)]
+    page = client.get("/orders").get_data(as_text=True)
+    assert "Rechecked 1 fare. 1 rebooked automatically." in page and "can be exchanged" not in page
+
+
+def test_recheck_all_reports_an_automatic_rebooking_that_did_not_go_through(logged_in, monkeypatch):
+    client, account = logged_in
+    _monitored(account["account_id"])
+    monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
+    monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: _Reshop())
+    monkeypatch.setattr(app_module, "_execute_action",
+                        lambda *a, **k: (False, "automatic rebooking stopped: the airline now quotes 40.00"))
+
+    client.post("/orders/recheck", data={"_csrf": CSRF})
+    page = client.get("/orders").get_data(as_text=True)
+    assert "1 automatic rebooking did not go through: automatic rebooking stopped" in page
+    assert "still to go" not in page and "could not be checked" not in page
+
+
+def test_no_automatic_exchange_is_started_late_in_a_run(logged_in, monkeypatch):
+    """An exchange cut off by the function's time limit could land at the
+    airline with nothing recorded here. Past the cut-off the decision is left
+    standing for a later run or a person."""
+    client, account = logged_in
+    _monitored(account["account_id"])
+    monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
+    clock = [0.0]
+    monkeypatch.setattr(app_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def _slow_cycle(*a, **k):
+        clock[0] += app_module.CRON_EXECUTE_BY_SECONDS + 1
+        return _Reshop()
+    monkeypatch.setattr(app_module, "_run_cycle", _slow_cycle)
+
+    def _no_execution(*a, **k):
+        raise AssertionError("too late in the run to start an exchange")
+    monkeypatch.setattr(app_module, "_execute_action", _no_execution)
+
+    client.post("/orders/recheck", data={"_csrf": CSRF})
+    assert "1 can be exchanged for a refund" in client.get("/orders").get_data(as_text=True)
 
 
 def test_recheck_all_stops_on_its_budget_and_says_what_is_left(logged_in, monkeypatch):

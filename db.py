@@ -469,6 +469,21 @@ def savings_event_create(order_id, *, execution_attempt_id, old_amount, new_amou
              _num(commission_rate), commission_amount), fetch="one")
 
 
+def savings_event_paid_out(event_id, stripe_refund_id):
+    """The recovery reached the company's card (migration 033). Clears an
+    earlier failure, so a retry that succeeds reads as paid."""
+    q("""UPDATE savings_events
+            SET stripe_refund_id = %s, payout_failed_at = NULL, payout_error = NULL
+          WHERE id = %s""", (stripe_refund_id, event_id))
+
+
+def savings_event_payout_failed(event_id, error):
+    """Recovered, but not yet passed on — flagged for resolution, never
+    silently dropped."""
+    q("""UPDATE savings_events SET payout_failed_at = now(), payout_error = %s
+          WHERE id = %s""", (str(error)[:500], event_id))
+
+
 def savings_events_for_order(order_id):
     rows = q("""SELECT * FROM savings_events WHERE order_id = %s
                 ORDER BY created_at DESC""", (order_id,), fetch="all")

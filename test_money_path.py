@@ -846,6 +846,200 @@ def test_exchange_negative_delta_reads_refund_to(logged_in_carded):
 
 
 # ---------------------------------------------------------------------------
+# unattended exchange — nobody looks at the quote, so it is held to a refund
+# ---------------------------------------------------------------------------
+
+RESHOP_DECISION = {"source": "duffel", "outcome": "reshop", "change_offer_id": "oco_test1"}
+
+
+def _exchange_quoting(change_total, confirmed, refund_to="original_form_of_payment", refresh_error=None):
+    """duffel_http.request for an exchange whose created change quotes
+    `change_total`. Every confirm call that is made lands in `confirmed`.
+    `refresh_error`, if given, is raised by the order refresh afterwards."""
+    def _mock(method, path, body=None, params=None, label=None):
+        if method == "POST" and path == "/air/order_changes":
+            return {"id": "chg_test1", "change_total_amount": change_total,
+                    "change_total_currency": "USD"}
+        if method == "POST" and path.endswith("/actions/confirm"):
+            confirmed.append(body)
+            return {"confirmed_at": "2026-12-01T00:00:00Z", "refund_to": refund_to}
+        if method == "GET" and path.startswith("/air/orders/"):
+            if refresh_error:
+                raise refresh_error
+            return fake_order(order_id=path.rsplit("/", 1)[-1])
+        raise AssertionError(f"unexpected duffel_http.request({method!r}, {path!r})")
+    return _mock
+
+
+@pytest.mark.parametrize("change_total", ["40.00", "0.00", "-9.99"])
+def test_unattended_exchange_confirms_nothing_but_a_refund_that_clears_the_floor(logged_in_carded, change_total):
+    """The change Duffel creates has to still be the refund the engine decided
+    on. A charge, a wash, or a refund under the floor is left unconfirmed — and
+    stays retryable, because nothing landed."""
+    _, account = logged_in_carded
+    order = make_real_order(account["account_id"], last_decision=RESHOP_DECISION)
+    confirmed = []
+    with patch("duffel_http.request", side_effect=_exchange_quoting(change_total, confirmed)):
+        ok, message = app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                                 account["email"], unattended=True)
+    assert ok is False and "automatic rebooking stopped" in message and change_total in message
+    assert confirmed == [], "an unattended exchange must never be confirmed at this quote"
+    assert db.savings_events_for_order(order["order_id"]) == []
+    assert not db.find_order(order["order_id"]).get("executed")
+    # The claim was released: the same offer can be attempted again.
+    db.release_execution(db.claim_execution(order["order_id"], "exchange", "oco_test1")["id"])
+
+
+def test_unattended_exchange_confirms_a_refund_at_the_floor(logged_in_carded):
+    """Called with no request and no session, as the scheduler calls it: the
+    final write to the order used to take its account from the session, and
+    failed after the exchange had already landed."""
+    _, account = logged_in_carded
+    order = make_real_order(account["account_id"], last_decision=RESHOP_DECISION)
+    confirmed = []
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-10.00", confirmed)):
+        ok, _ = app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+    assert ok is True
+    assert confirmed == [{"data": {}}], "a refund is confirmed with no payment attached"
+    assert db.savings_events_for_order(order["order_id"])[0]["realized_savings"] == "10.00"
+    assert db.find_order(order["order_id"])["executed"]
+
+
+@pytest.mark.parametrize("last_decision,action", [
+    ({**RESHOP_DECISION, "outcome": "skip"}, "exchange"),    # a skip at +40.00 carries an offer too
+    ({"source": "duffel", "change_offer_id": "oco_test1"}, "exchange"),
+    (RESHOP_DECISION, "cancel"),
+])
+def test_unattended_only_ever_exchanges_on_a_reshop_decision(logged_in_carded, last_decision, action):
+    _, account = logged_in_carded
+    order = make_real_order(account["account_id"], last_decision=last_decision)
+    with patch("duffel_http.request", side_effect=AssertionError("must not reach Duffel")):
+        ok, message = app_module._execute_action(db.find_order(order["order_id"]), action,
+                                                 account["email"], unattended=True)
+    assert ok is False and "reshop decision" in message
+
+
+def test_a_person_at_confirm_may_still_pay_to_exchange(logged_in_carded):
+    """The refund-only rule is for unattended runs. Typing CONFIRM on a quote
+    that costs money remains a choice a person can make."""
+    client, account = logged_in_carded
+    order = make_real_order(account["account_id"],
+                            last_decision={"source": "duffel", "change_offer_id": "oco_test1"})
+    confirmed = []
+    with patch("duffel_http.request", side_effect=_exchange_quoting("40.00", confirmed)):
+        resp = client.post(f"/orders/{order['order_id']}/execute/exchange",
+                           data={"confirm_text": "CONFIRM", "_csrf": CSRF}, follow_redirects=False)
+    assert resp.status_code == 302
+    assert confirmed == [{"data": {"payment": {"type": "balance", "currency": "USD", "amount": "40.00"}}}]
+
+
+def test_an_exchange_is_marked_done_even_if_the_order_refresh_fails(logged_in_carded):
+    """The refresh only fetches the new total. Losing it must not leave a
+    landed exchange looking untouched — still monitored, and exchangeable again."""
+    _, account = logged_in_carded
+    order = make_real_order(account["account_id"], last_decision=RESHOP_DECISION)
+    db.upsert_order({"order_id": order["order_id"], "monitoring": True}, account["account_id"])
+    mock = _exchange_quoting("-45.00", [], refresh_error=DuffelError(503, []))
+    with patch("duffel_http.request", side_effect=mock):
+        ok, _ = app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+    after = db.find_order(order["order_id"])
+    assert ok is True and after["executed"] and after["monitoring"] is False
+    assert db.account_orders_due_a_check(account["account_id"]) == []
+
+
+# ---------------------------------------------------------------------------
+# paying a cash recovery out — the airline refunds TD's Duffel balance, so the
+# company's card only gets it back through a Stripe refund
+# ---------------------------------------------------------------------------
+
+def _charged_order(account_id, intent="pi_test_payout", **kwargs):
+    """A booked order that carries the card charge it was paid with."""
+    order = make_real_order(account_id, **kwargs)
+    return db.upsert_order({"order_id": order["order_id"], "stripe_payment_intent_id": intent}, account_id)
+
+
+def test_a_cash_recovery_is_refunded_in_full_to_the_card_that_paid(logged_in_carded):
+    _, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-45.00", [])), \
+         patch("billing.refund_to_card", return_value=MagicMock(id="re_test_1")) as refund:
+        ok, _ = app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+    assert ok is True
+    event = db.savings_events_for_order(order["order_id"])[0]
+    # The whole recovery, not net of the commission, keyed so a retry cannot pay twice.
+    refund.assert_called_once_with("pi_test_payout", amount=Decimal("45.00"),
+                                   idempotency_key=f"savings-{event['id']}")
+    assert event["delivery_type"] == "refund_to_card" and event["commission_amount"] == "11.25"
+    assert event["stripe_refund_id"] == "re_test_1" and event["payout_failed_at"] is None
+
+
+def test_a_cancellation_refund_is_passed_on_to_the_card(logged_in_carded):
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"])
+    with patch("billing.refund_to_card", return_value=MagicMock(id="re_test_2")) as refund:
+        execute_cancel(client, order["order_id"], "219.00", refund_to="original_form_of_payment")
+    assert refund.call_args.kwargs["amount"] == Decimal("219.00")
+    assert db.savings_events_for_order(order["order_id"])[0]["stripe_refund_id"] == "re_test_2"
+
+
+@pytest.mark.parametrize("via", ["exchange", "cancel"])
+def test_airline_credit_and_forfeiture_never_touch_the_card(logged_in_carded, via):
+    """Credit stays with the airline in the traveller's name, and a forfeited
+    fare returned nothing — there is no cash to send in either case."""
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("billing.refund_to_card") as refund:
+        if via == "exchange":
+            with patch("duffel_http.request",
+                       side_effect=_exchange_quoting("-45.00", [], refund_to="airline_credits")):
+                app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+        else:
+            execute_cancel(client, order["order_id"], "0.00")
+    refund.assert_not_called()
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert event["delivery_type"] == ("airline_credit" if via == "exchange" else "forfeited")
+    assert event["stripe_refund_id"] is None and event["payout_failed_at"] is None
+
+
+def test_a_failed_payout_is_recorded_as_owed_and_the_exchange_stands(logged_in_carded):
+    _, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-45.00", [])), \
+         patch("billing.refund_to_card", side_effect=billing.CardError("charge already refunded")):
+        ok, _ = app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+    assert ok is True, "the exchange landed; a payout problem does not undo or fail it"
+    assert db.find_order(order["order_id"])["executed"]
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert event["stripe_refund_id"] is None and event["payout_failed_at"] is not None
+    assert "already refunded" in event["payout_error"]
+
+
+def test_an_order_with_no_card_charge_on_record_is_flagged_not_refunded(logged_in_carded):
+    _, account = logged_in_carded
+    order = make_real_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-45.00", [])), \
+         patch("billing.refund_to_card") as refund:
+        app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                   account["email"], unattended=True)
+    refund.assert_not_called()
+    assert "no card charge on record" in db.savings_events_for_order(order["order_id"])[0]["payout_error"]
+
+
+def test_refund_to_card_asks_stripe_for_a_partial_refund_of_that_charge():
+    with patch("billing._client") as client:
+        client.return_value.Refund.create.return_value = MagicMock(id="re_test_3")
+        refund = billing.refund_to_card("pi_test_x", amount=Decimal("45.10"), idempotency_key="savings-7")
+    assert refund.id == "re_test_3"
+    client.return_value.Refund.create.assert_called_once_with(
+        payment_intent="pi_test_x", amount=4510, idempotency_key="savings-7")
+
+
+# ---------------------------------------------------------------------------
 # difference-band baseline stepping (item 3) — the dashed "paid" line steps
 # down at the moment an exchange actually lands, instead of sloping between
 # the old and new paid amount.
