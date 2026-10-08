@@ -118,7 +118,7 @@ class ReshopPolicy:
     min_saving is the profitability floor: the refund must clear it or we do
     nothing. Set it above your own cost of executing the change.
     """
-    min_saving: Decimal = Decimal("20.00")
+    min_saving: Decimal = Decimal("10.00")
     departure_buffer_hours: int = 24
     respect_void_window: bool = True
 

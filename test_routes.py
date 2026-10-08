@@ -14,6 +14,7 @@ write.
 
 import os
 import re
+from decimal import Decimal
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
@@ -314,6 +315,12 @@ def test_trip_page_offers_the_recheck_and_the_exchange_without_the_ops_console(l
     assert exchange not in trip_page({**reshop, "source": "simulated"}), "a simulated price never reaches Duffel"
 
     assert "Recheck all fares" in client.get("/trips").get_data(as_text=True)
+
+
+def test_the_app_rebooks_at_the_same_floor_as_the_engine_default():
+    """app.DEFAULT_POLICY is what every cycle actually runs with; it and the
+    engine's own default are two literals that must not drift."""
+    assert app_module.DEFAULT_POLICY.min_saving == app_module.ReshopPolicy().min_saving == Decimal("10.00")
 
 
 def test_execute_action_refuses_an_already_executed_order():

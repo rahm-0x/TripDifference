@@ -86,7 +86,7 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=db.SESSION_TTL,
 )
 
-DEFAULT_POLICY = ReshopPolicy(min_saving=Decimal("20.00"), departure_buffer_hours=24)
+DEFAULT_POLICY = ReshopPolicy(min_saving=Decimal("10.00"), departure_buffer_hours=24)
 
 PASSENGER_FIELDS = ("title", "given_name", "family_name", "born_on", "gender",
                     "email", "phone_number")

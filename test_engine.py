@@ -89,6 +89,14 @@ def test_saving_exactly_at_floor_reshops():
     assert d.saving == Decimal("20.00")
 
 
+def test_the_default_floor_is_ten_dollars():
+    """What ships when no policy is passed: a 10.00 refund is worth rebooking
+    for, 9.99 is not."""
+    assert run(make_order(), make_source(change_total="-10.00")).outcome is Outcome.RESHOP
+    below = run(make_order(), make_source(change_total="-9.99"))
+    assert below.outcome is Outcome.SKIP and below.reason is Reason.BELOW_FLOOR
+
+
 def test_floor_is_configurable():
     src = make_source(change_total="-45.00")
     assert run(make_order(), src, ReshopPolicy(min_saving=Decimal("50.00"))).outcome is Outcome.SKIP
