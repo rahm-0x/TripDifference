@@ -14,11 +14,13 @@ write.
 
 import os
 import re
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import app as app_module
 import config
-from test_money_path import acct, client, logged_in  # noqa: F401
+import db
+from test_money_path import CSRF, acct, client, logged_in, make_real_order, new_account  # noqa: F401
 
 LIVE_TOKEN = "duffel_live_" + "0" * 32
 
@@ -176,6 +178,99 @@ def test_autopilot_on_executes_as_the_account_owner(monkeypatch):
     assert body["reshop_decided"] == ["ord_1"]
     assert [e["order_id"] for e in body["executed"]] == ["ord_1"]
     assert calls == [("ord_1", "exchange", "owner@example.com")]
+
+
+def _monitored(account_id, **fields):
+    order = make_real_order(account_id)
+    return db.upsert_order({"order_id": order["order_id"], "monitoring": True, **fields}, account_id)
+
+
+def test_recheck_all_covers_every_monitored_order_on_the_account_and_no_other(logged_in, monkeypatch):
+    """One click, every monitored order — never-checked first, then the oldest
+    check — and nothing that is paused, finished, or another account's."""
+    client, account = logged_in
+    mine = account["account_id"]
+    checked_before = _monitored(mine, last_checked_at="2026-09-20T08:00:00+00:00")
+    never_checked = _monitored(mine)
+    make_real_order(mine)                                           # paused
+    _monitored(mine, executed="exchange confirmed earlier")         # finished
+    other = new_account("other")
+    _monitored(other["account_id"])
+
+    cycled = []
+    monkeypatch.setattr(app_module, "_run_cycle",
+                        lambda order_id, source, account_id=None: cycled.append((order_id, str(account_id))))
+    try:
+        resp = client.post("/orders/recheck", data={"_csrf": CSRF})
+    finally:
+        db.q("DELETE FROM accounts WHERE id = %s", (other["account_id"],))
+
+    assert resp.status_code == 302 and resp.headers["Location"].endswith("/orders")
+    assert cycled == [(never_checked["order_id"], str(mine)), (checked_before["order_id"], str(mine))]
+
+    page = client.get("/orders").get_data(as_text=True)
+    assert "Rechecked 2 fares. No exchange would pay right now." in page
+    assert "Recheck all fares" in page and "Run live cycle" not in page
+
+
+def test_recheck_all_never_executes_even_with_autopilot_on(logged_in, monkeypatch):
+    """Autopilot is the scheduler's switch. A person clicking recheck gets a
+    decision to review; the exchange still goes through CONFIRM."""
+    client, account = logged_in
+    _monitored(account["account_id"])
+    monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
+
+    class _D:
+        outcome = app_module.Outcome.RESHOP
+    monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: _D())
+
+    def _no_execution(*a, **k):
+        raise AssertionError("a recheck must not reach _execute_action")
+    monkeypatch.setattr(app_module, "_execute_action", _no_execution)
+
+    client.post("/orders/recheck", data={"_csrf": CSRF})
+    assert "Rechecked 1 fare. 1 can be exchanged for a refund" in client.get("/orders").get_data(as_text=True)
+
+
+def test_recheck_all_stops_on_its_budget_and_says_what_is_left(logged_in, monkeypatch):
+    """A list longer than one request can cover is worked through in turns: a
+    failing order is stamped so it goes to the back instead of blocking the
+    queue, and whatever wasn't reached is reported."""
+    client, account = logged_in
+    mine = account["account_id"]
+    failing, fine, unreached = (_monitored(mine, last_checked_at=f"2026-09-2{day}T08:00:00+00:00")
+                                for day in (1, 2, 3))
+
+    # Each cycle "takes" 30s against the 45s budget, so the third never starts.
+    clock = [0.0]
+    monkeypatch.setattr(app_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def _cycle(order_id, source, account_id=None):
+        clock[0] += 30
+        if order_id == failing["order_id"]:
+            raise RuntimeError("duffel exploded")
+    monkeypatch.setattr(app_module, "_run_cycle", _cycle)
+
+    client.post("/orders/recheck", data={"_csrf": CSRF})
+    page = client.get("/orders").get_data(as_text=True)
+    assert "Rechecked 1 fare." in page
+    assert "1 fare could not be checked: duffel exploded" in page
+    assert "1 fare still to go" in page
+
+    queue = [row["order_id"] for row in db.account_orders_due_a_check(mine)]
+    assert queue == [fine["order_id"], unreached["order_id"], failing["order_id"]]
+
+
+def test_recheck_all_with_nothing_monitored_runs_nothing(logged_in, monkeypatch):
+    client, account = logged_in
+    make_real_order(account["account_id"])                          # paused
+
+    def _no_cycles(*a, **k):
+        raise AssertionError("nothing monitored must not run a cycle")
+    monkeypatch.setattr(app_module, "_run_cycle", _no_cycles)
+
+    client.post("/orders/recheck", data={"_csrf": CSRF})
+    assert "nothing to recheck" in client.get("/orders").get_data(as_text=True)
 
 
 def test_execute_action_refuses_an_already_executed_order():

@@ -1326,6 +1326,17 @@ def orders_due_a_check(limit):
              (TEST_ACCOUNT_NAME, limit), fetch="all")
 
 
+def account_orders_due_a_check(account_id):
+    """One account's part of that queue, in the same least-recently-checked
+    order, for the ops console's "Recheck all fares". No limit: the caller
+    stops on its own time budget, and the ordering means the next run starts
+    with whatever this one didn't reach."""
+    return q("""SELECT order_id, account_id FROM orders
+                 WHERE account_id = %s AND monitoring AND executed IS NULL
+              ORDER BY last_checked_at NULLS FIRST""",
+             (account_id,), fetch="all")
+
+
 def account_actor_email(account_id):
     """The email the scheduler acts as for an account, for live_guard's
     allowlist check. A cron has no signed-in user, but an unattended live

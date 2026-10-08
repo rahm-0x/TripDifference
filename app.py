@@ -2241,12 +2241,24 @@ def cron_reshop():
     if not secret or not presented or not hmac.compare_digest(presented, secret):
         return {"error": "unauthorized"}, 401
 
-    started = time.monotonic()
-    source = get_price_source("duffel")
     autopilot = config.RESHOP_AUTOPILOT_ENABLED
+    result = _recheck(db.orders_due_a_check(CRON_MAX_ORDERS), get_price_source("duffel"),
+                      autopilot=autopilot)
+    return {**result, "autopilot": autopilot}
+
+
+def _recheck(rows, source, *, autopilot=False):
+    """Run a reshop cycle over `rows` (order_id and account_id), in the order
+    given, until CRON_BUDGET_SECONDS is spent. One copy for the scheduler and
+    the ops console's "Recheck all fares", so both walk the queue the same way:
+    whatever a run doesn't reach is still first in line for the next one.
+
+    Decides only, unless `autopilot`.
+    """
+    started = time.monotonic()
     checked, reshop_decided, executed, errors = [], [], [], []
 
-    for row in db.orders_due_a_check(CRON_MAX_ORDERS):
+    for row in rows:
         if time.monotonic() - started > CRON_BUDGET_SECONDS:
             break
         order_id, account_id = row["order_id"], row["account_id"]
@@ -2282,8 +2294,44 @@ def cron_reshop():
             {"order_id": order_id, "detail" if ok else "error": message[:200]})
 
     return {"checked": checked, "reshop_decided": reshop_decided,
-            "executed": executed, "autopilot": autopilot, "errors": errors,
+            "executed": executed, "errors": errors,
             "elapsed_seconds": round(time.monotonic() - started, 1)}
+
+
+def _fares(n):
+    return f"{n} fare{'' if n == 1 else 's'}"
+
+
+@app.route("/orders/recheck", methods=["POST"])
+@auth.login_required
+def recheck_all():
+    """Recheck every fare this account is monitoring — the scheduler's run,
+    for one account, now. Same queue order and time budget, so a long list is
+    worked through over successive runs rather than timing out partway.
+
+    Never executes, whatever RESHOP_AUTOPILOT_ENABLED says: a person asked for
+    a recheck, and an exchange from here still goes through CONFIRM.
+    """
+    rows = db.account_orders_due_a_check(_account())
+    if not rows:
+        flash("No fares are being monitored, so there was nothing to recheck.", "recheck")
+        return redirect(url_for("orders"))
+
+    result = _recheck(rows, get_price_source("duffel"))
+    checked, ready, errors = result["checked"], result["reshop_decided"], result["errors"]
+    waiting = len(rows) - len(checked) - len(errors)
+
+    parts = []
+    if checked:
+        parts.append(f"Rechecked {_fares(len(checked))}.")
+        parts.append(f"{len(ready)} can be exchanged for a refund — review below." if ready
+                     else "No exchange would pay right now.")
+    if errors:
+        parts.append(f"{_fares(len(errors))} could not be checked: {errors[0]['error']}")
+    if waiting:
+        parts.append(f"{_fares(waiting)} still to go — recheck again to continue.")
+    flash(" ".join(parts), "recheck")
+    return redirect(url_for("orders"))
 
 
 @app.route("/orders/<order_id>/simulate", methods=["POST"])
@@ -2366,23 +2414,6 @@ def reset_sim_all():
     return redirect(request.form.get("back") or url_for("orders"))
 
 
-@app.route("/orders/<order_id>/cycle", methods=["POST"])
-@auth.login_required
-def cycle(order_id):
-    source = get_price_source(request.form.get("source") or "duffel")
-    try:
-        _run_cycle(order_id, source)
-    except (DuffelError, RuntimeError) as exc:
-        if find_order(order_id):
-            upsert_order({"order_id": order_id, "last_decision": {
-                "ts": datetime.now(timezone.utc).isoformat(), "source": source.name,
-                "outcome": "error", "reason": "api_error", "detail": str(exc),
-                "market_best": None, "market_delta": None, "change_total": None,
-                "change_offer_id": "", "saving": None, "floor": str(DEFAULT_POLICY.min_saving),
-            }})
-    return redirect(url_for("orders"))
-
-
 # ---------------------------------------------------------------------------
 # execution — always two steps
 # ---------------------------------------------------------------------------
@@ -2439,11 +2470,11 @@ def _execute_action(record, action, actor_email):
     last = record.get("last_decision") or {}
     if last.get("source") == "simulated":
         return False, ("Last decision came from the simulated source. "
-                      "Run a live cycle before executing anything real.")
+                      "Recheck fares before executing anything real.")
 
     offer_id = last.get("change_offer_id") or ""
     if action == "exchange" and not offer_id:
-        return False, ("no change offer on the last decision — run a live cycle first")
+        return False, ("no change offer on the last decision — recheck fares first")
 
     # Reserve the right to call Duffel exactly once for this (order, action,
     # offer). A double submit loses the INSERT race and stops here rather than

@@ -21,11 +21,28 @@
   </div>
 </div>
 
+{% with msgs = get_flashed_messages(category_filter=['recheck']) %}
+{% if msgs %}
+<div class="notice" style="margin-bottom:18px">
+  <span>↻</span><div>{{ msgs[0] }}</div>
+</div>
+{% endif %}
+{% endwith %}
+
 {% if not orders %}
 <div class="card" style="text-align:center; padding:44px">
   <p class="muted" style="margin:0 0 16px">Nothing booked yet.</p>
   <a href="{{ url_for('index') }}" class="btn">Search flights</a>
 </div>
+{% else %}
+<form method="post" action="{{ url_for('recheck_all') }}"
+      style="display:flex; align-items:center; gap:12px; margin-bottom:18px">
+  <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+  <button type="submit" class="btn btn-sm">Recheck all fares</button>
+  <span class="muted" style="font-size:12.5px">
+    Every monitored order, least recently checked first.
+  </span>
+</form>
 {% endif %}
 
 {% for o in orders %}
@@ -162,12 +179,6 @@
         </button>
         {% endfor %}
       </div>
-    </form>
-
-    <form method="post" action="{{ url_for('cycle', order_id=o.order_id) }}">
-      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-      <input type="hidden" name="source" value="duffel">
-      <button type="submit" class="btn-ghost btn-sm">Run live cycle</button>
     </form>
 
     {% if o.source == 'td_rebook' %}

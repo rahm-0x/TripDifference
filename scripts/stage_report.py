@@ -156,11 +156,11 @@ COMPONENTS = [
          tests=None, note="Failures are flagged (tested); clearing them is a manual DB write."),
 
     # --- Fare Monitoring -----------------------------------------------------
-    dict(stage="Fare Monitoring", name="Monitoring toggle + manual reshop cycle", status=BU, core=True,
+    dict(stage="Fare Monitoring", name="Monitoring toggle + recheck of all monitored fares", status=BT, core=True,
          evidence=[E("app.py", r"^def toggle_monitor\("), E("app.py", r"^def _run_cycle\("),
-                   E("app.py", r'"/orders/<order_id>/cycle"')],
-         tests=r"_run_cycle|toggle_monitor|/cycle|/monitor",
-         note="Runs only when someone clicks; no test hits these routes."),
+                   E("app.py", r'"/orders/recheck"')],
+         tests=r"_run_cycle|toggle_monitor|/orders/recheck|/monitor",
+         note="One click rechecks every monitored order on the account; the scheduler runs the same loop."),
     dict(stage="Fare Monitoring", name="Simulated price source", status=BT,
          evidence=[E("prices.py", r"^class SimulatedPriceSource\b")],
          tests=r"SimulatedPriceSource|simulated"),
