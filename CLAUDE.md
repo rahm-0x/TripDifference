@@ -162,9 +162,11 @@ notes, and the list of known, deliberate gaps.
   account, least-recently-checked first, at most `CRON_MAX_ORDERS` a run inside
   `CRON_BUDGET_SECONDS`. **Vercel fires crons on production deployments only**, so on
   staging (a Preview deployment) nothing calls it unless something external does.
-- **"Recheck all fares"** (`POST /orders/recheck`, ops console) runs the same loop for
-  the signed-in account's orders and never executes, whatever the autopilot flag says.
-  There is no per-order cycle button.
+- **"Recheck all fares"** (`POST /orders/recheck`; the button is on Reservations, each
+  trip page and the ops console) runs the same loop for the signed-in account's orders
+  and never executes, whatever the autopilot flag says. A trip page links to the
+  exchange's CONFIRM step once its last decision is a real (non-simulated) RESHOP, so a
+  booked ticket needs nothing from the ops console. There is no per-order cycle button.
 
 ## What's dormant, not deleted
 

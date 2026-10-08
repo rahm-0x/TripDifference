@@ -49,7 +49,7 @@
       </div>
       <div style="display:flex; gap:10px">
         <button type="submit" class="{{ 'btn-danger' if action == 'cancel' }}">Execute {{ action }}</button>
-        <a href="{{ url_for('orders') }}" class="btn btn-ghost">Cancel</a>
+        <a href="{{ url_for('trip_detail', order_id=order.order_id) }}" class="btn btn-ghost">Cancel</a>
       </div>
     </form>
   </div>

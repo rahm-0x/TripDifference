@@ -37,6 +37,13 @@
     <button type="button" class="tab" data-tab="all">All reservations</button>
   </div>
   <div class="res-toolbar-r">
+    {% if upcoming %}
+    <form method="post" action="{{ url_for('recheck_all') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ url_for('trips') }}">
+      <button type="submit" class="btn-ghost btn-sm">Recheck all fares</button>
+    </form>
+    {% endif %}
     <input id="resSearch" class="search" placeholder="Search reservations…">
   </div>
 </div>

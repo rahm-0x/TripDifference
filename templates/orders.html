@@ -21,14 +21,6 @@
   </div>
 </div>
 
-{% with msgs = get_flashed_messages(category_filter=['recheck']) %}
-{% if msgs %}
-<div class="notice" style="margin-bottom:18px">
-  <span>↻</span><div>{{ msgs[0] }}</div>
-</div>
-{% endif %}
-{% endwith %}
-
 {% if not orders %}
 <div class="card" style="text-align:center; padding:44px">
   <p class="muted" style="margin:0 0 16px">Nothing booked yet.</p>

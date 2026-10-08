@@ -272,7 +272,23 @@
             <div style="font-size:12.5px; line-height:1.5">{{ d.execution_detail }}</div>
           </div>
           {% endif %}
+
+          {# Same condition the ops console uses: a real airline quote that is
+             a refund, on a ticket we issued, not yet acted on. #}
+          {% if d.outcome == 'reshop' and d.source == 'duffel'
+                and trip.source == 'td_rebook' and not trip.executed %}
+          <a href="{{ url_for('confirm_action', order_id=trip.order_id, action='exchange') }}"
+             class="btn btn-sm" style="margin-top:12px">Review exchange →</a>
+          {% endif %}
         </div>
+        {% endif %}
+
+        {% if trip.monitoring and not trip.executed %}
+        <form method="post" action="{{ url_for('recheck_all') }}" style="margin-top:14px">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="hidden" name="next" value="{{ url_for('trip_detail', order_id=trip.order_id) }}">
+          <button type="submit" class="btn-ghost btn-sm">Recheck all fares</button>
+        </form>
         {% endif %}
       {% endif %}
     </div>

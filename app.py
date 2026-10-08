@@ -2323,10 +2323,12 @@ def recheck_all():
     Never executes, whatever RESHOP_AUTOPILOT_ENABLED says: a person asked for
     a recheck, and an exchange from here still goes through CONFIRM.
     """
+    # Back to whichever page the button was on — Reservations, a trip, or ops.
+    back = _safe_next(request.form.get("next") or url_for("orders"))
     rows = db.account_orders_due_a_check(_account())
     if not rows:
         flash("No fares are being monitored, so there was nothing to recheck.", "recheck")
-        return redirect(url_for("orders"))
+        return redirect(back)
 
     result = _recheck(rows, get_price_source("duffel"))
     checked, ready, errors = result["checked"], result["reshop_decided"], result["errors"]
@@ -2342,7 +2344,7 @@ def recheck_all():
     if waiting:
         parts.append(f"{_fares(waiting)} still to go — recheck again to continue.")
     flash(" ".join(parts), "recheck")
-    return redirect(url_for("orders"))
+    return redirect(back)
 
 
 @app.route("/orders/<order_id>/simulate", methods=["POST"])

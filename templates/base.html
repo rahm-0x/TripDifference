@@ -574,6 +574,12 @@
 
     <main class="{{ width|default('narrow' if hide_nav else '') }}">
       {% if error %}<div class="notice notice-err" style="margin-bottom:18px">{{ error }}</div>{% endif %}
+      {# What "Recheck all fares" found, on whichever page the button was pressed. #}
+      {% with msgs = get_flashed_messages(category_filter=['recheck']) %}
+      {% if msgs %}
+      <div class="notice" style="margin-bottom:18px"><span>↻</span><div>{{ msgs[0] }}</div></div>
+      {% endif %}
+      {% endwith %}
       {% block body %}{% endblock %}
     </main>
   </div>

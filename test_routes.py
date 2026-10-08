@@ -20,7 +20,8 @@ from urllib.parse import urlsplit
 import app as app_module
 import config
 import db
-from test_money_path import CSRF, acct, client, logged_in, make_real_order, new_account  # noqa: F401
+from test_money_path import (CSRF, acct, client, fake_order, logged_in,  # noqa: F401
+                             make_real_order, new_account)
 
 LIVE_TOKEN = "duffel_live_" + "0" * 32
 
@@ -271,6 +272,48 @@ def test_recheck_all_with_nothing_monitored_runs_nothing(logged_in, monkeypatch)
 
     client.post("/orders/recheck", data={"_csrf": CSRF})
     assert "nothing to recheck" in client.get("/orders").get_data(as_text=True)
+
+
+def test_recheck_all_returns_to_the_page_it_was_pressed_on_and_never_off_site(logged_in, monkeypatch):
+    client, account = logged_in
+    _monitored(account["account_id"])
+    monkeypatch.setattr(app_module, "_run_cycle", lambda *a, **k: None)
+    for wanted, expected in ((None, "/orders"), ("/trips", "/trips"), ("/trips/ord_x", "/trips/ord_x"),
+                             ("https://evil.example/", "/trips"), ("//evil.example/", "/trips")):
+        data = {"_csrf": CSRF, **({"next": wanted} if wanted else {})}
+        where = urlsplit(client.post("/orders/recheck", data=data).headers["Location"])
+        assert where.path == expected and where.netloc in ("", "localhost"), wanted
+
+
+def test_trip_page_offers_the_recheck_and_the_exchange_without_the_ops_console(logged_in):
+    """Everything a booked ticket needs is on the customer's own pages: recheck
+    from the trip, and review the exchange once the airline's own quote is a
+    refund — and only then."""
+    client, account = logged_in
+    raw = fake_order(change_allowed=True, carrier_iata="T1")
+    exchange = f"/orders/{raw['id']}/confirm/exchange"
+
+    def trip_page(last_decision):
+        db.upsert_order({"order_id": raw["id"], "source": "td_rebook", "fare_type": "cash",
+                         "paid": "219.00", "currency": "USD", "carrier": "Test Airways",
+                         "route": "LHR-JFK", "itinerary": "ZZ123", "monitoring": True,
+                         "raw": raw, "last_decision": last_decision}, account["account_id"])
+        return client.get(f"/trips/{raw['id']}").get_data(as_text=True)
+
+    never_checked = trip_page(None)
+    assert "Recheck all fares" in never_checked and exchange not in never_checked
+
+    skip = {"ts": "2026-10-08T09:00:00+00:00", "source": "duffel", "outcome": "skip",
+            "reason": "change_total_not_negative", "detail": "Airline quoted 40.00 USD to exchange.",
+            "change_total": "40.00", "change_offer_id": "oco_test", "execution": "not_applicable"}
+    assert exchange not in trip_page(skip), "a quote that costs money is not an exchange to offer"
+
+    reshop = {**skip, "outcome": "reshop", "reason": "profitable_drop", "change_total": "-45.00",
+              "execution": "awaiting_confirmation", "execution_detail": "Awaiting confirmation."}
+    assert exchange in trip_page(reshop)
+    assert exchange not in trip_page({**reshop, "source": "simulated"}), "a simulated price never reaches Duffel"
+
+    assert "Recheck all fares" in client.get("/trips").get_data(as_text=True)
 
 
 def test_execute_action_refuses_an_already_executed_order():
