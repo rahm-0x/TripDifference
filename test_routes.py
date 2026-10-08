@@ -287,18 +287,31 @@ def test_execute_action_refuses_an_already_executed_order():
     assert ok is False and "TD-issued" in message
 
 
-def test_healthz_env_reports_identity_without_secrets(logged_in):
-    client, _ = logged_in
+def test_healthz_env_reports_identity_without_secrets(logged_in, monkeypatch):
+    client, account = logged_in
+    monkeypatch.setenv("STAGING_MAX_ORDER_USD", "250.50")
+    monkeypatch.delenv("STAGING_MAX_DAILY_USD", raising=False)
+    monkeypatch.setenv("STAGING_ALLOWED_EMAILS", f"someone.else@example.com, {account['email'].upper()}")
+    monkeypatch.delenv("RESHOP_AUTOPILOT_ENABLED", raising=False)
+    monkeypatch.setenv("CRON_SECRET", "s3cret-cron-value")
     body = client.get("/healthz/env").get_json()
     assert set(body) == {"app_env", "vercel_git_commit_sha", "duffel_token_mode", "db_project_ref",
-                         "duffel_live_search_enabled", "duffel_live_orders_enabled"}
+                         "duffel_live_search_enabled", "duffel_live_orders_enabled",
+                         "staging_max_order_usd", "staging_max_daily_usd", "viewer_on_live_allowlist",
+                         "reshop_autopilot_enabled", "cron_secret_set"}
     # the suite runs as dev, against the staging database, with a test token
     assert body["app_env"] == "dev"
     assert body["db_project_ref"] == config.STAGING_SUPABASE_REF
     assert body["duffel_token_mode"] == "test"
     assert body["duffel_live_search_enabled"] is False and body["duffel_live_orders_enabled"] is False
+    # the caps as numbers (an unset one is null), the allowlist and the cron
+    # secret only as yes or no
+    assert body["staging_max_order_usd"] == "250.50" and body["staging_max_daily_usd"] is None
+    assert body["viewer_on_live_allowlist"] is True
+    assert body["reshop_autopilot_enabled"] is False and body["cron_secret_set"] is True
 
     raw = client.get("/healthz/env").get_data(as_text=True)
+    assert "someone.else@example.com" not in raw and "s3cret-cron-value" not in raw
     secrets = [os.environ[name] for name in ("DUFFEL_TOKEN", "POSTGRES_URL", "POSTGRES_URL_NON_POOLING",
                                              "STRIPE_SECRET_KEY") if os.environ.get(name)]
     password = urlsplit(os.environ["POSTGRES_URL"]).password
@@ -315,7 +328,14 @@ def test_healthz_env_on_a_staging_live_search_deploy(monkeypatch, logged_in):
     monkeypatch.setenv("DUFFEL_LIVE_SEARCH_ENABLED", "true")
     monkeypatch.setenv("DUFFEL_TOKEN", LIVE_TOKEN)
     monkeypatch.setenv("VERCEL_GIT_COMMIT_SHA", "abc1234")
+    for name in ("STAGING_MAX_ORDER_USD", "STAGING_MAX_DAILY_USD", "STAGING_ALLOWED_EMAILS", "CRON_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
     body = client.get("/healthz/env").get_json()
     assert body == {"app_env": "staging", "vercel_git_commit_sha": "abc1234", "duffel_token_mode": "live",
                     "db_project_ref": config.STAGING_SUPABASE_REF, "duffel_live_search_enabled": True,
-                    "duffel_live_orders_enabled": False}
+                    "duffel_live_orders_enabled": False,
+                    # nothing configured: no caps, nobody allowlisted, no cron secret
+                    "staging_max_order_usd": None, "staging_max_daily_usd": None,
+                    "viewer_on_live_allowlist": False,
+                    "reshop_autopilot_enabled": True, "cron_secret_set": False}

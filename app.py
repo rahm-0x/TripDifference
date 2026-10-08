@@ -894,7 +894,11 @@ def info():
 @auth.login_required
 def healthz_env():
     """What this deployment is running as, for checking a deploy. Never a
-    secret: the token as a mode, the database as its Supabase project ref."""
+    secret: the token as a mode, the database as its Supabase project ref, the
+    live-spend caps as numbers, the allowlist only as whether the person
+    looking is on it, and the cron secret only as whether one is set."""
+    max_order, max_daily = config.STAGING_MAX_ORDER_USD, config.STAGING_MAX_DAILY_USD
+    email = (auth.current_user()["email"] or "").strip().lower()
     return {
         "app_env": config.APP_ENV,
         "vercel_git_commit_sha": os.environ.get("VERCEL_GIT_COMMIT_SHA") or None,
@@ -902,6 +906,13 @@ def healthz_env():
         "db_project_ref": db.project_ref(),
         "duffel_live_search_enabled": config.DUFFEL_LIVE_SEARCH_ENABLED,
         "duffel_live_orders_enabled": config.DUFFEL_LIVE_ORDERS_ENABLED,
+        # What live_guard will hold a live booking to.
+        "staging_max_order_usd": str(max_order) if max_order is not None else None,
+        "staging_max_daily_usd": str(max_daily) if max_daily is not None else None,
+        "viewer_on_live_allowlist": email in config.STAGING_ALLOWED_EMAILS,
+        # What the scheduler will do if something calls it.
+        "reshop_autopilot_enabled": config.RESHOP_AUTOPILOT_ENABLED,
+        "cron_secret_set": bool(config.CRON_SECRET),
     }
 
 
