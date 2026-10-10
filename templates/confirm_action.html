@@ -24,6 +24,20 @@
       <div><dt>Change offer</dt><dd class="mono">{{ d.change_offer_id }}</dd></div>
       <div><dt>Decided by</dt><dd>{{ d.source }} · {{ d.reason }}</dd></div>
       {% endif %}
+      {# The airline's own quote for cancelling, fetched when this page opened.
+         Step 2 confirms exactly this quote. #}
+      {% if action == 'cancel' and quote %}
+      <div><dt>Airline refund</dt><dd>{{ quote.refund_amount }} {{ quote.refund_currency }}</dd></div>
+      <div><dt>Comes back as</dt><dd>
+        {% if quote.returns == 'cash' %}Cash, refunded to
+          {{ (card.brand ~ ' ending ' ~ card.last4) if card else 'the card on file' }}
+        {% elif quote.returns == 'credit' %}Airline credit in the traveller's name, not cash
+        {% else %}Nothing{% endif %}
+      </dd></div>
+      {% if quote.expires_at %}
+      <div><dt>Quote valid until</dt><dd>{{ quote.expires_at }} UTC</dd></div>
+      {% endif %}
+      {% endif %}
     </dl>
 
     <div class="notice {{ 'notice-err' if action == 'cancel' else 'notice-terra' }}" style="margin-top:18px">
@@ -32,13 +46,23 @@
         {% if action == 'exchange' %}
           Creates an order change and immediately confirms it. A positive change
           total is charged to the Duffel balance.
+        {% elif not quote %}
+          No refund quote from the airline, so nothing can be cancelled from here right now.
+        {% elif quote.returns == 'nothing' %}
+          <b>The airline will return nothing.</b> Cancelling gives up the ticket and
+          the whole fare. <b>The order cannot be un-cancelled.</b>
         {% else %}
-          Quotes a refund and immediately confirms the cancellation.
+          Confirms the quote above with the airline.
           <b>The order cannot be un-cancelled.</b>
         {% endif %}
       </div>
     </div>
 
+    {% if action == 'cancel' and not quote %}
+    <div style="margin-top:18px">
+      <a href="{{ url_for('trip_detail', order_id=order.order_id) }}" class="btn btn-ghost">Back to the trip</a>
+    </div>
+    {% else %}
     <form method="post" action="{{ url_for('execute', order_id=order.order_id, action=action) }}"
           style="margin-top:18px">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
@@ -49,9 +73,11 @@
       </div>
       <div style="display:flex; gap:10px">
         <button type="submit" class="{{ 'btn-danger' if action == 'cancel' }}">Execute {{ action }}</button>
-        <a href="{{ url_for('trip_detail', order_id=order.order_id) }}" class="btn btn-ghost">Cancel</a>
+        <a href="{{ url_for('trip_detail', order_id=order.order_id) }}" class="btn btn-ghost">
+          {{ 'Keep the booking' if action == 'cancel' else 'Cancel' }}</a>
       </div>
     </form>
+    {% endif %}
   </div>
 </div>
 

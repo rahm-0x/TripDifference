@@ -295,6 +295,14 @@
         </form>
         {% endif %}
       {% endif %}
+
+      {% if trip.source == 'td_rebook' and not trip.executed %}
+      <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line-soft)">
+        <a href="{{ url_for('confirm_action', order_id=trip.order_id, action='cancel') }}"
+           style="font-size:13px; color:var(--danger)">Cancel this booking →</a>
+        <p class="hint" style="margin:4px 0 0">Shows the airline's refund first. Nothing is cancelled until you confirm.</p>
+      </div>
+      {% endif %}
     </div>
   </aside>
 </div>

@@ -360,6 +360,7 @@ def test_trip_page_offers_the_recheck_and_the_exchange_without_the_ops_console(l
 
     never_checked = trip_page(None)
     assert "Recheck all fares" in never_checked and exchange not in never_checked
+    assert f"/orders/{raw['id']}/confirm/cancel" in never_checked, "cancelling starts from the trip too"
 
     skip = {"ts": "2026-10-08T09:00:00+00:00", "source": "duffel", "outcome": "skip",
             "reason": "change_total_not_negative", "detail": "Airline quoted 40.00 USD to exchange.",

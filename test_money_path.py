@@ -755,10 +755,15 @@ def test_policy_advise_proceeds(logged_in_carded):
 # delivery types — execute()'s cancel branch
 # ---------------------------------------------------------------------------
 
-def fake_cancel_sequence(refund_amount, refund_to=None, refund_currency="USD"):
+def fake_cancel_sequence(refund_amount, refund_to=None, refund_currency="USD", calls=None):
+    """Duffel's two-call cancellation: the pending cancellation is the quote,
+    confirming it is the cancel. Every (method, path) lands in `calls`."""
     def _mock(method, path, body=None, params=None, label=None):
+        if calls is not None:
+            calls.append((method, path))
         if method == "POST" and path == "/air/order_cancellations":
-            return {"id": "orc_test1"}
+            return {"id": "orc_test1", "refund_amount": refund_amount, "refund_currency": refund_currency,
+                    "refund_to": refund_to, "expires_at": "2026-12-01T01:00:00Z"}
         if method == "POST" and path.endswith("/actions/confirm"):
             return {"confirmed_at": "2026-12-01T00:00:00Z", "refund_amount": refund_amount,
                     "refund_currency": refund_currency, "refund_to": refund_to}
@@ -769,7 +774,10 @@ def fake_cancel_sequence(refund_amount, refund_to=None, refund_currency="USD"):
 
 
 def execute_cancel(client, order_id, refund_amount, refund_to=None):
+    """The whole of a cancel as a person does it: open the confirm page, which
+    fetches the airline's quote, then type CONFIRM."""
     with patch("duffel_http.request", side_effect=fake_cancel_sequence(refund_amount, refund_to)):
+        client.get(f"/orders/{order_id}/confirm/cancel")
         return client.post(f"/orders/{order_id}/execute/cancel",
                            data={"confirm_text": "CONFIRM", "_csrf": CSRF}, follow_redirects=False)
 
@@ -1126,8 +1134,10 @@ def test_completed_execution_writes_exactly_one_audit_row(logged_in_carded):
 def test_failed_execution_writes_audit_row_with_failed(logged_in_carded):
     client, account = logged_in_carded
     order = make_real_order(account["account_id"])
+    with patch("duffel_http.request", side_effect=fake_cancel_sequence("100.00")):
+        client.get(f"/orders/{order['order_id']}/confirm/cancel")     # the quote
     with patch("duffel_http.request", side_effect=DuffelError(422, [])):
-        client.post(f"/orders/{order['order_id']}/execute/cancel",
+        client.post(f"/orders/{order['order_id']}/execute/cancel",   # the confirm fails
                    data={"confirm_text": "CONFIRM", "_csrf": CSRF})
     rows = db.q("""SELECT execution FROM audit_events
                    WHERE order_id = %s AND kind = 'execution'""",
@@ -1198,6 +1208,78 @@ def test_second_cancel_refused_at_confirm_and_execute(logged_in_carded):
 
     events = db.savings_events_for_order(order["order_id"])
     assert len(events) == 1, "a refused repeat must not create a second savings_events row"
+
+
+# ---------------------------------------------------------------------------
+# cancel — the airline's refund is on screen before anything is cancelled
+# ---------------------------------------------------------------------------
+
+def _confirm_cancel(client, order_id):
+    return client.post(f"/orders/{order_id}/execute/cancel",
+                       data={"confirm_text": "CONFIRM", "_csrf": CSRF})
+
+
+@pytest.mark.parametrize("refund_amount,refund_to,shown", [
+    ("219.00", "original_form_of_payment", "Cash, refunded to"),
+    ("180.00", "airline_credits", "Airline credit in the traveller"),
+    ("0.00", None, "The airline will return nothing"),
+])
+def test_cancel_shows_the_airlines_refund_before_anything_is_cancelled(logged_in_carded, refund_amount,
+                                                                      refund_to, shown):
+    client, account = logged_in_carded
+    order = make_real_order(account["account_id"])
+    calls = []
+    with patch("duffel_http.request", side_effect=fake_cancel_sequence(refund_amount, refund_to, calls=calls)):
+        page = client.get(f"/orders/{order['order_id']}/confirm/cancel").get_data(as_text=True)
+    assert calls == [("POST", "/air/order_cancellations")], "a quote, and nothing confirmed"
+    assert f"{refund_amount} USD" in page and shown in page
+    assert db.find_order(order["order_id"])["executed"] is None
+
+
+def test_cancel_confirms_the_quote_that_was_shown_and_asks_for_no_other(logged_in_carded):
+    client, account = logged_in_carded
+    order = make_real_order(account["account_id"])
+    calls = []
+    with patch("duffel_http.request", side_effect=fake_cancel_sequence("219.00", calls=calls)):
+        client.get(f"/orders/{order['order_id']}/confirm/cancel")
+        _confirm_cancel(client, order["order_id"])
+    assert [c for c in calls if c[0] == "POST"] == [
+        ("POST", "/air/order_cancellations"),
+        ("POST", "/air/order_cancellations/orc_test1/actions/confirm")]
+    assert db.find_order(order["order_id"])["executed"]
+
+
+def test_cancel_without_a_shown_quote_never_reaches_duffel(logged_in_carded):
+    """A straight POST used to quote and confirm in one step: a ticket
+    cancelled for a refund nobody had seen."""
+    client, account = logged_in_carded
+    order = make_real_order(account["account_id"])
+    with patch("duffel_http.request") as duffel:
+        page = _confirm_cancel(client, order["order_id"]).get_data(as_text=True)
+    duffel.assert_not_called()
+    assert "Open the cancellation again" in page and 'name="confirm_text"' not in page
+    assert db.find_order(order["order_id"])["executed"] is None
+
+
+def test_a_quote_shown_for_one_order_cannot_cancel_another(logged_in_carded):
+    client, account = logged_in_carded
+    shown = make_real_order(account["account_id"])
+    other = make_real_order(account["account_id"])
+    with patch("duffel_http.request", side_effect=fake_cancel_sequence("219.00")):
+        client.get(f"/orders/{shown['order_id']}/confirm/cancel")
+    with patch("duffel_http.request") as duffel:
+        _confirm_cancel(client, other["order_id"])
+    duffel.assert_not_called()
+    assert db.find_order(other["order_id"])["executed"] is None
+    assert db.find_order(shown["order_id"])["executed"] is None
+
+
+def test_cancel_with_no_quote_from_the_airline_offers_nothing_to_confirm(logged_in_carded):
+    client, account = logged_in_carded
+    order = make_real_order(account["account_id"])
+    with patch("duffel_http.request", side_effect=DuffelError(422, [])):
+        page = client.get(f"/orders/{order['order_id']}/confirm/cancel").get_data(as_text=True)
+    assert "did not return a refund quote" in page and 'name="confirm_text"' not in page
 
 
 # ---------------------------------------------------------------------------

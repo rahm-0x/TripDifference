@@ -2472,10 +2472,50 @@ def confirm_action(order_id, action):
     if record.get("executed"):
         # Already in a terminal state — nothing left to confirm.
         return redirect(url_for("trip_detail", order_id=order_id))
-    return render_template("confirm_action.html", nav="ops", order=record, action=action)
+    quote = error = None
+    if action == "cancel":
+        quote, error = _cancellation_quote(order_id)
+    return render_template("confirm_action.html", nav="ops", order=record, action=action,
+                           quote=quote, error=error)
 
 
-def _execute_action(record, action, actor_email, *, unattended=False):
+def _cancellation_quote(order_id):
+    """Ask the airline what cancelling this order would return, without
+    cancelling it. Returns (quote, None) or (None, why not).
+
+    Duffel's cancellation is two calls — create a pending cancellation, which
+    is only a quote and expires unconfirmed, then confirm it. This is the
+    first, made when the confirm page opens, so the refund is on screen before
+    anyone types CONFIRM. The quote is kept in the session, not in the form:
+    step 2 confirms the one that was shown, for this order, and nothing a
+    browser sends can point it at a different cancellation.
+    """
+    session.pop("cancel_quote", None)
+    if config.APP_ENV == "staging" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
+        return None, duffel_http.staging_orders_refusal()
+    try:
+        pending = duffel_http.request("POST", "/air/order_cancellations", body={
+            "data": {"order_id": order_id}}, label="ui_cancel_quote")
+    except (DuffelError, RuntimeError) as exc:
+        return None, f"The airline did not return a refund quote, so nothing can be cancelled here: {exc}"
+
+    try:
+        amount = Decimal(str(pending.get("refund_amount") or "0"))
+    except InvalidOperation:
+        amount = Decimal("0")
+    credit = (pending.get("refund_to") or "").replace("_", "") in ("airlinecredit", "airlinecredits")
+    quote = {
+        "order_id": order_id, "id": pending["id"],
+        "refund_amount": str(amount), "refund_currency": pending.get("refund_currency") or "",
+        # the same three outcomes an execution is classified into afterwards
+        "returns": "nothing" if amount <= 0 else ("credit" if credit else "cash"),
+        "expires_at": (pending.get("expires_at") or "")[:16].replace("T", " "),
+    }
+    session["cancel_quote"] = quote
+    return quote, None
+
+
+def _execute_action(record, action, actor_email, *, unattended=False, cancellation_id=None):
     """The Duffel/billing half of an execution, with no request in scope.
 
     Called by execute() after a human types CONFIRM, and by a recheck when
@@ -2492,6 +2532,10 @@ def _execute_action(record, action, actor_email, *, unattended=False):
     exchanges, only on the engine's own RESHOP decision, and only if the change
     Duffel then creates is still a refund that clears the floor — it never
     pays to exchange. Paying for one stays a choice a person makes at CONFIRM.
+
+    `cancellation_id` is the pending cancellation a person was shown the
+    refund for (_cancellation_quote); a cancel confirms that one rather than
+    quoting again and confirming whatever comes back.
     """
     order_id = record["order_id"]
 
@@ -2621,10 +2665,11 @@ def _execute_action(record, action, actor_email, *, unattended=False):
                           "realized_savings": str(-delta),
                           "delivery_type": delivery_type, "delivery_detail": delivery_detail}
         else:
-            quote = duffel_http.request("POST", "/air/order_cancellations", body={
-                "data": {"order_id": order_id}}, label="ui_cancel_quote")
+            if not cancellation_id:
+                cancellation_id = duffel_http.request("POST", "/air/order_cancellations", body={
+                    "data": {"order_id": order_id}}, label="ui_cancel_quote")["id"]
             result = duffel_http.request(
-                "POST", f"/air/order_cancellations/{quote['id']}/actions/confirm",
+                "POST", f"/air/order_cancellations/{cancellation_id}/actions/confirm",
                 body={"data": {}}, label="ui_cancel_confirm")
             note = (f"cancelled at {result.get('confirmed_at')}, "
                     f"refunded {result.get('refund_amount')} {result.get('refund_currency')}")
@@ -2810,16 +2855,30 @@ def execute(order_id, action):
         # exchange or cancel reach Duffel for an order that's done.
         return redirect(url_for("trip_detail", order_id=order_id))
 
-    def refuse(msg):
+    # The refund this person was shown on the previous page, for this order.
+    quote = session.get("cancel_quote") if action == "cancel" else None
+    if quote and quote.get("order_id") != order_id:
+        quote = None
+
+    def refuse(msg, quote=quote):
         return render_template("confirm_action.html", nav="ops", order=record,
-                               action=action, error=msg)
+                               action=action, error=msg, quote=quote)
 
     if request.form.get("confirm_text", "").strip().upper() != "CONFIRM":
         return refuse("Type CONFIRM exactly to proceed.")
+    if config.APP_ENV == "staging" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
+        return refuse(duffel_http.staging_orders_refusal())
+    if action == "cancel" and not quote:
+        # Never quote-and-confirm in one step from here: that cancels a ticket
+        # for a refund nobody has seen.
+        return refuse("Open the cancellation again to see the airline's refund before confirming.")
 
-    ok, message = _execute_action(record, action, auth.current_user()["email"])
+    ok, message = _execute_action(record, action, auth.current_user()["email"],
+                                  cancellation_id=quote["id"] if quote else None)
+    if action == "cancel":
+        session.pop("cancel_quote", None)   # confirmed or dead; either way not reusable
     if not ok:
-        return refuse(message)
+        return refuse(message, quote=None)
     return redirect(url_for("trip_detail", order_id=order_id))
 
 
