@@ -4,4 +4,9 @@ python-dotenv>=1.0
 click>=8.1
 psycopg[binary,pool]>=3.2
 argon2-cffi>=23.1
-stripe>=11.0
+# Pinned on purpose. Each Stripe SDK release fixes the Stripe API version it
+# speaks, so an unpinned upgrade at deploy time changes what Stripe accepts:
+# that is how the card page started returning 500 on staging. Upgrade
+# deliberately, and re-check card setup, authorize, capture and refund in
+# test mode when you do.
+stripe==15.5.1

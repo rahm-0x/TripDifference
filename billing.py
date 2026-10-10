@@ -98,8 +98,16 @@ def ensure_customer(account_id, email):
 def create_setup_intent(customer_id):
     """Card details never touch this server — Stripe.js/Elements collects
     them client-side and confirms directly against Stripe using this
-    intent's client_secret."""
-    return _client().SetupIntent.create(customer=customer_id, payment_method_types=["card"])
+    intent's client_secret.
+
+    Which methods the intent accepts is left to the set managed in Stripe's
+    dashboard rather than named here: newer Stripe API versions reject
+    `payment_method_types` outright, which is what took the card page down.
+    Redirect-based methods are excluded — the page offers a card field only,
+    and nothing here could send a customer away and bring them back."""
+    return _client().SetupIntent.create(
+        customer=customer_id,
+        automatic_payment_methods={"enabled": True, "allow_redirects": "never"})
 
 
 def save_payment_method(account_id, customer_id, payment_method_id):

@@ -1038,6 +1038,16 @@ def test_an_order_with_no_card_charge_on_record_is_flagged_not_refunded(logged_i
     assert "no card charge on record" in db.savings_events_for_order(order["order_id"])[0]["payout_error"]
 
 
+def test_card_setup_never_names_payment_method_types():
+    """Newer Stripe API versions reject `payment_method_types`; sending it is
+    what made the card page return 500 on staging."""
+    with patch("billing._client") as client:
+        billing.create_setup_intent("cus_test_x")
+    client.return_value.SetupIntent.create.assert_called_once_with(
+        customer="cus_test_x",
+        automatic_payment_methods={"enabled": True, "allow_redirects": "never"})
+
+
 def test_refund_to_card_asks_stripe_for_a_partial_refund_of_that_charge():
     with patch("billing._client") as client:
         client.return_value.Refund.create.return_value = MagicMock(id="re_test_3")
