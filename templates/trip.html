@@ -62,7 +62,9 @@
     <b>Refunded {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
     {% endif %}
     {% if ev.commission_amount and ev.commission_amount != '0.00' %}
-    Our fee ({{ (ev.commission_rate * 100)|round(1) }}%): {{ ev.commission_amount }} {{ ev.currency }}.
+    {# ev.commission_rate arrives as a string ("0.2500"); multiplying it
+       un-converted repeated the text and took this page down. #}
+    Our fee ({{ (ev.commission_rate|float * 100)|round(1) }}%): {{ ev.commission_amount }} {{ ev.currency }}.
     {% endif %}
   </div>
 </div>

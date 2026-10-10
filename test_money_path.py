@@ -1038,6 +1038,34 @@ def test_an_order_with_no_card_charge_on_record_is_flagged_not_refunded(logged_i
     assert "no card charge on record" in db.savings_events_for_order(order["order_id"])[0]["payout_error"]
 
 
+@pytest.mark.parametrize("refund_amount,refund_to,paid_out,says", [
+    ("219.00", "original_form_of_payment", True, "Refunded 219.00 USD to your"),
+    ("219.00", "original_form_of_payment", False, "has not gone through yet"),
+    ("180.00", "airline_credits", True, "Credited 180.00 USD to your"),
+    ("0.00", None, True, "nothing was recovered"),
+])
+def test_every_page_still_opens_after_a_recovery(logged_in_carded, refund_amount, refund_to, paid_out, says):
+    """A cancel or an exchange redirects to the trip, so it is the first page
+    anyone sees afterwards — and it returned 500 whenever the savings event
+    carried a commission, because the rate arrives as a string."""
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"])
+    db.upsert_order({"order_id": order["order_id"],
+                     "raw": fake_order(order_id=order["order_id"], carrier_iata="T1")}, account["account_id"])
+    stripe_says = ({"return_value": MagicMock(id="re_test_page")} if paid_out
+                   else {"side_effect": billing.CardError("card declined")})
+    with patch("billing.refund_to_card", **stripe_says):
+        resp = execute_cancel(client, order["order_id"], refund_amount, refund_to=refund_to)
+    assert resp.status_code == 302
+
+    trip = client.get(f"/trips/{order['order_id']}")
+    assert trip.status_code == 200 and says in trip.get_data(as_text=True)
+    if refund_amount != "0.00":
+        assert "Our fee (25.0%)" in trip.get_data(as_text=True)
+    for path in ("/trips", "/wallet", "/overview", "/invoices", "/orders", "/decisions"):
+        assert client.get(path).status_code == 200, path
+
+
 def test_card_setup_never_names_payment_method_types():
     """Newer Stripe API versions reject `payment_method_types`; sending it is
     what made the card page return 500 on staging."""
