@@ -450,21 +450,29 @@ def release_execution(attempt_id):
 # savings events — which delivery path an execution actually produced
 # ---------------------------------------------------------------------------
 
-def savings_event_create(order_id, *, execution_attempt_id, old_amount, new_amount,
+def savings_event_create(order_id, *, action, execution_attempt_id, old_amount, new_amount,
                           realized_savings, currency, delivery_type, delivery_detail,
                           commission_rate):
     """Record what an execution actually delivered, once — called from the
     same branch in app.execute() that already knows the Duffel result, not a
-    second decision engine re-deriving it."""
+    second decision engine re-deriving it.
+
+    `action` is 'exchange' or 'cancel' (migration 034). Commission is on
+    rebooking only: a cancellation is the customer's own money coming back,
+    not a saving, so it is recorded at a rate of zero whatever the account's
+    rate is. Decided here, in the one place every event is written, so no
+    caller can bill a cancellation by passing the wrong rate."""
+    if action == "cancel":
+        commission_rate = Decimal("0")
     commission_amount = (Decimal(realized_savings) * Decimal(commission_rate)
                          ).quantize(Decimal("0.01"))
     return q("""INSERT INTO savings_events
-                   (order_id, execution_attempt_id, old_amount, new_amount,
+                   (order_id, action, execution_attempt_id, old_amount, new_amount,
                     realized_savings, currency, delivery_type, delivery_detail,
                     commission_rate, commission_amount, status)
-                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'completed')
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'completed')
                  RETURNING *""",
-            (order_id, execution_attempt_id, _num(old_amount), _num(new_amount),
+            (order_id, action, execution_attempt_id, _num(old_amount), _num(new_amount),
              _num(realized_savings), currency, delivery_type, delivery_detail,
              _num(commission_rate), commission_amount), fetch="one")
 
@@ -793,8 +801,10 @@ def account_summary(account_id):
                             WHERE order_id IN (SELECT order_id FROM orders
                                                WHERE account_id = %s)""",
                          (account_id,), fetch="one")["n"]
+    # Rebookings only: a cancellation is a refund, not a saving.
     out["savings_events"] = q("""SELECT count(*) AS n FROM savings_events
-                                 WHERE order_id IN (SELECT order_id FROM orders
+                                 WHERE action = 'exchange'
+                                   AND order_id IN (SELECT order_id FROM orders
                                                     WHERE account_id = %s)""",
                               (account_id,), fetch="one")["n"]
     return out
@@ -817,7 +827,9 @@ def monthly_series(account_id, months=6):
                 SELECT to_char(span.m, 'Mon')            AS label,
                        to_char(span.m, 'YYYY-MM')        AS ym,
                        COALESCE(sum(o.paid), 0)          AS spend,
-                       COALESCE(sum(o.refunded), 0)      AS recovered
+                       -- a cancelled ticket's refund is not a recovery
+                       COALESCE(sum(o.refunded) FILTER (
+                           WHERE o.executed IS NULL OR o.executed NOT LIKE 'cancelled%%'), 0) AS recovered
                   FROM span
                   LEFT JOIN orders o
                     ON o.account_id = %s
@@ -877,18 +889,18 @@ def spend_by_carrier(account_id, top=5):
     Folded rather than cycled: past a handful of slots the categories stop
     being tellable apart, and this is one measure across categories anyway.
 
-    "saved" sums savings_events.realized_savings, not orders.refunded —
-    that column is only ever written by execute()'s exchange branch, so a
-    cancellation-driven recovery (cash or credit) used to be invisible
-    here. savings_events is the canonical source for recovery reporting;
+    "saved" sums savings_events.realized_savings, not orders.refunded.
+    savings_events is the canonical source for recovery reporting;
     orders.refunded is a convenience field on the order itself, not a
-    reporting source. Pre-aggregated per order before joining so an order
-    with more than one savings_event doesn't multiply its own `paid` in
-    the sum.
+    reporting source. Rebookings only (action = 'exchange'): a cancellation
+    is money coming back, not a saving, and counting it here made a refunded
+    ticket look like a fare drop. Pre-aggregated per order before joining so
+    an order with more than one savings_event doesn't multiply its own `paid`
+    in the sum.
     """
     rows = q("""WITH per_order_savings AS (
                   SELECT order_id, sum(realized_savings) AS saved
-                    FROM savings_events GROUP BY order_id)
+                    FROM savings_events WHERE action = 'exchange' GROUP BY order_id)
                 SELECT COALESCE(NULLIF(o.carrier, ''), 'Unknown') AS carrier,
                        sum(o.paid)                  AS spend,
                        COALESCE(sum(pos.saved), 0)  AS saved,
@@ -948,7 +960,7 @@ def wallet_transactions(account_id, limit=100):
                 (account_id,), fetch="all")
 
     real_execs = q("""SELECT se.created_at AS ts, se.order_id, o.booking_reference, o.route,
-                             se.realized_savings, se.commission_amount, se.delivery_type,
+                             se.realized_savings, se.commission_amount, se.delivery_type, se.action,
                              COALESCE(NULLIF(se.currency, ''), o.currency) AS currency
                         FROM savings_events se
                         JOIN orders o ON o.order_id = se.order_id
@@ -978,6 +990,14 @@ def wallet_transactions(account_id, limit=100):
         "airline_credit": "Fare drop recovered — airline credit issued",
         "forfeited": "Fare drop found — value forfeited, nothing recovered",
     }
+    # A cancellation is money coming back, not a saving: its own wording, its
+    # own kind ('refund'), so wallet_totals never adds it to what was
+    # recovered, and no fee line under it.
+    _CANCEL_LABEL = {
+        "refund_to_card": "Booking cancelled — refunded to card",
+        "airline_credit": "Booking cancelled — airline credit issued",
+        "forfeited": "Booking cancelled — nothing refunded",
+    }
     # Real, not yet moved by us: the commission is billed on the account's
     # next invoice (see generate_invoice), not deducted here — this ledger
     # must not read as a completed deduction against money that already
@@ -1000,10 +1020,11 @@ def wallet_transactions(account_id, limit=100):
                      "currency": c["currency"]})
     for e in real_execs:
         recovered = Decimal(e["realized_savings"])
-        fee = Decimal(e["commission_amount"] or 0)
-        rows.append({"ts": e["ts"], "kind": "recovery", "simulated": False,
+        cancelled = e["action"] == "cancel"
+        fee = Decimal("0") if cancelled else Decimal(e["commission_amount"] or 0)
+        rows.append({"ts": e["ts"], "kind": "refund" if cancelled else "recovery", "simulated": False,
                      "delivery_type": e["delivery_type"],
-                     "label": _DELIVERY_LABEL[e["delivery_type"]],
+                     "label": (_CANCEL_LABEL if cancelled else _DELIVERY_LABEL)[e["delivery_type"]],
                      "order_id": e["order_id"],
                      "reference": e["booking_reference"], "route": e["route"],
                      "amount": recovered, "currency": e["currency"]})
@@ -1151,6 +1172,7 @@ def generate_invoice(account_id, period_start, period_end):
                          JOIN orders o ON o.order_id = se.order_id
                         WHERE o.account_id = %s
                           AND se.invoice_line_id IS NULL
+                          AND se.action = 'exchange'
                           AND se.delivery_type IN ('refund_to_card', 'airline_credit')
                           AND se.created_at >= %s AND se.created_at < %s
                         FOR UPDATE OF se""",
@@ -1301,7 +1323,7 @@ def savings_totals_for_account(account_id):
                  COALESCE(sum(commission_amount) FILTER (WHERE delivery_type = 'airline_credit'), 0)
                      AS credit_fee
                FROM savings_events se JOIN orders o ON o.order_id = se.order_id
-              WHERE o.account_id = %s""", (account_id,), fetch="one")
+              WHERE o.account_id = %s AND se.action = 'exchange'""", (account_id,), fetch="one")
     out = dict(row)
     out["cash_net"] = out["cash_recovered"] - out["cash_fee"]
     return out

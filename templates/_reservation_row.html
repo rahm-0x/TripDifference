@@ -12,7 +12,9 @@
   <td class="r num">{{ t.paid }} <span class="cur">{{ t.currency }}</span></td>
   <td class="mono muted">{{ t.cost_center_code or '—' }}</td>
   <td>
-    {% if t.refunded %}
+    {% if t.executed and 'cancelled' in t.executed %}
+      <span class="tag tag-mute">Cancelled</span>
+    {% elif t.refunded %}
       <span class="tag tag-terra">Rebooked</span>
     {% elif t.monitoring %}
       <span class="tag tag-sage"><span class="dot"></span>Monitoring</span>

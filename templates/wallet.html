@@ -84,7 +84,7 @@
   </table>
 </div>
 <p class="hint" style="margin-top:12px">
-  Only exchanges that actually completed appear here. A price drop the engine
+  Only exchanges and cancellations that actually completed appear here. A price drop the engine
   decided on but did not execute is in the
   <a href="{{ url_for('decisions') }}">decision log</a>, not in this ledger.
 </p>
@@ -165,6 +165,7 @@
   .dot-charge   { background:var(--muted-2); border-radius:2px; }
   .dot-intake   { background:transparent; border:1px solid var(--muted-2); border-radius:2px; }
   .dot-recovery { background:var(--green); border-radius:999px; }
+  .dot-refund   { background:transparent; border:1px solid var(--green); border-radius:999px; }
   .dot-fee      { background:var(--gold-dim); border-radius:999px; }
   .sim-tag { margin-left:9px; font-size:10.5px; padding:2px 8px; }
   .sim-amt { opacity:.55; font-style:italic; }

@@ -782,6 +782,15 @@ def execute_cancel(client, order_id, refund_amount, refund_to=None):
                            data={"confirm_text": "CONFIRM", "_csrf": CSRF}, follow_redirects=False)
 
 
+def execute_exchange(client, order_id, refund_amount, refund_to="original_form_of_payment"):
+    """A rebooking that returns `refund_amount`, confirmed by a person. The
+    order needs a decision carrying a change offer (RESHOP_DECISION)."""
+    with patch("duffel_http.request",
+               side_effect=_exchange_quoting(f"-{refund_amount}", [], refund_to=refund_to)):
+        return client.post(f"/orders/{order_id}/execute/exchange",
+                           data={"confirm_text": "CONFIRM", "_csrf": CSRF}, follow_redirects=False)
+
+
 def test_cash_refund_produces_refund_to_card(logged_in_carded):
     client, account = logged_in_carded
     order = make_real_order(account["account_id"])
@@ -1060,10 +1069,25 @@ def test_every_page_still_opens_after_a_recovery(logged_in_carded, refund_amount
 
     trip = client.get(f"/trips/{order['order_id']}")
     assert trip.status_code == 200 and says in trip.get_data(as_text=True)
-    if refund_amount != "0.00":
-        assert "Our fee (25.0%)" in trip.get_data(as_text=True)
+    assert "Our fee" not in trip.get_data(as_text=True), "a cancellation carries no fee"
     for path in ("/trips", "/wallet", "/overview", "/invoices", "/orders", "/decisions"):
         assert client.get(path).status_code == 200, path
+    reservations = client.get("/trips").get_data(as_text=True)
+    assert "Cancelled" in reservations and "Rebooked" not in reservations
+
+
+def test_the_trip_page_shows_the_fee_on_a_rebooking(logged_in_carded):
+    """The fee line is the one that used to crash this page: the rate arrives
+    as a string."""
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    db.upsert_order({"order_id": order["order_id"],
+                     "raw": fake_order(order_id=order["order_id"], carrier_iata="T1")}, account["account_id"])
+    with patch("billing.refund_to_card", return_value=MagicMock(id="re_test_page")):
+        execute_exchange(client, order["order_id"], "45.00")
+    page = client.get(f"/trips/{order['order_id']}").get_data(as_text=True)
+    assert "Refunded 45.00 USD to your" in page and "Our fee (25.0%): 11.25 USD" in page
+    assert "Rebooked" in client.get("/trips").get_data(as_text=True)
 
 
 def test_card_setup_never_names_payment_method_types():
@@ -1195,13 +1219,28 @@ def test_activity_label_distinguishes_delivery_type(delivery_type, expected_titl
     assert app_module._activity_label(row)["title"] == expected_title
 
 
-def test_spend_by_carrier_counts_cancellation_recovery(logged_in_carded):
+@pytest.mark.parametrize("delivery_type,expected_title", [
+    ("refund_to_card", "Booking cancelled — refunded to card"),
+    ("airline_credit", "Booking cancelled — airline credit issued"),
+    ("forfeited", "Booking cancelled — nothing refunded"),
+])
+def test_activity_label_never_calls_a_cancellation_a_recovery(delivery_type, expected_title):
+    row = {"kind": "execution", "execution": "executed", "action": "cancel",
+           "delivery_type": delivery_type, "detail": "test"}
+    assert app_module._activity_label(row)["title"] == expected_title
+
+
+def test_spend_by_carrier_counts_a_rebooking_from_savings_events(logged_in_carded):
+    """`saved` comes from savings_events, not orders.refunded — and from
+    rebookings only (a cancellation's refund is covered by
+    test_a_cancellation_is_a_refund_everywhere_and_a_rebooking_is_the_only_saving)."""
     client, account = logged_in_carded
-    order = make_real_order(account["account_id"], carrier="Cancel Airways", paid="300.00")
-    execute_cancel(client, order["order_id"], "300.00")
+    order = make_real_order(account["account_id"], carrier="Rebook Airways", paid="300.00",
+                            last_decision=RESHOP_DECISION)
+    execute_exchange(client, order["order_id"], "45.00")
     rows = db.spend_by_carrier(account["account_id"])
-    row = next(r for r in rows if r["carrier"] == "Cancel Airways")
-    assert row["saved"] == Decimal("300.00")
+    row = next(r for r in rows if r["carrier"] == "Rebook Airways")
+    assert row["saved"] == Decimal("45.00")
 
 
 def test_spend_by_carrier_does_not_multiply_paid_with_two_savings_events(logged_in_carded):
@@ -1216,7 +1255,7 @@ def test_spend_by_carrier_does_not_multiply_paid_with_two_savings_events(logged_
         order = make_real_order(account_id, carrier="Multi Airways", paid="500.00")
         for _ in range(2):
             db.savings_event_create(
-                order["order_id"], execution_attempt_id=None,
+                order["order_id"], action="exchange", execution_attempt_id=None,
                 old_amount="500.00", new_amount="480.00", realized_savings="20.00",
                 currency="USD", delivery_type="refund_to_card", delivery_detail="test",
                 commission_rate="0.25")
@@ -1327,17 +1366,77 @@ def test_cancel_with_no_quote_from_the_airline_offers_nothing_to_confirm(logged_
 def test_commission_reads_account_rate_not_the_constant(logged_in_carded):
     client, account = logged_in_carded
     db.q("UPDATE accounts SET commission_rate = 0.30 WHERE id = %s", (account["account_id"],))
-    order = make_real_order(account["account_id"])
-    execute_cancel(client, order["order_id"], "100.00")
+    order = make_real_order(account["account_id"], last_decision=RESHOP_DECISION)
+    execute_exchange(client, order["order_id"], "100.00")
     events = db.savings_events_for_order(order["order_id"])
+    assert events[0]["action"] == "exchange"
     assert events[0]["commission_rate"] == "0.3000"
     assert events[0]["commission_amount"] == "30.00"
 
 
+@pytest.mark.parametrize("refund_to,delivered", [("original_form_of_payment", "refund_to_card"),
+                                                 ("airline_credits", "airline_credit")])
+def test_a_cancellation_carries_no_commission_and_is_never_invoiced(logged_in_carded, refund_to, delivered):
+    """Commission is on rebooking only. A cancellation is the customer's own
+    money coming back — recorded, paid out, and never billed, at any rate."""
+    client, account = logged_in_carded
+    db.q("UPDATE accounts SET commission_rate = 0.30 WHERE id = %s", (account["account_id"],))
+    order = make_real_order(account["account_id"], carrier="Duffel Airways")
+    execute_cancel(client, order["order_id"], "200.00", refund_to=refund_to)
+
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert (event["action"], event["delivery_type"]) == ("cancel", delivered)
+    assert event["realized_savings"] == "200.00"
+    assert event["commission_amount"] == "0.00" and event["commission_rate"] == "0.0000"
+
+    today = datetime.now(timezone.utc).date()
+    invoice = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
+    assert db.invoice_lines_for(invoice["id"], account["account_id"]) == []
+    assert invoice["total"] == Decimal("0.00")
+
+
+def test_a_cancellation_is_a_refund_everywhere_and_a_rebooking_is_the_only_saving(logged_in_carded):
+    """One cancelled ticket and one rebooked ticket on the same account: only
+    the rebooking is a saving, a fee, or a 'fare drop' in any total or label."""
+    client, account = logged_in_carded
+    acct = account["account_id"]
+    cancelled = make_real_order(acct, carrier="Cancel Airways", paid="300.00")
+    rebooked = make_real_order(acct, carrier="Rebook Airways", paid="400.00", last_decision=RESHOP_DECISION)
+    execute_cancel(client, cancelled["order_id"], "300.00", refund_to="original_form_of_payment")
+    execute_exchange(client, rebooked["order_id"], "40.00")
+
+    rows = db.wallet_transactions(acct)
+
+    def ledger(order):
+        return sorted((r["kind"], r["label"], r["amount"]) for r in rows
+                      if r["order_id"] == order["order_id"] and r["kind"] != "charge")
+
+    assert ledger(cancelled) == [("refund", "Booking cancelled — refunded to card", Decimal("300.00"))]
+    assert ledger(rebooked) == [
+        ("fee", "Service fee — billed on your next invoice, not yet charged", Decimal("-10.00")),
+        ("recovery", "Fare drop recovered — refunded to card", Decimal("40.00"))]
+
+    totals = db.wallet_totals(rows)
+    assert (totals["recovered"], totals["fees"], totals["net_back"]) == (
+        Decimal("40.00"), Decimal("10.00"), Decimal("30.00"))
+
+    savings = db.savings_totals_for_account(acct)
+    assert (savings["cash_recovered"], savings["cash_fee"]) == (Decimal("40.00"), Decimal("10.00"))
+    assert db.account_summary(acct)["savings_events"] == 1
+
+    saved = {r["carrier"]: r["saved"] for r in db.spend_by_carrier(acct)}
+    assert saved == {"Cancel Airways": Decimal("0"), "Rebook Airways": Decimal("40.00")}
+
+    today = datetime.now(timezone.utc).date()
+    invoice = db.generate_invoice(acct, today, today + timedelta(days=1))
+    lines = db.invoice_lines_for(invoice["id"], acct)
+    assert [(line["line_type"], line["amount"]) for line in lines] == [("commission_cash", Decimal("10.00"))]
+
+
 def test_invoice_generation_is_idempotent_per_period(logged_in_carded):
     client, account = logged_in_carded
-    order = make_real_order(account["account_id"])
-    execute_cancel(client, order["order_id"], "200.00")
+    order = make_real_order(account["account_id"], last_decision=RESHOP_DECISION)
+    execute_exchange(client, order["order_id"], "200.00")
 
     today = datetime.now(timezone.utc).date()  # matches generate_invoice_route()
     invoice1 = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))

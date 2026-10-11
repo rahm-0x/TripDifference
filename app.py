@@ -1779,11 +1779,16 @@ def _activity_label(row):
             # "Recovery executed" doesn't distinguish a forfeited exchange
             # (nothing came back) from a real one, so it reads the same
             # delivery_type distinction the wallet already surfaces.
-            title = {
+            # A cancellation is not a recovery, and isn't worded as one.
+            title = ({
+                "refund_to_card": "Booking cancelled — refunded to card",
+                "airline_credit": "Booking cancelled — airline credit issued",
+                "forfeited": "Booking cancelled — nothing refunded",
+            }.get(row.get("delivery_type"), "Booking cancelled") if row.get("action") == "cancel" else {
                 "refund_to_card": "Recovery executed — refunded to card",
                 "airline_credit": "Recovery executed — airline credit issued",
                 "forfeited": "Recovery executed — value forfeited, nothing recovered",
-            }.get(row.get("delivery_type"), "Recovery executed")
+            }.get(row.get("delivery_type"), "Recovery executed"))
         else:
             title = "Recovery executed"
         return {"title": title, "detail": row.get("detail", "")}
@@ -2746,7 +2751,10 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
         # a separate change from what actually gets billed, out of scope
         # here (the engine's tested decision logic is untouched).
         rate = db.account_commission_rate(record["account_id"])
-        event = db.savings_event_create(order_id, execution_attempt_id=attempt["id"],
+        # `action` is what keeps a cancellation out of commission: only a
+        # rebooking is a saving (db.savings_event_create zeroes the rest).
+        event = db.savings_event_create(order_id, action=action,
+                                        execution_attempt_id=attempt["id"],
                                         currency=record.get("currency") or "",
                                         commission_rate=rate, **savings)
         audit_payload["delivery_type"] = savings["delivery_type"]
