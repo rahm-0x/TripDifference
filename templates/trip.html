@@ -64,7 +64,8 @@
     {% if ev.commission_amount and ev.commission_amount != '0.00' %}
     {# ev.commission_rate arrives as a string ("0.2500"); multiplying it
        un-converted repeated the text and took this page down. #}
-    Our fee ({{ (ev.commission_rate|float * 100)|round(1) }}%): {{ ev.commission_amount }} {{ ev.currency }}.
+    Our fee ({{ (ev.commission_rate|float * 100)|round(1) }}%): {{ ev.commission_amount }} {{ ev.currency }}{{
+      ', charged to the card on file' if ev.commission_charged_at else ', on your next invoice' }}.
     {% endif %}
   </div>
 </div>

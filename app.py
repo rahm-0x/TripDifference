@@ -2812,18 +2812,26 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
 
     # Last, once the order says what happened: a payout that fails leaves a
     # finished, recorded exchange with money still owed, never the reverse.
+    delivered = True   # airline credit is delivered by the airline issuing it
     if event and savings["delivery_type"] == "refund_to_card":
-        _pay_out(record, event)
+        delivered = _pay_out(record, event)
+
+    # TD's fee: on a rebooking only (a cancellation's event carries none), and
+    # only once the saving has actually reached the customer — never taken
+    # from someone who is still owed the money it is a share of.
+    if event and action == "exchange" and delivered:
+        _charge_commission(record, event)
     return True, note
 
 
 def _pay_out(record, event):
     """Pass a cash recovery on to the card that paid for the ticket. The
     airline's refund went to TD's Duffel balance, which bought the ticket, so
-    this is the step that makes 'refunded to card' true.
+    this is the step that makes 'refunded to card' true. Returns whether the
+    money reached the card.
 
-    The whole recovery goes back; the commission on it is invoiced separately
-    and never netted off (see invoice_lines). Never raises and never undoes
+    The whole recovery goes back; the commission on it is charged separately
+    (_charge_commission) and never netted off. Never raises and never undoes
     anything: a payout that cannot be made is recorded on the savings event
     (payout_failed_at / payout_error, migration 033) for resolution, the same
     way a failed capture is recorded on an order whose ticket is already issued.
@@ -2831,11 +2839,11 @@ def _pay_out(record, event):
     try:
         amount = Decimal(str(event["realized_savings"]))
         if amount <= 0:
-            return
+            return True
         intent = record.get("stripe_payment_intent_id")
         if not intent:
             db.savings_event_payout_failed(event["id"], "no card charge on record for this order")
-            return
+            return False
         try:
             # Keyed on the savings event, so a retry returns the same refund
             # rather than paying the same recovery twice.
@@ -2843,10 +2851,49 @@ def _pay_out(record, event):
                                             idempotency_key=f"savings-{event['id']}")
         except RuntimeError as exc:  # billing.CardError, or no Stripe key configured
             db.savings_event_payout_failed(event["id"], exc)
-            return
+            return False
         db.savings_event_paid_out(event["id"], refund.id)
+        return True
     except Exception as exc:  # e.g. the database, or migration 033 not applied yet
         print(f"  payout for savings event {event.get('id')} not recorded: {type(exc).__name__}: {exc}")
+        return False
+
+
+def _charge_commission(record, event):
+    """Collect TD's fee on a rebooking from the account's card on file — the
+    commission already computed on the savings event at the account's own
+    rate, as one charge of its own.
+
+    Never raises and never undoes anything, like _pay_out: the rebooking has
+    landed and the customer has their saving. A charge that cannot be made is
+    recorded on the event (commission_charge_failed_at / _error, migration
+    035) and the fee stays invoiceable; one that succeeds stamps
+    commission_charged_at, which is what keeps it off every later invoice.
+    """
+    try:
+        amount = Decimal(str(event["commission_amount"] or 0))
+        if amount <= 0:
+            return
+        try:
+            # Keyed on the savings event, so a retry returns the same charge
+            # rather than taking the fee twice.
+            charge = billing.charge_commission(
+                record["account_id"], amount=amount,
+                currency=event["currency"] or record.get("currency") or "",
+                idempotency_key=f"commission-{event['id']}",
+                description=("Trip Difference service fee, rebooking "
+                             f"{record.get('booking_reference') or record['order_id']}"),
+                metadata={"savings_event_id": str(event["id"]), "order_id": record["order_id"]})
+        except RuntimeError as exc:  # billing.CardError, or no Stripe key configured
+            db.savings_event_commission_charge_failed(event["id"], exc)
+            return
+        if getattr(charge, "status", None) != "succeeded":
+            db.savings_event_commission_charge_failed(
+                event["id"], f"charge did not complete (status {getattr(charge, 'status', 'unknown')})")
+            return
+        db.savings_event_commission_charged(event["id"], charge.id)
+    except Exception as exc:  # e.g. the database, or migration 035 not applied yet
+        print(f"  commission for savings event {event.get('id')} not recorded: {type(exc).__name__}: {exc}")
 
 
 @app.route("/orders/<order_id>/execute/<action>", methods=["POST"])

@@ -492,6 +492,23 @@ def savings_event_payout_failed(event_id, error):
           WHERE id = %s""", (str(error)[:500], event_id))
 
 
+def savings_event_commission_charged(event_id, payment_intent_id):
+    """TD's fee on this rebooking was collected (migration 035). Clears an
+    earlier failure, so a retry that succeeds reads as charged."""
+    q("""UPDATE savings_events
+            SET commission_charged_at = now(), commission_payment_intent_id = %s,
+                commission_charge_failed_at = NULL, commission_charge_error = NULL
+          WHERE id = %s""", (payment_intent_id, event_id))
+
+
+def savings_event_commission_charge_failed(event_id, error):
+    """The fee is still owed — it stays invoiceable — and this says why the
+    card charge did not go through."""
+    q("""UPDATE savings_events
+            SET commission_charge_failed_at = now(), commission_charge_error = %s
+          WHERE id = %s""", (str(error)[:500], event_id))
+
+
 def savings_events_for_order(order_id):
     rows = q("""SELECT * FROM savings_events WHERE order_id = %s
                 ORDER BY created_at DESC""", (order_id,), fetch="all")
@@ -953,14 +970,19 @@ def wallet_transactions(account_id, limit=100):
     realized, so nothing is owed on it either) rather than being dropped
     because no cash moved.
     """
+    # original_paid, where an exchange has set it: `paid` is overwritten with
+    # the ticket's new, lower total, but the card was charged the original
+    # fare — the saving is its own row, and showing the reduced figure here
+    # as well counted it twice.
     charges = q("""SELECT created_at AS ts, order_id, booking_reference, route,
-                          paid AS amount, currency, source
+                          COALESCE(original_paid, paid) AS amount, currency, source
                      FROM orders
                     WHERE account_id = %s AND paid IS NOT NULL""",
                 (account_id,), fetch="all")
 
     real_execs = q("""SELECT se.created_at AS ts, se.order_id, o.booking_reference, o.route,
                              se.realized_savings, se.commission_amount, se.delivery_type, se.action,
+                             se.commission_charged_at,
                              COALESCE(NULLIF(se.currency, ''), o.currency) AS currency
                         FROM savings_events se
                         JOIN orders o ON o.order_id = se.order_id
@@ -998,12 +1020,13 @@ def wallet_transactions(account_id, limit=100):
         "airline_credit": "Booking cancelled — airline credit issued",
         "forfeited": "Booking cancelled — nothing refunded",
     }
-    # Real, not yet moved by us: the commission is billed on the account's
-    # next invoice (see generate_invoice), not deducted here — this ledger
-    # must not read as a completed deduction against money that already
-    # moved, since under the merchant-of-record model the full recovery
-    # goes straight to the company's card via Duffel, untouched by TD.
+    # The fee is never deducted from the recovery — the whole recovery goes
+    # back to the company — so it is its own line. It is charged to the card
+    # on file once the rebooking has delivered its saving
+    # (app._charge_commission); until that charge has actually gone through,
+    # the line must not read as money that has moved.
     FEE_LABEL = "Service fee — billed on your next invoice, not yet charged"
+    FEE_CHARGED_LABEL = "Service fee — charged to the card on file"
 
     rows = []
     for c in charges:
@@ -1030,7 +1053,8 @@ def wallet_transactions(account_id, limit=100):
                      "amount": recovered, "currency": e["currency"]})
         if fee:
             rows.append({"ts": e["ts"], "kind": "fee", "simulated": False,
-                         "label": FEE_LABEL, "order_id": e["order_id"],
+                         "label": FEE_CHARGED_LABEL if e["commission_charged_at"] else FEE_LABEL,
+                         "order_id": e["order_id"],
                          "reference": e["booking_reference"], "route": e["route"],
                          "amount": -fee, "currency": e["currency"]})
     for e in sim_execs:
@@ -1144,7 +1168,11 @@ def generate_invoice(account_id, period_start, period_end):
     """One invoice for one account over [period_start, period_end).
 
     Built from savings_events not yet billed (invoice_line_id IS NULL) plus
-    the account's subscription_fee. 'forfeited' events are excluded by a
+    the account's subscription_fee. Rebookings only, and only those whose fee
+    was not already collected from the card when the rebooking landed
+    (commission_charged_at IS NULL) — an invoice is where a fee that could
+    not be charged ends up, never a second bill for one that was.
+    'forfeited' events are excluded by a
     positive allowlist (delivery_type IN ('refund_to_card','airline_credit'))
     rather than relied on to never carry a nonzero commission_amount —
     forfeited recoveries are never billable, no commission on value that
@@ -1173,6 +1201,7 @@ def generate_invoice(account_id, period_start, period_end):
                         WHERE o.account_id = %s
                           AND se.invoice_line_id IS NULL
                           AND se.action = 'exchange'
+                          AND se.commission_charged_at IS NULL
                           AND se.delivery_type IN ('refund_to_card', 'airline_credit')
                           AND se.created_at >= %s AND se.created_at < %s
                         FOR UPDATE OF se""",

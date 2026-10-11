@@ -124,6 +124,21 @@ def pytest_sessionstart(session):
              "they create, but this database has real tickets in it.")
 
 
+@pytest.fixture(autouse=True)
+def stripe_is_never_called_for_real(monkeypatch):
+    """No test reaches Stripe. The suite's accounts carry a card on file that
+    does not exist there, and an execution now refunds and charges as it goes
+    (app._pay_out, app._charge_commission) — un-mocked, each would be a real
+    API call that fails slowly, and the test would pass or fail on the network.
+    A test that needs a Stripe result patches the billing function it is about
+    (or billing._client); everything else sees Stripe as unreachable."""
+    import billing
+
+    def unreachable():
+        raise RuntimeError("Stripe is not reachable from the test suite")
+    monkeypatch.setattr(billing, "_client", unreachable)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def assert_connected_to_staging_database():
     """Checks the connection db.py really opened, not just the env var: host,

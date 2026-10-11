@@ -213,3 +213,36 @@ def refund_to_card(payment_intent_id, *, amount, idempotency_key):
                                        idempotency_key=idempotency_key)
     except stripe.error.StripeError as exc:
         raise CardError(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# the commission — charged once a rebooking has delivered its saving
+# ---------------------------------------------------------------------------
+
+def charge_commission(account_id, *, amount, currency, idempotency_key, description, metadata=None):
+    """Charge TD's fee on a rebooking to the account's card on file, in one
+    step (no hold: there is nothing left that could fail and need it released).
+
+    idempotency_key should be derived from the savings event, so a retry of
+    the same rebooking returns the same charge instead of taking the fee twice.
+    Raises CardError if there is no card on file or Stripe declines.
+    """
+    ids = db.account_stripe_ids(account_id)
+    if not ids or not ids.get("stripe_payment_method_id"):
+        raise CardError("no payment method on file")
+    try:
+        return _client().PaymentIntent.create(
+            amount=_to_minor_units(amount),
+            currency=currency.lower(),
+            customer=ids["stripe_customer_id"],
+            payment_method=ids["stripe_payment_method_id"],
+            off_session=True,
+            confirm=True,
+            description=description,
+            metadata=metadata or {},
+            idempotency_key=idempotency_key,
+        )
+    except stripe.error.CardError as exc:
+        raise CardError(exc.user_message or str(exc)) from exc
+    except stripe.error.StripeError as exc:
+        raise CardError(str(exc)) from exc

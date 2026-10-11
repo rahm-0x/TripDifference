@@ -1090,6 +1090,135 @@ def test_the_trip_page_shows_the_fee_on_a_rebooking(logged_in_carded):
     assert "Rebooked" in client.get("/trips").get_data(as_text=True)
 
 
+# ---------------------------------------------------------------------------
+# collecting the commission — charged to the card on file once a rebooking
+# has delivered its saving
+# ---------------------------------------------------------------------------
+
+def _fee_charge(pi_id="pi_test_fee", status="succeeded"):
+    return MagicMock(id=pi_id, status=status)
+
+
+def test_the_fee_is_charged_to_the_card_once_a_cash_rebooking_is_paid_out(logged_in_carded):
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("billing.refund_to_card", return_value=MagicMock(id="re_test_1")), \
+         patch("billing.charge_commission", return_value=_fee_charge()) as charge:
+        execute_exchange(client, order["order_id"], "40.00")
+
+    event = db.savings_events_for_order(order["order_id"])[0]
+    # The account's own rate on what was recovered, once, keyed so a retry cannot take it twice.
+    charge.assert_called_once()
+    assert charge.call_args.args == (account["account_id"],)
+    assert charge.call_args.kwargs["amount"] == Decimal("10.00")
+    assert charge.call_args.kwargs["currency"] == "USD"
+    assert charge.call_args.kwargs["idempotency_key"] == f"commission-{event['id']}"
+    assert charge.call_args.kwargs["metadata"] == {"savings_event_id": str(event["id"]),
+                                                   "order_id": order["order_id"]}
+    assert event["commission_payment_intent_id"] == "pi_test_fee"
+    assert event["commission_charged_at"] is not None and event["commission_charge_failed_at"] is None
+
+    fee_rows = [r for r in db.wallet_transactions(account["account_id"]) if r["kind"] == "fee"]
+    assert [(r["label"], r["amount"]) for r in fee_rows] == [
+        ("Service fee — charged to the card on file", Decimal("-10.00"))]
+
+
+def test_the_fee_is_charged_on_an_airline_credit_rebooking_too(logged_in_carded):
+    """No cash passes through TD when the airline returns credit, so there is
+    nothing to pay out — the credit is delivered by the airline issuing it —
+    and the fee is still the account's rate on what was recovered."""
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION, carrier="Duffel Airways")
+    with patch("billing.refund_to_card") as refund, \
+         patch("billing.charge_commission", return_value=_fee_charge()) as charge:
+        execute_exchange(client, order["order_id"], "80.00", refund_to="airline_credits")
+    refund.assert_not_called()
+    assert charge.call_args.kwargs["amount"] == Decimal("20.00")
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert event["delivery_type"] == "airline_credit" and event["commission_charged_at"] is not None
+
+
+def test_no_fee_is_taken_while_the_saving_is_still_owed(logged_in_carded):
+    """The fee is a share of money the customer got back. If the refund to
+    their card did not go through, they have not got it back yet."""
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("billing.refund_to_card", side_effect=billing.CardError("card declined")), \
+         patch("billing.charge_commission") as charge:
+        execute_exchange(client, order["order_id"], "40.00")
+    charge.assert_not_called()
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert event["payout_failed_at"] is not None
+    assert event["commission_amount"] == "10.00" and event["commission_charged_at"] is None
+
+
+@pytest.mark.parametrize("outcome,why", [
+    ({"side_effect": billing.CardError("Your card was declined.")}, "card was declined"),
+    ({"return_value": MagicMock(id="pi_test_slow", status="processing")}, "status processing"),
+])
+def test_a_fee_that_could_not_be_charged_is_recorded_and_falls_to_the_invoice(logged_in_carded, outcome, why):
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("billing.refund_to_card", return_value=MagicMock(id="re_test_1")), \
+         patch("billing.charge_commission", **outcome):
+        resp = execute_exchange(client, order["order_id"], "40.00")
+    assert resp.status_code == 302 and db.find_order(order["order_id"])["executed"], "the rebooking stands"
+
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert event["commission_charged_at"] is None and event["commission_charge_failed_at"] is not None
+    assert why in event["commission_charge_error"]
+
+    today = datetime.now(timezone.utc).date()
+    invoice = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
+    lines = db.invoice_lines_for(invoice["id"], account["account_id"])
+    assert [(line["line_type"], line["amount"]) for line in lines] == [("commission_cash", Decimal("10.00"))]
+
+
+def test_a_fee_already_charged_to_the_card_is_never_invoiced(logged_in_carded):
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("billing.refund_to_card", return_value=MagicMock(id="re_test_1")), \
+         patch("billing.charge_commission", return_value=_fee_charge()):
+        execute_exchange(client, order["order_id"], "40.00")
+    today = datetime.now(timezone.utc).date()
+    invoice = db.generate_invoice(account["account_id"], today, today + timedelta(days=1))
+    assert db.invoice_lines_for(invoice["id"], account["account_id"]) == []
+    assert invoice["total"] == Decimal("0.00")
+
+
+def test_a_cancellation_never_reaches_the_fee_charge(logged_in_carded):
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"])
+    with patch("billing.refund_to_card", return_value=MagicMock(id="re_test_1")), \
+         patch("billing.charge_commission") as charge:
+        execute_cancel(client, order["order_id"], "219.00", refund_to="original_form_of_payment")
+    charge.assert_not_called()
+    assert db.savings_events_for_order(order["order_id"])[0]["commission_charged_at"] is None
+
+
+def test_charge_commission_is_one_immediate_charge_on_the_saved_card(logged_in_carded):
+    _, account = logged_in_carded
+    with patch("billing._client") as client:
+        client.return_value.PaymentIntent.create.return_value = _fee_charge("pi_test_fee_2")
+        charge = billing.charge_commission(account["account_id"], amount=Decimal("11.25"), currency="USD",
+                                           idempotency_key="commission-7", description="fee",
+                                           metadata={"savings_event_id": "7"})
+    assert charge.id == "pi_test_fee_2"
+    # no capture_method: nothing follows that could fail and need a hold released
+    client.return_value.PaymentIntent.create.assert_called_once_with(
+        amount=1125, currency="usd", customer="cus_test_fake", payment_method="pm_test_fake",
+        off_session=True, confirm=True, description="fee", metadata={"savings_event_id": "7"},
+        idempotency_key="commission-7")
+
+
+def test_charge_commission_needs_a_card_on_file(logged_in):
+    _, account = logged_in
+    with patch("billing._client") as client, pytest.raises(billing.CardError, match="no payment method"):
+        billing.charge_commission(account["account_id"], amount=Decimal("5.00"), currency="USD",
+                                  idempotency_key="commission-8", description="fee")
+    client.assert_not_called()
+
+
 def test_card_setup_never_names_payment_method_types():
     """Newer Stripe API versions reject `payment_method_types`; sending it is
     what made the card page return 500 on staging."""
@@ -1419,6 +1548,11 @@ def test_a_cancellation_is_a_refund_everywhere_and_a_rebooking_is_the_only_savin
     totals = db.wallet_totals(rows)
     assert (totals["recovered"], totals["fees"], totals["net_back"]) == (
         Decimal("40.00"), Decimal("10.00"), Decimal("30.00"))
+    # What the card was charged at booking, not the ticket's lower total after
+    # the rebooking — the saving is its own row and must not be counted twice.
+    booked = {r["order_id"]: r["amount"] for r in rows if r["kind"] == "charge"}
+    assert booked == {cancelled["order_id"]: Decimal("-300.00"), rebooked["order_id"]: Decimal("-400.00")}
+    assert totals["charged"] == Decimal("700.00")
 
     savings = db.savings_totals_for_account(acct)
     assert (savings["cash_recovered"], savings["cash_fee"]) == (Decimal("40.00"), Decimal("10.00"))
