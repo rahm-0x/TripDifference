@@ -598,13 +598,24 @@ def account_settings_update(user_id, *, nickname, phone_number):
 # ---------------------------------------------------------------------------
 
 def account_stripe_ids(account_id):
+    """The account's Stripe customer and card under the mode this deployment's
+    key is in (migration 036). A Stripe id exists in one mode only, so ids
+    saved under the other one read as nothing on file — here and in
+    account_card()."""
     return q("""SELECT stripe_customer_id, stripe_payment_method_id
-                FROM accounts WHERE id = %s""", (account_id,), fetch="one")
+                FROM accounts WHERE id = %s AND stripe_livemode = %s""",
+             (account_id, config.STRIPE_LIVEMODE), fetch="one")
 
 
 def account_set_stripe_customer(account_id, stripe_customer_id):
-    q("UPDATE accounts SET stripe_customer_id = %s WHERE id = %s",
-      (stripe_customer_id, account_id))
+    """A new customer starts with no card. One is only created when the account
+    has none under the current mode (billing.ensure_customer), and a card saved
+    on the customer it replaces cannot be charged through this one."""
+    q("""UPDATE accounts SET stripe_customer_id = %s, stripe_livemode = %s,
+                             stripe_payment_method_id = NULL, card_brand = '', card_last4 = '',
+                             card_exp_month = NULL, card_exp_year = NULL
+          WHERE id = %s""",
+      (stripe_customer_id, config.STRIPE_LIVEMODE, account_id))
 
 
 def account_save_payment_method(account_id, *, stripe_payment_method_id, brand,
@@ -620,8 +631,9 @@ def account_card(account_id):
     every template that shows the card both key off. Eligibility does not
     consult it: a fare's changeability has nothing to do with the viewer."""
     row = q("""SELECT card_brand, card_last4, card_exp_month, card_exp_year
-                FROM accounts WHERE id = %s AND stripe_payment_method_id IS NOT NULL""",
-            (account_id,), fetch="one")
+                FROM accounts WHERE id = %s AND stripe_payment_method_id IS NOT NULL
+                                AND stripe_livemode = %s""",
+            (account_id, config.STRIPE_LIVEMODE), fetch="one")
     if not row:
         return None
     return {

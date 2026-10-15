@@ -406,7 +406,8 @@ def test_healthz_env_reports_identity_without_secrets(logged_in, monkeypatch):
     assert set(body) == {"app_env", "vercel_git_commit_sha", "duffel_token_mode", "db_project_ref",
                          "duffel_live_search_enabled", "duffel_live_orders_enabled",
                          "staging_max_order_usd", "staging_max_daily_usd", "viewer_on_live_allowlist",
-                         "reshop_autopilot_enabled", "cron_secret_set"}
+                         "reshop_autopilot_enabled", "cron_secret_set",
+                         "stripe_live_enabled", "stripe_mode", "stripe_charges_enabled"}
     # the suite runs as dev, against the staging database, with a test token
     assert body["app_env"] == "dev"
     assert body["db_project_ref"] == config.STAGING_SUPABASE_REF
@@ -417,6 +418,8 @@ def test_healthz_env_reports_identity_without_secrets(logged_in, monkeypatch):
     assert body["staging_max_order_usd"] == "250.50" and body["staging_max_daily_usd"] is None
     assert body["viewer_on_live_allowlist"] is True
     assert body["reshop_autopilot_enabled"] is False and body["cron_secret_set"] is True
+    # Stripe as a mode, and never asked about a test key
+    assert body["stripe_live_enabled"] is False and body["stripe_charges_enabled"] is None
 
     raw = client.get("/healthz/env").get_data(as_text=True)
     assert "someone.else@example.com" not in raw and "s3cret-cron-value" not in raw
@@ -439,6 +442,8 @@ def test_healthz_env_on_a_staging_live_search_deploy(monkeypatch, logged_in):
     for name in ("STAGING_MAX_ORDER_USD", "STAGING_MAX_DAILY_USD", "STAGING_ALLOWED_EMAILS", "CRON_SECRET"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.delenv("STRIPE_LIVE_ENABLED", raising=False)
     body = client.get("/healthz/env").get_json()
     assert body == {"app_env": "staging", "vercel_git_commit_sha": "abc1234", "duffel_token_mode": "live",
                     "db_project_ref": config.STAGING_SUPABASE_REF, "duffel_live_search_enabled": True,
@@ -446,4 +451,6 @@ def test_healthz_env_on_a_staging_live_search_deploy(monkeypatch, logged_in):
                     # nothing configured: no caps, nobody allowlisted, no cron secret
                     "staging_max_order_usd": None, "staging_max_daily_usd": None,
                     "viewer_on_live_allowlist": False,
-                    "reshop_autopilot_enabled": True, "cron_secret_set": False}
+                    "reshop_autopilot_enabled": True, "cron_secret_set": False,
+                    # a live token over a test key: what staging is until told otherwise
+                    "stripe_live_enabled": False, "stripe_mode": "test", "stripe_charges_enabled": None}

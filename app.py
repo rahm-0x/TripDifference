@@ -179,6 +179,8 @@ def inject_globals():
             # 'orders' (real tickets, real money), 'search' (live fares, no
             # orders), or None
             "live_banner": _live_banner(),
+            # the same banner says so when the cards being charged are real
+            "stripe_live": config.STRIPE_LIVEMODE,
             # whether a recheck exchanges on its own or leaves it for CONFIRM
             "autopilot": config.RESHOP_AUTOPILOT_ENABLED,
             "app_env": config.APP_ENV}
@@ -896,11 +898,13 @@ def info():
 @auth.login_required
 def healthz_env():
     """What this deployment is running as, for checking a deploy. Never a
-    secret: the token as a mode, the database as its Supabase project ref, the
-    live-spend caps as numbers, the allowlist only as whether the person
-    looking is on it, and the cron secret only as whether one is set."""
+    secret: the token and the Stripe key as a mode, the database as its
+    Supabase project ref, the live-spend caps as numbers, the allowlist only
+    as whether the person looking is on it, and the cron secret only as
+    whether one is set."""
     max_order, max_daily = config.STAGING_MAX_ORDER_USD, config.STAGING_MAX_DAILY_USD
     email = (auth.current_user()["email"] or "").strip().lower()
+    stripe_key = config.STRIPE_SECRET_KEY
     return {
         "app_env": config.APP_ENV,
         "vercel_git_commit_sha": os.environ.get("VERCEL_GIT_COMMIT_SHA") or None,
@@ -915,6 +919,13 @@ def healthz_env():
         # What the scheduler will do if something calls it.
         "reshop_autopilot_enabled": config.RESHOP_AUTOPILOT_ENABLED,
         "cron_secret_set": bool(config.CRON_SECRET),
+        # Whose cards get charged: 'live' is real ones. charges_enabled is
+        # Stripe's own answer for a live key (null in test mode, or unasked).
+        "stripe_live_enabled": config.STRIPE_LIVE_ENABLED,
+        "stripe_mode": ("live" if stripe_key.startswith("sk_live_") else
+                        "test" if stripe_key.startswith("sk_test_") else
+                        "unrecognised" if stripe_key else "missing"),
+        "stripe_charges_enabled": billing.charges_enabled(),
     }
 
 
@@ -1023,7 +1034,7 @@ def onboarding_payment():
     intent = billing.create_setup_intent(customer_id)
     return render_template("onboarding_payment.html", hide_nav=True,
                            client_secret=intent.client_secret,
-                           stripe_publishable_key=os.environ.get("STRIPE_PUBLISHABLE_KEY", ""),
+                           stripe_publishable_key=config.STRIPE_PUBLISHABLE_KEY,
                            commission_rate=db.account_commission_rate(acct))
 
 
@@ -1034,6 +1045,10 @@ def onboarding_payment_confirm():
     payment_method_id = request.form.get("payment_method_id", "").strip()
     if payment_method_id:
         ids = db.account_stripe_ids(acct)
+        if not ids or not ids.get("stripe_customer_id"):
+            # No customer under the Stripe mode in use for the card to belong
+            # to — the card page creates one, so start there again.
+            return redirect(url_for("onboarding_payment"))
         billing.save_payment_method(acct, ids["stripe_customer_id"], payment_method_id)
     return redirect(url_for("overview"))
 
@@ -2508,7 +2523,7 @@ def _cancellation_quote(order_id):
         amount = Decimal(str(pending.get("refund_amount") or "0"))
     except InvalidOperation:
         amount = Decimal("0")
-    credit = (pending.get("refund_to") or "").replace("_", "") in ("airlinecredit", "airlinecredits")
+    credit = _refund_lands_as(pending.get("refund_to")) == "credit"
     quote = {
         "order_id": order_id, "id": pending["id"],
         "refund_amount": str(amount), "refund_currency": pending.get("refund_currency") or "",
@@ -2661,8 +2676,7 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
                 # would mean nothing was quoted to return in the first
                 # place, which the engine's own gate (change_total >= 0 =
                 # skip) already refuses to act on before execution.
-                is_credit = (result.get("refund_to") or "").replace("_", "") \
-                    in ("airlinecredit", "airlinecredits")
+                is_credit = _refund_lands_as(result.get("refund_to")) == "credit"
                 delivery_type = "airline_credit" if is_credit else "refund_to_card"
                 delivery_detail = (f"{record.get('carrier')} account" if is_credit
                                    else f"card ending in {card['last4']}")
@@ -2680,8 +2694,7 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
                     f"refunded {result.get('refund_amount')} {result.get('refund_currency')}")
             paid = Decimal(record.get("paid") or 0)
             refunded = Decimal(result.get("refund_amount") or 0)
-            is_credit = (result.get("refund_to") or "").replace("_", "") \
-                in ("airlinecredit", "airlinecredits")
+            is_credit = _refund_lands_as(result.get("refund_to")) == "credit"
             if refunded > 0:
                 delivery_type = "airline_credit" if is_credit else "refund_to_card"
                 delivery_detail = (f"{record.get('carrier')} account" if is_credit
@@ -2814,7 +2827,7 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
     # finished, recorded exchange with money still owed, never the reverse.
     delivered = True   # airline credit is delivered by the airline issuing it
     if event and savings["delivery_type"] == "refund_to_card":
-        delivered = _pay_out(record, event)
+        delivered = _pay_out(record, event, result.get("refund_to"))
 
     # TD's fee: on a rebooking only (a cancellation's event carries none), and
     # only once the saving has actually reached the customer — never taken
@@ -2824,11 +2837,37 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
     return True, note
 
 
-def _pay_out(record, event):
+# Where Duffel says a refund went: refund_to on a confirmed cancellation or
+# order change. Every ticket is paid from TD's Duffel balance today, so
+# original_form_of_payment means that balance too. That stops being true the
+# day an order is paid by card — the airline then refunds the card itself, and
+# passing the money on again would pay the customer twice.
+_REFUND_AS_CREDIT = ("airline_credits", "airline_credit", "voucher")
+_REFUND_TO_OUR_BALANCE = ("balance", "original_form_of_payment")
+
+
+def _refund_lands_as(refund_to):
+    """'credit' (airline credit or a voucher: no cash reaches anyone),
+    'balance' (cash in TD's Duffel balance, to pass on to the card), or
+    'elsewhere' — anything else, no answer included, which is never passed on
+    until someone has checked where the money went."""
+    value = (refund_to or "").strip().lower()
+    if value in _REFUND_AS_CREDIT:
+        return "credit"
+    if value in _REFUND_TO_OUR_BALANCE:
+        return "balance"
+    return "elsewhere"
+
+
+def _pay_out(record, event, refund_to):
     """Pass a cash recovery on to the card that paid for the ticket. The
     airline's refund went to TD's Duffel balance, which bought the ticket, so
     this is the step that makes 'refunded to card' true. Returns whether the
     money reached the card.
+
+    Only a refund Duffel says landed in that balance is passed on: anything
+    else is recorded as a payout that has not been made, with where Duffel
+    said it went, rather than refunding the card with money TD never received.
 
     The whole recovery goes back; the commission on it is charged separately
     (_charge_commission) and never netted off. Never raises and never undoes
@@ -2840,6 +2879,11 @@ def _pay_out(record, event):
         amount = Decimal(str(event["realized_savings"]))
         if amount <= 0:
             return True
+        if _refund_lands_as(refund_to) != "balance":
+            db.savings_event_payout_failed(
+                event["id"], f"Duffel reported the airline's refund going to '{refund_to or 'nowhere stated'}', "
+                             "not TD's Duffel balance — check where it landed before refunding the card")
+            return False
         intent = record.get("stripe_payment_intent_id")
         if not intent:
             db.savings_event_payout_failed(event["id"], "no card charge on record for this order")

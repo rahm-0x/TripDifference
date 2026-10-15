@@ -54,7 +54,9 @@ Flask `app` in root `app.py` and routes every path to a single function.
   carries a banner: amber for live search, red for live orders. The app refuses to start
   on a Vercel Preview deployment without an explicit `APP_ENV`, if a live flag or live token
   is set outside staging, if a live flag is on over a test token, if staging's Stripe key
-  isn't `sk_test_`, or if the database doesn't match `APP_ENV` (staging must be the staging
+  isn't `sk_test_` (unless `STRIPE_LIVE_ENABLED=true`, staging only, which charges real cards
+  through `STRIPE_LIVE_SECRET_KEY` / `STRIPE_LIVE_PUBLISHABLE_KEY` and needs that live pair
+  over a live Duffel token), or if the database doesn't match `APP_ENV` (staging must be the staging
   Supabase project, production must not be). `GET /healthz/env` (signed in) shows what a
   deploy is running as: `APP_ENV`, commit, token mode, database project, both flags. Staging's env vars are scoped to the
   `staging` branch in Vercel's Preview environment. Apply migrations to staging with

@@ -34,6 +34,15 @@ read).
   CRON_SECRET                   shared secret the scheduler must present as a bearer
                                 token; "" means unset, and /cron/reshop then refuses every
                                 request rather than running unauthenticated.
+  STRIPE_LIVE_ENABLED           True only when exactly "true" (default false). Staging
+                                only: charge real cards. Stripe then runs on
+                                STRIPE_LIVE_SECRET_KEY / STRIPE_LIVE_PUBLISHABLE_KEY and
+                                the test pair is left where it is, so turning this off
+                                is the whole way back.
+  STRIPE_SECRET_KEY             the Stripe keys in use — the STRIPE_LIVE_ pair on staging
+  STRIPE_PUBLISHABLE_KEY        with STRIPE_LIVE_ENABLED, otherwise the environment
+                                variable of the same name. "" when unset.
+  STRIPE_LIVEMODE               True when that secret key is a live one (sk_live_).
 """
 
 import os
@@ -88,6 +97,11 @@ def _allowed_emails():
     return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
 
 
+def _stripe_key(name):
+    live = _app_env() == "staging" and _flag("STRIPE_LIVE_ENABLED")
+    return os.environ.get(f"STRIPE_LIVE_{name}" if live else f"STRIPE_{name}", "").strip()
+
+
 def startup_check():
     """Run at app import. A Vercel Preview deployment must say what it is:
     with VERCEL_ENV=preview, APP_ENV has to be set explicitly to one of
@@ -114,6 +128,10 @@ _READERS = {
     "STAGING_ALLOWED_EMAILS": _allowed_emails,
     "RESHOP_AUTOPILOT_ENABLED": lambda: _flag("RESHOP_AUTOPILOT_ENABLED"),
     "CRON_SECRET": _cron_secret,
+    "STRIPE_LIVE_ENABLED": lambda: _flag("STRIPE_LIVE_ENABLED"),
+    "STRIPE_SECRET_KEY": lambda: _stripe_key("SECRET_KEY"),
+    "STRIPE_PUBLISHABLE_KEY": lambda: _stripe_key("PUBLISHABLE_KEY"),
+    "STRIPE_LIVEMODE": lambda: _stripe_key("SECRET_KEY").startswith("sk_live_"),
 }
 
 

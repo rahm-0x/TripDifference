@@ -1047,6 +1047,52 @@ def test_an_order_with_no_card_charge_on_record_is_flagged_not_refunded(logged_i
     assert "no card charge on record" in db.savings_events_for_order(order["order_id"])[0]["payout_error"]
 
 
+# Duffel's refund_to values (order cancellations and order changes): arc_bsp_cash,
+# balance, card, voucher, awaiting_payment, airline_credits, original_form_of_payment.
+@pytest.mark.parametrize("refund_to,lands", [
+    ("balance", "balance"), ("original_form_of_payment", "balance"),
+    ("voucher", "credit"), ("airline_credits", "credit"), ("airline_credit", "credit"),
+    ("card", "elsewhere"), ("arc_bsp_cash", "elsewhere"), ("awaiting_payment", "elsewhere"),
+    (None, "elsewhere"), ("", "elsewhere"), ("something_new", "elsewhere"),
+])
+def test_where_a_refund_lands(refund_to, lands):
+    assert app_module._refund_lands_as(refund_to) == lands
+
+
+@pytest.mark.parametrize("refund_to", ["voucher", "airline_credits"])
+def test_a_voucher_is_credit_and_never_paid_out_as_cash(logged_in_carded, refund_to):
+    """A voucher is the airline's to honour, like airline credit: TD received
+    no cash for it, so none is sent to the card."""
+    client, account = logged_in_carded
+    order = _charged_order(account["account_id"])
+    with patch("billing.refund_to_card") as refund:
+        execute_cancel(client, order["order_id"], "219.00", refund_to=refund_to)
+    refund.assert_not_called()
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert event["delivery_type"] == "airline_credit" and event["payout_failed_at"] is None
+
+
+@pytest.mark.parametrize("refund_to", [None, "card", "awaiting_payment", "arc_bsp_cash", "something_new"])
+def test_a_refund_not_sent_to_our_balance_is_flagged_not_paid_out(logged_in_carded, refund_to):
+    """Cash TD never received is never sent to the card. The payout is recorded
+    as not made, saying where Duffel said the money went, and the rebooking's
+    fee waits with it — the saving has not reached the customer through us."""
+    _, account = logged_in_carded
+    order = _charged_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-45.00", [], refund_to=refund_to)), \
+         patch("billing.refund_to_card") as refund, patch("billing.charge_commission") as fee:
+        ok, _ = app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+    assert ok is True, "the exchange landed; where the refund went does not undo it"
+    refund.assert_not_called()
+    fee.assert_not_called()
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert event["delivery_type"] == "refund_to_card" and event["stripe_refund_id"] is None
+    assert event["payout_failed_at"] is not None
+    assert f"'{refund_to or 'nowhere stated'}'" in event["payout_error"]
+    assert "check where it landed" in event["payout_error"]
+
+
 @pytest.mark.parametrize("refund_amount,refund_to,paid_out,says", [
     ("219.00", "original_form_of_payment", True, "Refunded 219.00 USD to your"),
     ("219.00", "original_form_of_payment", False, "has not gone through yet"),

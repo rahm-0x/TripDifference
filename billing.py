@@ -8,7 +8,6 @@ Python SDK — the supported integration path for a Vercel-Marketplace-
 provisioned Stripe account, not a hand-rolled HTTP client.
 """
 
-import os
 from decimal import Decimal
 
 import stripe
@@ -23,12 +22,34 @@ def startup_check():
     never charged for a sandbox ticket and a real ticket is never bought without
     a real charge.
 
-    Staging is the one deliberate exception: it may hold a live Duffel token, but
-    its Stripe key must still be a test key — a staging deploy never charges a
-    real card. DUFFEL_LIVE_ORDERS_ENABLED (default false) and live_guard's caps
-    are what bound that mismatch.
+    Staging is the one deliberate exception: it may hold a live Duffel token over
+    a Stripe test key, so a staging deploy charges no real card unless it is told
+    to. DUFFEL_LIVE_ORDERS_ENABLED (default false) and live_guard's caps are what
+    bound that mismatch.
+
+    STRIPE_LIVE_ENABLED (default false, staging only) is that instruction. Stripe
+    then runs on STRIPE_LIVE_SECRET_KEY / STRIPE_LIVE_PUBLISHABLE_KEY, which must
+    be a live pair over a live Duffel token. Who is charged and how much is still
+    live_guard's: book() reserves there — allowlist, caps — before the card is
+    authorized.
     """
-    key = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+    if config.STRIPE_LIVE_ENABLED and config.APP_ENV != "staging":
+        raise RuntimeError("Refusing to start: STRIPE_LIVE_ENABLED=true is only allowed with APP_ENV=staging "
+                           f"(APP_ENV={config.APP_ENV}).")
+    key = config.STRIPE_SECRET_KEY
+
+    if config.APP_ENV == "staging" and config.STRIPE_LIVE_ENABLED:
+        if not key.startswith("sk_live_"):
+            raise RuntimeError("Refusing to start: STRIPE_LIVE_ENABLED=true requires STRIPE_LIVE_SECRET_KEY "
+                               "to be an sk_live_ key" + ("" if key else ", and it is not set"))
+        if not config.STRIPE_PUBLISHABLE_KEY.startswith("pk_live_"):
+            raise RuntimeError("Refusing to start: STRIPE_LIVE_ENABLED=true requires STRIPE_LIVE_PUBLISHABLE_KEY "
+                               "to be the pk_live_ key that goes with it — a card saved through a test "
+                               "publishable key cannot be charged with a live secret key.")
+        if duffel_http.configured_token_mode() != "live":
+            raise RuntimeError("Refusing to start: STRIPE_LIVE_ENABLED=true over a Duffel token that is not "
+                               "live — a real card would be charged for a ticket that was never really issued.")
+        return
 
     if config.APP_ENV == "staging":
         if not key.startswith("sk_test_"):
@@ -66,7 +87,7 @@ class CardError(RuntimeError):
 
 
 def _client():
-    key = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+    key = config.STRIPE_SECRET_KEY
     if not key:
         raise RuntimeError("STRIPE_SECRET_KEY not set — provision Stripe via "
                            "the Vercel Marketplace before calling billing.py")
@@ -83,9 +104,39 @@ def _to_minor_units(amount):
     return int((Decimal(str(amount)) * 100).to_integral_value())
 
 
+def charges_enabled():
+    """Whether the Stripe account behind a live key can take a charge yet, for
+    /healthz/env: True or False from Stripe, None when it could not be asked.
+    Not asked in test mode, where a charge goes through either way."""
+    if not config.STRIPE_LIVEMODE:
+        return None
+    try:
+        return bool(_client().Account.retrieve().charges_enabled)
+    except Exception:
+        return None
+
+
+def _card_to_charge(account_id):
+    """The account's customer and card, for a charge. Raises CardError when
+    there is no card on file — and, under a live key, for one of the test
+    suite's accounts, which never reaches a real card whatever is saved on it
+    (live_guard refuses the same accounts a live booking)."""
+    if config.STRIPE_LIVEMODE and db.account_name(account_id) == config.TEST_ACCOUNT_NAME:
+        raise CardError("test accounts can never be charged for real")
+    ids = db.account_stripe_ids(account_id)
+    if not ids or not ids.get("stripe_payment_method_id"):
+        raise CardError("no payment method on file")
+    return ids
+
+
 def ensure_customer(account_id, email):
     """Idempotent — reuses the account's existing Stripe customer if one
-    already exists rather than creating a duplicate on every onboarding hit."""
+    already exists rather than creating a duplicate on every onboarding hit.
+
+    "Existing" means under the mode this deployment's key is in
+    (db.account_stripe_ids): an account that saved a test card and is then
+    served with a live key has no customer there, so one is created, and
+    saving it clears the card that belonged to the other mode."""
     existing = db.account_stripe_ids(account_id)
     if existing and existing.get("stripe_customer_id"):
         return existing["stripe_customer_id"]
@@ -162,9 +213,7 @@ def authorize_fare(account_id, *, amount, currency, idempotency_key):
     naturally scopes to "this one purchase attempt," and a retried book()
     that reuses it gets back the same authorization instead of a second one.
     """
-    ids = db.account_stripe_ids(account_id)
-    if not ids or not ids.get("stripe_payment_method_id"):
-        raise CardError("no payment method on file")
+    ids = _card_to_charge(account_id)
     client = _client()
     try:
         return client.PaymentIntent.create(
@@ -227,9 +276,7 @@ def charge_commission(account_id, *, amount, currency, idempotency_key, descript
     the same rebooking returns the same charge instead of taking the fee twice.
     Raises CardError if there is no card on file or Stripe declines.
     """
-    ids = db.account_stripe_ids(account_id)
-    if not ids or not ids.get("stripe_payment_method_id"):
-        raise CardError("no payment method on file")
+    ids = _card_to_charge(account_id)
     try:
         return _client().PaymentIntent.create(
             amount=_to_minor_units(amount),
