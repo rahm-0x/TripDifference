@@ -31,9 +31,9 @@
       {% for l in lines %}
       <tr>
         <td>
-          {% if l.line_type == 'subscription' %}Platform subscription
-          {% elif l.line_type == 'commission_cash' %}Commission — cash recoveries
-          {% else %}Commission — credit recoveries{% endif %}
+          {% if l.line_type == 'commission_cash' %}Commission — cash recoveries
+          {% elif l.line_type == 'commission_credit' %}Commission — credit recoveries
+          {% else %}Other charge{% endif %}
           {% if l.description %}<br><span class="muted" style="font-size:12px">{{ l.description }}</span>{% endif %}
         </td>
         <td class="muted" style="font-size:12.5px">

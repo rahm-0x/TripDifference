@@ -221,7 +221,9 @@ def duffel_side_effect(offer=None, order=None, order_error=None):
 
 BOOK_FORM = {"title": "mr", "given_name": "Amelia", "family_name": "Earhart",
             "born_on": "1985-04-16", "gender": "f", "email": "amelia@example.com",
-            "phone_number": "+442080160509"}
+            "phone_number": "+442080160509",
+            # the price the payment page showed — fake_offer()'s default
+            "shown_total": "219.00", "shown_currency": "USD"}
 
 
 def book_form(offer_id, **overrides):
@@ -303,6 +305,9 @@ def test_upsert_order_round_trips_every_writable_value(acct):
         # column: the cron reads it back to order its queue, so a coercion bug
         # here would quietly reorder what gets checked.
         "last_checked_at": "2026-09-20T08:00:00+00:00",
+        # How Duffel was paid (migration 037). 'card', not the default, so a
+        # write that fell back to 'balance' would show here.
+        "duffel_payment_type": "card",
     }
     assert set(values) == set(db._ORDER_COLS), "test fixture drifted from _ORDER_COLS"
 
@@ -488,6 +493,38 @@ def test_book_proceeds_with_card(logged_in_carded):
     row = db.find_order(order["id"], account["account_id"])
     assert row is not None
     assert row["stripe_payment_intent_id"] == "pi_test_1"
+    assert row["duffel_payment_type"] == "balance"
+
+
+@pytest.mark.parametrize("shown", [{"shown_total": "199.00"}, {"shown_currency": "GBP"},
+                                   {"shown_total": ""}, {"shown_total": "not a price"}])
+def test_a_booking_at_a_price_other_than_the_one_shown_releases_the_hold(logged_in_carded, shown):
+    """The card is held for the offer's total as Duffel quotes it at Pay. If
+    that is not the total the payment page showed, the hold is released and
+    nothing is bought — whatever the reason the two differ."""
+    client, account = logged_in_carded
+    offer = fake_offer()   # 219.00 USD
+    with patch("duffel_http.request", side_effect=duffel_side_effect(offer=offer)) as duffel, \
+         patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_price")) as authorize, \
+         patch("billing.cancel_authorization") as cancel, \
+         patch("billing.capture_authorization") as capture:
+        resp = client.post("/book", data=book_form(offer["id"], **shown), follow_redirects=False)
+    assert resp.status_code == 409
+    authorize.assert_called_once()
+    cancel.assert_called_once_with("pi_test_price")
+    capture.assert_not_called()
+    assert [c.args[:2] for c in duffel.call_args_list] == [("GET", f"/air/offers/{offer['id']}")]
+    assert db.order_for_offer(account["account_id"], offer["id"]) is None
+    assert "Nothing was charged" in resp.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("shown_total,shown_currency,matches", [
+    ("219.00", "USD", True), ("219", "usd", True), ("219.0", " USD ", True),
+    ("219.01", "USD", False), ("219.00", "EUR", False), ("", "USD", False), (None, None, False),
+])
+def test_is_the_price_shown(shown_total, shown_currency, matches):
+    form = {k: v for k, v in (("shown_total", shown_total), ("shown_currency", shown_currency)) if v is not None}
+    assert app_module._is_the_price_shown(fake_offer(), form) is matches
 
 
 # ---------------------------------------------------------------------------
@@ -1049,14 +1086,95 @@ def test_an_order_with_no_card_charge_on_record_is_flagged_not_refunded(logged_i
 
 # Duffel's refund_to values (order cancellations and order changes): arc_bsp_cash,
 # balance, card, voucher, awaiting_payment, airline_credits, original_form_of_payment.
-@pytest.mark.parametrize("refund_to,lands", [
-    ("balance", "balance"), ("original_form_of_payment", "balance"),
-    ("voucher", "credit"), ("airline_credits", "credit"), ("airline_credit", "credit"),
-    ("card", "elsewhere"), ("arc_bsp_cash", "elsewhere"), ("awaiting_payment", "elsewhere"),
-    (None, "elsewhere"), ("", "elsewhere"), ("something_new", "elsewhere"),
+@pytest.mark.parametrize("refund_to,on_balance,on_card", [
+    ("balance", "balance", "elsewhere"),
+    ("original_form_of_payment", "balance", "card"),   # how the order was paid decides
+    ("card", "elsewhere", "card"),
+    ("voucher", "credit", "credit"), ("airline_credits", "credit", "credit"),
+    ("airline_credit", "credit", "credit"),
+    ("arc_bsp_cash", "elsewhere", "elsewhere"), ("awaiting_payment", "elsewhere", "elsewhere"),
+    (None, "elsewhere", "elsewhere"), ("", "elsewhere", "elsewhere"),
+    ("something_new", "elsewhere", "elsewhere"),
 ])
-def test_where_a_refund_lands(refund_to, lands):
-    assert app_module._refund_lands_as(refund_to) == lands
+def test_where_a_refund_lands(refund_to, on_balance, on_card):
+    assert app_module._refund_lands_as(refund_to, "balance") == on_balance
+    assert app_module._refund_lands_as(refund_to, "card") == on_card
+
+
+def _card_paid_order(account_id, **kwargs):
+    """A ticket paid for at Duffel with the customer's card (migration 037)."""
+    order = _charged_order(account_id, **kwargs)
+    return db.upsert_order({"order_id": order["order_id"], "duffel_payment_type": "card"}, account_id)
+
+
+def test_an_order_records_how_it_was_paid_and_an_exchange_keeps_it(logged_in_carded):
+    _, account = logged_in_carded
+    assert make_real_order(account["account_id"])["duffel_payment_type"] == "balance"
+    order = _card_paid_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-45.00", [])), \
+         patch("billing.charge_commission", return_value=MagicMock(id="pi_fee", status="succeeded")):
+        app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                   account["email"], unattended=True)
+    assert db.find_order(order["order_id"])["executed"]
+    assert db.find_order(order["order_id"])["duffel_payment_type"] == "card"
+
+
+@pytest.mark.parametrize("refund_to", ["card", "original_form_of_payment"])
+def test_a_card_paid_rebooking_is_refunded_by_the_airline_and_still_carries_the_fee(logged_in_carded, refund_to):
+    """The airline refunds the card that paid it, so TD sends nothing — and
+    the saving has reached the customer, so the fee is charged as usual."""
+    _, account = logged_in_carded
+    order = _card_paid_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-45.00", [], refund_to=refund_to)), \
+         patch("billing.refund_to_card") as refund, \
+         patch("billing.charge_commission", return_value=MagicMock(id="pi_fee_card", status="succeeded")) as fee:
+        ok, _ = app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+    assert ok is True
+    refund.assert_not_called()
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert (event["delivery_type"], event["delivery_detail"]) == ("refund_to_card", "refunded by airline")
+    assert event["stripe_refund_id"] is None and event["payout_failed_at"] is None
+    fee.assert_called_once()
+    assert fee.call_args.kwargs["amount"] == Decimal(event["commission_amount"]) == Decimal("11.25")
+    assert event["commission_payment_intent_id"] == "pi_fee_card" and event["commission_charged_at"]
+
+
+def test_a_card_paid_cancellation_is_refunded_by_the_airline_with_no_fee(logged_in_carded):
+    client, account = logged_in_carded
+    order = _card_paid_order(account["account_id"])
+    with patch("billing.refund_to_card") as refund, patch("billing.charge_commission") as fee:
+        execute_cancel(client, order["order_id"], "219.00", refund_to="card")
+    refund.assert_not_called()
+    fee.assert_not_called()
+    event = db.savings_events_for_order(order["order_id"])[0]
+    assert (event["action"], event["delivery_type"], event["delivery_detail"]) == \
+        ("cancel", "refund_to_card", "refunded by airline")
+    assert event["commission_amount"] == "0.00" and event["payout_failed_at"] is None
+    page = client.get(f"/trips/{order['order_id']}").get_data(as_text=True)
+    assert "The airline refunded 219.00 USD to the card that paid for this ticket." in page
+
+
+@pytest.mark.parametrize("refund_to", ["card", "original_form_of_payment", "balance", "voucher",
+                                       "airline_credits", "awaiting_payment", "arc_bsp_cash", None])
+@pytest.mark.parametrize("via", ["exchange", "cancel"])
+def test_a_card_paid_order_is_never_refunded_through_stripe(logged_in_carded, refund_to, via):
+    """Whatever Duffel answers, a ticket the customer's card paid for at Duffel
+    is never also refunded by TD — that would pay the customer twice."""
+    client, account = logged_in_carded
+    order = _card_paid_order(account["account_id"], last_decision=RESHOP_DECISION)
+    with patch("billing.refund_to_card") as refund, \
+         patch("billing.charge_commission", return_value=MagicMock(id="pi_fee", status="succeeded")):
+        if via == "exchange":
+            with patch("duffel_http.request", side_effect=_exchange_quoting("-45.00", [], refund_to=refund_to)):
+                app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                           account["email"], unattended=True)
+        else:
+            execute_cancel(client, order["order_id"], "219.00", refund_to=refund_to)
+    refund.assert_not_called()
+    if refund_to == "balance":
+        # a card-paid order's refund said to be in TD's balance: checked by a person, not sent
+        assert db.savings_events_for_order(order["order_id"])[0]["payout_failed_at"] is not None
 
 
 @pytest.mark.parametrize("refund_to", ["voucher", "airline_credits"])
@@ -1655,10 +1773,37 @@ def test_invoice_lines_for_refuses_a_foreign_account():
         today = datetime.now(timezone.utc).date()  # matches generate_invoice_route()
         invoice = db.generate_invoice(a["account_id"], today, today + timedelta(days=1))
         db.q("""INSERT INTO invoice_lines (invoice_id, line_type, description, amount)
-               VALUES (%s, 'subscription', 'test', 10.00)""", (invoice["id"],))
+               VALUES (%s, 'commission_cash', 'test', 10.00)""", (invoice["id"],))
 
         assert len(db.invoice_lines_for(invoice["id"], a["account_id"])) == 1
         assert db.invoice_lines_for(invoice["id"], b["account_id"]) == []
     finally:
         db.q("DELETE FROM accounts WHERE id = %s", (a["account_id"],))
         db.q("DELETE FROM accounts WHERE id = %s", (b["account_id"],))
+
+
+def test_an_invoice_never_carries_a_subscription(logged_in_carded):
+    """Revenue is a percentage of realized savings only. A subscription_fee left
+    on an account (deprecated, kept only so nothing has to be dropped) is never
+    billed — with or without a fee on the same invoice."""
+    client, account = logged_in_carded
+    acct = account["account_id"]
+    db.q("UPDATE accounts SET subscription_fee = 99.00 WHERE id = %s", (acct,))
+    order = _charged_order(acct, last_decision=RESHOP_DECISION)
+    with patch("duffel_http.request", side_effect=_exchange_quoting("-40.00", [])), \
+         patch("billing.refund_to_card", return_value=MagicMock(id="re_test_sub")), \
+         patch("billing.charge_commission", side_effect=billing.CardError("card declined")):
+        app_module._execute_action(db.find_order(order["order_id"]), "exchange",
+                                   account["email"], unattended=True)
+
+    today = datetime.now(timezone.utc).date()
+    invoice = db.generate_invoice(acct, today, today + timedelta(days=1))
+    lines = db.invoice_lines_for(invoice["id"], acct)
+    # the fee that could not be charged is the only thing billed
+    assert [(l["line_type"], l["amount"]) for l in lines] == [("commission_cash", Decimal("10.00"))]
+    assert invoice["total"] == Decimal("10.00")
+    assert db.q("""SELECT count(*) AS n FROM invoice_lines il JOIN invoices i ON i.id = il.invoice_id
+                    WHERE i.account_id = %s AND il.line_type = 'subscription'""",
+                (acct,), fetch="one")["n"] == 0
+    assert "subscription" not in client.get("/settings").get_data(as_text=True).lower()
+

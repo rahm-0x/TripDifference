@@ -46,12 +46,6 @@
 
     <div class="grid2" style="margin-top:18px; padding-top:16px; border-top:1px solid var(--line-soft)">
       <div>
-        <label style="margin-bottom:2px">Monthly subscription</label>
-        <div class="static-value mono">
-          {% if company.subscription_fee %}{{ company.subscription_fee }} USD{% else %}Not set — contact your account manager{% endif %}
-        </div>
-      </div>
-      <div>
         <label style="margin-bottom:2px">Commission rate</label>
         <div class="static-value mono">{{ (company.commission_rate * 100)|round(2) }}% of realized savings</div>
       </div>

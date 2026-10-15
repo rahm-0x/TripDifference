@@ -254,7 +254,9 @@ COMPONENTS = [
     dict(stage="Fee Capture", name="Collecting invoice payment (Stripe)", status=NS, core=True,
          evidence=[E("*.py", r"Invoice\.(create|pay|finalize_invoice)|invoice.{0,40}PaymentIntent", absent=True),
                    E("db.py", r"not yet charged")],
-         tests=None, note="Commission and subscription are computed and invoiced, never charged."),
+         tests=None, note="On staging, commission is charged to the card on file when a rebooking "
+                          "delivers its saving (billing.charge_commission). Only a fee that could not be "
+                          "charged is invoiced, and invoice payment is not collected."),
 
     # --- Platform (cross-cutting, not a pipeline node) ----------------------------
     dict(stage="Platform", name="Email/password auth, sessions, throttle", status=BU,
@@ -457,9 +459,8 @@ def context_checks(inv, gs):
     confirm_at = first_line("app.py", r'!= "CONFIRM"')
     gate_at = first_line("engine.py", r"if best\.change_total >= 0:")
     guard_at = first_line("duffel_http.py", r'startswith\("duffel_test_"\)')
-    balance_at = [x for x in (first_line("app.py", r'"payments": \[\{"type": "balance"'),
+    balance_at = [x for x in (first_line("app.py", r'payment_type = "balance"'),
                               first_line("app.py", r'"payment": \{"type": "balance"')) if x]
-    sub_at = first_line("db.py", r"subscription_fee")
     credit_at = first_line("db.py", r"delivery_type IN \('refund_to_card', 'airline_credit'\)")
     rate_at = first_line("migrations/015_accounts_company_fields.sql", r"commission_rate numeric")
     authors = sorted(gs["authors"]) or ["(none in window)"]
@@ -491,9 +492,10 @@ def context_checks(inv, gs):
              verdict="Consistent", evidence=f"{gate_at} skips on >= 0; docs/architecture.md documents +125.00. "
                                             f"A second gate also applies: saving must clear min_saving (${app_floor})."),
         dict(claim="Revenue: 25% success fee, only on realized savings",
-             verdict="Contradicted",
-             evidence=f"Rate is per account (default 0.25, {rate_at}); invoices add a flat subscription_fee line "
-                      f"({sub_at}); commission is also billed on airline credits, not only cash ({credit_at})."),
+             verdict="Qualified",
+             evidence=f"Revenue is a percentage of realized savings only, with no subscription. The rate is per "
+                      f"account (default 0.25, {rate_at}), and commission is billed on airline credits as well "
+                      f"as cash ({credit_at})."),
         dict(claim="Open decision: fare-drop floor $40–50 vs Autopilot's $20",
              verdict="Code at $20",
              evidence=f"app.py DEFAULT_POLICY min_saving = ${app_floor}; engine.py default ${engine_floor}. "
@@ -597,9 +599,9 @@ DECISIONS = [
          code=lambda: "Code today: human-gated. Every cycle is a click; every execution needs a typed CONFIRM.",
          unblocks="Scheduler, order state model, role enforcement"),
     dict(title="Revenue model as implemented",
-         options="25% of cash savings only vs code's rate + subscription + credit commission",
-         code=lambda: "Code today: per-account commission_rate (default 0.25) on cash and airline credit, "
-                      "plus an optional subscription_fee line.",
+         options="25% of cash savings only vs 25% of cash and airline-credit savings",
+         code=lambda: "Code today: a percentage of realized savings only, no subscription — per-account "
+                      "commission_rate (default 0.25), on cash and airline credit.",
          unblocks="Invoice collection build, pilot contract terms"),
 ]
 

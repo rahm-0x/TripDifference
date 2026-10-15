@@ -1516,6 +1516,20 @@ def _fare_disposition(order):
     return refundable, conditions
 
 
+def _is_the_price_shown(offer, form):
+    """Whether the offer's total — what book() authorizes — is the total the
+    payment page showed (its shown_total / shown_currency fields). A missing
+    or unreadable shown total is no match: nothing is bought on a price
+    nobody can say was on screen."""
+    try:
+        shown = Decimal(form.get("shown_total", ""))
+        quoted = Decimal(str(offer["total_amount"]))
+    except (InvalidOperation, KeyError):
+        return False
+    return (shown == quoted and
+            (form.get("shown_currency") or "").strip().upper() == (offer.get("total_currency") or "").upper())
+
+
 @app.route("/book", methods=["POST"])
 @auth.login_required
 def book():
@@ -1618,6 +1632,24 @@ def book():
         return render_template("payment.html", nav="search", offer=offer_view(offer),
                                people=people, error=f"Payment failed: {exc}"), 402
 
+    # The amount just held is the offer's total as Duffel quotes it now, which
+    # can differ from the total on the page the customer pressed Pay on (the
+    # fare moved, or the page was stale). Never buy at a price they did not
+    # see: release the hold — never captured, so it never shows as a charge —
+    # and stop before Duffel is asked for anything.
+    if not _is_the_price_shown(offer, request.form):
+        billing.cancel_authorization(intent.id)
+        live_guard.release(spend)
+        shown = f"{request.form.get('shown_total') or '?'} {request.form.get('shown_currency') or ''}".strip()
+        return render_template("payment.html", nav="search", offer=offer_view(offer), people=people,
+                               error=(f"The fare is now {offer['total_amount']} {offer['total_currency']}, "
+                                      f"not the {shown} shown. Nothing was charged — check the new "
+                                      "price and book again.")), 409
+
+    # How Duffel is paid, recorded on the order (migration 037): it decides
+    # whether a refund Duffel sends to the "original form of payment" is
+    # passed on to the card by us or by the airline (_refund_lands_as).
+    payment_type = "balance"
     order_body = {
         "data": {
             "type": "instant",
@@ -1631,7 +1663,7 @@ def book():
             # working buffer topped up separately, not a float extended
             # to the customer. The company's card is charged above, in
             # the same request; this call is unchanged from before.
-            "payments": [{"type": "balance", "currency": offer["total_currency"],
+            "payments": [{"type": payment_type, "currency": offer["total_currency"],
                           "amount": offer["total_amount"]}],
         }
     }
@@ -1698,6 +1730,7 @@ def book():
         "stripe_payment_intent_id": intent.id,
         "cost_center_id": cost_center_id,
         "duffel_mode": duffel_mode,
+        "duffel_payment_type": payment_type,
     })
     live_guard.settle(spend, order_id=order["id"])
 
@@ -2523,7 +2556,7 @@ def _cancellation_quote(order_id):
         amount = Decimal(str(pending.get("refund_amount") or "0"))
     except InvalidOperation:
         amount = Decimal("0")
-    credit = _refund_lands_as(pending.get("refund_to")) == "credit"
+    credit = (pending.get("refund_to") or "").strip().lower() in _REFUND_AS_CREDIT
     quote = {
         "order_id": order_id, "id": pending["id"],
         "refund_amount": str(amount), "refund_currency": pending.get("refund_currency") or "",
@@ -2676,10 +2709,7 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
                 # would mean nothing was quoted to return in the first
                 # place, which the engine's own gate (change_total >= 0 =
                 # skip) already refuses to act on before execution.
-                is_credit = _refund_lands_as(result.get("refund_to")) == "credit"
-                delivery_type = "airline_credit" if is_credit else "refund_to_card"
-                delivery_detail = (f"{record.get('carrier')} account" if is_credit
-                                   else f"card ending in {card['last4']}")
+                delivery_type, delivery_detail = _refund_delivery(record, result.get("refund_to"), card)
                 savings = {"old_amount": str(paid), "new_amount": str(paid + delta),
                           "realized_savings": str(-delta),
                           "delivery_type": delivery_type, "delivery_detail": delivery_detail}
@@ -2694,11 +2724,8 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
                     f"refunded {result.get('refund_amount')} {result.get('refund_currency')}")
             paid = Decimal(record.get("paid") or 0)
             refunded = Decimal(result.get("refund_amount") or 0)
-            is_credit = _refund_lands_as(result.get("refund_to")) == "credit"
             if refunded > 0:
-                delivery_type = "airline_credit" if is_credit else "refund_to_card"
-                delivery_detail = (f"{record.get('carrier')} account" if is_credit
-                                   else f"card ending in {card['last4']}")
+                delivery_type, delivery_detail = _refund_delivery(record, result.get("refund_to"), card)
             else:
                 # Duffel confirmed the cancellation but nothing came back —
                 # this fare's rules forfeit the residual value rather than
@@ -2818,6 +2845,8 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
 
     # The order's own account, not the session's: the scheduler has no session,
     # and without one this write failed after the exchange had already landed.
+    # duffel_payment_type is left as it was: an exchange keeps the order, and
+    # Duffel's original_form_of_payment means how the order was created.
     done = {"order_id": order_id, "monitoring": False, "executed": note, **extra}
     if fresh:
         done.update(raw=fresh, paid=fresh["total_amount"])
@@ -2838,25 +2867,43 @@ def _execute_action(record, action, actor_email, *, unattended=False, cancellati
 
 
 # Where Duffel says a refund went: refund_to on a confirmed cancellation or
-# order change. Every ticket is paid from TD's Duffel balance today, so
-# original_form_of_payment means that balance too. That stops being true the
-# day an order is paid by card — the airline then refunds the card itself, and
-# passing the money on again would pay the customer twice.
+# order change. original_form_of_payment means however the order was paid at
+# Duffel (orders.duffel_payment_type, migration 037): TD's balance, which TD
+# passes on to the card, or the customer's card, which the airline refunds
+# itself — passing that on as well would pay the customer twice.
 _REFUND_AS_CREDIT = ("airline_credits", "airline_credit", "voucher")
-_REFUND_TO_OUR_BALANCE = ("balance", "original_form_of_payment")
+_REFUND_TO_ORIGINAL = {"balance": ("balance", "original_form_of_payment"),
+                       "card": ("card", "original_form_of_payment")}
+
+# delivery_detail of a refund the airline made to the card itself
+REFUNDED_BY_AIRLINE = "refunded by airline"
 
 
-def _refund_lands_as(refund_to):
-    """'credit' (airline credit or a voucher: no cash reaches anyone),
-    'balance' (cash in TD's Duffel balance, to pass on to the card), or
-    'elsewhere' — anything else, no answer included, which is never passed on
-    until someone has checked where the money went."""
+def _refund_lands_as(refund_to, payment_type):
+    """Where a refund went, given how the order was paid at Duffel:
+      'credit'    airline credit or a voucher — no cash reaches anyone
+      'balance'   TD's Duffel balance (a balance-paid order) — TD passes it on
+      'card'      the customer's card (a card-paid order) — the airline paid it
+      'elsewhere' anything else, no answer included — never passed on until
+                  someone has checked where the money went."""
     value = (refund_to or "").strip().lower()
     if value in _REFUND_AS_CREDIT:
         return "credit"
-    if value in _REFUND_TO_OUR_BALANCE:
-        return "balance"
+    if value in _REFUND_TO_ORIGINAL.get(payment_type, ()):
+        return payment_type
     return "elsewhere"
+
+
+def _refund_delivery(record, refund_to, card):
+    """The savings event's delivery_type and delivery_detail for a refund that
+    returned something. Anything that is not credit is cash owed to the
+    customer's card; _pay_out decides whether TD still has to send it."""
+    lands = _refund_lands_as(refund_to, record.get("duffel_payment_type") or "balance")
+    if lands == "credit":
+        return "airline_credit", f"{record.get('carrier')} account"
+    if lands == "card":
+        return "refund_to_card", REFUNDED_BY_AIRLINE
+    return "refund_to_card", f"card ending in {card['last4']}"
 
 
 def _pay_out(record, event, refund_to):
@@ -2865,9 +2912,11 @@ def _pay_out(record, event, refund_to):
     this is the step that makes 'refunded to card' true. Returns whether the
     money reached the card.
 
-    Only a refund Duffel says landed in that balance is passed on: anything
-    else is recorded as a payout that has not been made, with where Duffel
-    said it went, rather than refunding the card with money TD never received.
+    Only a refund Duffel says landed in that balance is passed on. On a
+    card-paid order the airline refunds the card itself, so nothing is sent
+    and the saving counts as delivered. Anything else is recorded as a payout
+    that has not been made, with where Duffel said it went, rather than
+    refunding the card with money TD never received.
 
     The whole recovery goes back; the commission on it is charged separately
     (_charge_commission) and never netted off. Never raises and never undoes
@@ -2879,7 +2928,10 @@ def _pay_out(record, event, refund_to):
         amount = Decimal(str(event["realized_savings"]))
         if amount <= 0:
             return True
-        if _refund_lands_as(refund_to) != "balance":
+        lands = _refund_lands_as(refund_to, record.get("duffel_payment_type") or "balance")
+        if lands == "card":
+            return True   # the airline refunded the card that paid it
+        if lands != "balance":
             db.savings_event_payout_failed(
                 event["id"], f"Duffel reported the airline's refund going to '{refund_to or 'nowhere stated'}', "
                              "not TD's Duffel balance — check where it landed before refunding the card")

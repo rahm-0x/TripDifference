@@ -42,8 +42,10 @@ event — a decision that recommends a reshop from the simulated price source is
 
 **4. Money out** — three delivery types (`CLAUDE.md`), commission on two of them
 (never on `forfeited`), invoice generation (`db.generate_invoice`) that sums
-`savings_events` into `commission_cash`/`commission_credit` lines plus a flat
-`subscription` line, all `>= 0`, all additive.
+`savings_events` into `commission_cash`/`commission_credit` lines, all `>= 0`, all
+additive. Revenue is a percentage of realized savings only, with no subscription:
+`accounts.subscription_fee` and the `subscription` line type are deprecated and
+never written.
 
 ## Tables and what each is for
 

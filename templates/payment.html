@@ -19,6 +19,9 @@
     <form method="post" action="{{ url_for('book') }}" id="payForm">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <input type="hidden" name="offer_id" value="{{ offer.id }}">
+      {# The total this page shows; book() buys only at this price (_is_the_price_shown). #}
+      <input type="hidden" name="shown_total" value="{{ offer.amount }}">
+      <input type="hidden" name="shown_currency" value="{{ offer.currency }}">
       <input type="hidden" name="cost_center_id" value="{{ cost_center_id or '' }}">
       {# Repeated names, same order as the passenger cards, so getlist on the
          other side still lines up with the offer's passenger ids. #}

@@ -55,6 +55,8 @@
     <b>Credited {{ ev.realized_savings }} {{ ev.currency }} to your {{ ev.delivery_detail }}.</b>
     {% elif ev.delivery_type == 'forfeited' %}
     <b>The fare dropped, but nothing was recovered.</b> {{ ev.delivery_detail }}
+    {% elif ev.delivery_detail == 'refunded by airline' %}{# app.REFUNDED_BY_AIRLINE: a card-paid ticket #}
+    <b>The airline refunded {{ ev.realized_savings }} {{ ev.currency }} to the card that paid for this ticket.</b>
     {% elif ev.payout_failed_at %}
     <b>Recovered {{ ev.realized_savings }} {{ ev.currency }} on this ticket.</b>
     The refund to your {{ ev.delivery_detail }} has not gone through yet — we're resolving it.

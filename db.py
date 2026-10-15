@@ -301,7 +301,8 @@ _ORDER_COLS = ("booking_reference", "route", "itinerary", "carrier",
                "seg_origin", "seg_destination", "seg_flight_number", "seg_cabin",
                "cost_center_id", "refundable", "fare_conditions",
                "stripe_payment_intent_id", "payment_capture_failed_at",
-               "payment_capture_error", "duffel_mode", "last_checked_at")
+               "payment_capture_error", "duffel_mode", "last_checked_at",
+               "duffel_payment_type")
 _MONEY = {"paid", "original_paid", "refunded", "sim_paid", "sim_refunded"}
 _JSON = {"raw", "last_decision", "sim_scenario", "fare_conditions"}
 # NOT NULL DEFAULT '' columns. We always pass every column, so a column's
@@ -313,8 +314,11 @@ _TEXT_NOT_NULL = {"booking_reference", "route", "itinerary", "carrier", "currenc
 # than being coerced to '' like the plain text fields above.
 # duffel_mode is set once, at creation, from the token that bought the ticket
 # (migration 030 refuses to change it afterwards); an order created without
-# one is a test-mode order.
-_ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash", "duffel_mode": "test"}
+# one is a test-mode order. duffel_payment_type is how Duffel was paid for it
+# (migration 037), also set at creation; an exchange carries it forward, since
+# a write that leaves it out keeps the stored value.
+_ORDER_DEFAULTS = {"source": "td_rebook", "fare_type": "cash", "duffel_mode": "test",
+                   "duffel_payment_type": "balance"}
 # Nullable uuid FK — a blank string must stay NULL, not become '' (invalid
 # uuid input), unlike the plain text fields above.
 _NULLABLE_UUID = {"traveler_id", "cost_center_id"}
@@ -1179,9 +1183,12 @@ def savings_event_link_credit(savings_event_id, airline_credit_id):
 def generate_invoice(account_id, period_start, period_end):
     """One invoice for one account over [period_start, period_end).
 
-    Built from savings_events not yet billed (invoice_line_id IS NULL) plus
-    the account's subscription_fee. Rebookings only, and only those whose fee
-    was not already collected from the card when the rebooking landed
+    Built from savings_events not yet billed (invoice_line_id IS NULL), and
+    nothing else: TD's only revenue is a percentage of realized savings, with
+    no subscription. accounts.subscription_fee and the 'subscription' value in
+    invoice_lines.line_type's CHECK are deprecated — kept so no migration has
+    to drop anything, never written or billed. Rebookings only, and only those
+    whose fee was not already collected from the card when the rebooking landed
     (commission_charged_at IS NULL) — an invoice is where a fee that could
     not be charged ends up, never a second bill for one that was.
     'forfeited' events are excluded by a
@@ -1193,18 +1200,16 @@ def generate_invoice(account_id, period_start, period_end):
     Every line is a positive charge; invoice_lines.amount's own CHECK
     (amount >= 0) makes a credit line netting against a cash line
     structurally impossible, not just a convention this function follows.
-    Cash refunds never appear here at all — Duffel refunds the company's
-    card directly, TD's books never see that money.
+    Cash refunds never appear here at all. The airline refunds TD's Duffel
+    balance, which paid for the ticket, and TD passes the money on to the
+    customer's card with a Stripe refund (app._pay_out) — money returned, not
+    billed.
 
     invoices.total is stored, computed once here, and frozen from that
     point on — an issued invoice must not change if a savings_event or the
     account's commission_rate is edited afterward.
     """
     with pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT subscription_fee FROM accounts WHERE id = %s", (account_id,))
-        acct = cur.fetchone()
-        subscription_fee = acct["subscription_fee"] if acct else None
-
         cur.execute("""SELECT se.id, se.realized_savings, se.commission_amount,
                               se.commission_rate, se.delivery_type,
                               COALESCE(NULLIF(se.currency, ''), o.currency) AS currency
@@ -1228,13 +1233,6 @@ def generate_invoice(account_id, period_start, period_end):
         invoice = cur.fetchone()
 
         total = Decimal("0")
-
-        if subscription_fee:
-            cur.execute("""INSERT INTO invoice_lines
-                              (invoice_id, line_type, description, basis_amount, rate, amount)
-                            VALUES (%s, 'subscription', 'Monthly platform fee', NULL, NULL, %s)""",
-                        (invoice["id"], _num(subscription_fee)))
-            total += Decimal(str(subscription_fee))
 
         for delivery_type, line_type in (("refund_to_card", "commission_cash"),
                                          ("airline_credit", "commission_credit")):
@@ -1317,9 +1315,10 @@ def cost_center_update(cost_center_id, account_id, *, code, name, budget_amount,
 # ---------------------------------------------------------------------------
 
 def account_company_fields(account_id):
+    # subscription_fee is deprecated (see generate_invoice) and not read.
     return q("""SELECT name, legal_name, employee_count, billing_address_line1,
                       billing_address_line2, billing_city, billing_state,
-                      billing_postal_code, billing_country, subscription_fee, commission_rate
+                      billing_postal_code, billing_country, commission_rate
                FROM accounts WHERE id = %s""", (account_id,), fetch="one")
 
 
