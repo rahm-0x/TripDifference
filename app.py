@@ -115,6 +115,7 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # listed here.
 PUBLIC_ENDPOINTS = frozenset({
     "index",                                       # landing
+    "privacy", "terms",                            # linked from Google's consent screen
     "login", "signup",
     "signup_google",                               # checks the referral code, then Google
     "referral_link",                               # /r/<code>: a scout's link
@@ -1266,6 +1267,22 @@ def index():
     if auth.current_user():
         return redirect(url_for("overview"))
     return render_template("landing.html", deals=PLACEHOLDER_DEALS)
+
+
+# The privacy policy and terms. Public: Google's OAuth consent screen links to
+# both, and Google won't take the sign-in app out of Testing without them.
+LEGAL_EFFECTIVE = "October 16, 2026"
+LEGAL_CONTACT = "phoenix@tripdifference.com"
+
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html", effective=LEGAL_EFFECTIVE, contact_email=LEGAL_CONTACT)
+
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html", effective=LEGAL_EFFECTIVE, contact_email=LEGAL_CONTACT)
 
 
 # Duffel returns no change conditions in a bulk search response — they only

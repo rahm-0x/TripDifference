@@ -1,6 +1,7 @@
 """
 Every route requires a signed-in session except the ones app.PUBLIC_ENDPOINTS
-names — landing, login, signup (and its Google step), a scout's /r/<code> link,
+names — landing, the privacy policy and terms, login, signup (and its Google
+step), a scout's /r/<code> link,
 the scout application, the Google auth callbacks, static files, the
 CRON_SECRET-authenticated schedulers and the signature-authenticated Stripe
 webhook — and /healthz/env reports what a
@@ -31,7 +32,7 @@ LIVE_TOKEN = "duffel_live_" + "0" * 32
 # The allowlist, restated here on purpose: making a route public means editing
 # both app.PUBLIC_ENDPOINTS and this set.
 EXPECTED_PUBLIC = {
-    "index", "login", "signup", "signup_google", "referral_link", "scout_apply",
+    "index", "privacy", "terms", "login", "signup", "signup_google", "referral_link", "scout_apply",
     "google_auth_start", "google_auth_callback",
     "static", "logo",
     "cron_reshop", "cron_scouts", "stripe_webhook",
@@ -74,6 +75,19 @@ def test_the_routes_that_were_open_now_require_login():
                          ("POST", "/orders/ord_x/execute/cancel")):
         resp = anonymous.open(path, method=method)
         assert resp.status_code == 302 and "/login" in resp.headers["Location"], (method, path)
+
+
+def test_privacy_and_terms_load_signed_out_and_are_linked_where_people_sign_up():
+    """Google's OAuth consent screen links to both, so they have to load for
+    someone who has never signed in."""
+    anonymous = app_module.app.test_client()
+    for path, heading in (("/privacy", "Privacy policy"), ("/terms", "Terms of service")):
+        resp = anonymous.get(path)
+        assert resp.status_code == 200, path
+        assert f"<h1>{heading}</h1>" in resp.get_data(as_text=True)
+    for page in ("/", "/signup"):
+        html = anonymous.get(page).get_data(as_text=True)
+        assert 'href="/privacy"' in html and 'href="/terms"' in html, page
 
 
 def test_cron_refuses_without_the_secret(monkeypatch):

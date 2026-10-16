@@ -1,0 +1,141 @@
+{% extends "legal.html" %}
+{% block title %}Terms of service{% endblock %}
+{% block content %}
+<h1>Terms of service</h1>
+<p class="meta">Effective {{ effective }}</p>
+
+<p class="lead">These terms are an agreement between TripDifference ("we", "us") and the
+business that opens an account ("you"). By creating an account or using
+tripdifference.com, you agree to them on your business's behalf, and you confirm you're
+authorized to do so. Our <a href="{{ url_for('privacy') }}">privacy policy</a> explains
+how we handle personal information.</p>
+
+<h2>1. What we do</h2>
+<p>We book flights for your business. After a ticket is issued, we watch its fare, and
+when the same flight becomes cheaper, we can exchange your ticket for the cheaper fare
+and get the difference back for you. We charge a fee only on money we actually recover
+by rebooking.</p>
+
+<h2>2. Your account</h2>
+<ul>
+  <li>Opening an account requires a valid referral code.</li>
+  <li>Give us accurate information, especially traveler names and dates of birth, which
+    must match travel documents. Fixing an error after a ticket is issued may cost
+    money, or may not be possible.</li>
+  <li>Keep your sign-in details safe. You're responsible for what's done through your
+    account, including by the people you give access to.</li>
+  <li>Only enter a traveler's details if you're entitled to share them with us for
+    booking their travel.</li>
+</ul>
+
+<h2>3. Booking a flight</h2>
+<ul>
+  <li><b>We sell you the ticket.</b> We buy it from the airline through our booking
+    provider, Duffel, and charge your card for it. Your card statement will show
+    TripDifference, not the airline.</li>
+  <li><b>You pay the price you were shown.</b> We first authorize your card, then
+    capture the payment once the ticket is issued. If the airline doesn't issue the
+    ticket, we cancel the authorization and you aren't charged.</li>
+  <li><b>The airline runs the flight.</b> The airline's fare rules and conditions of
+    carriage apply to your ticket. They cover things like baggage, schedule changes,
+    missed flights, denied boarding and what a change or cancellation costs. Schedule
+    changes, delays and cancellations made by the airline are outside our control.</li>
+  <li>Travelers are responsible for their own passports, visas, health requirements and
+    getting to the airport on time.</li>
+</ul>
+
+<h2>4. Fare monitoring and rebooking</h2>
+<ul>
+  <li>We monitor and exchange only tickets we issued. We can't exchange a booking made
+    somewhere else.</li>
+  <li>Whether a ticket can be exchanged, and on what terms, is decided by the airline.
+    Many fares, including most basic economy fares, can't be changed at all. Before
+    purchase, we can only estimate whether a fare will be eligible.</li>
+  <li>An exchange moves the traveler to the <b>same flight</b> at a lower fare. We exchange
+    a ticket either when someone on your account confirms it, or automatically when the
+    exchange returns at least a minimum amount to you and costs you nothing. We never
+    automatically make an exchange that you would have to pay for.</li>
+  <li>We don't promise that fares will drop, that we'll catch every drop, or that any
+    particular amount will be recovered.</li>
+</ul>
+
+<h2>5. Refunds and airline credit</h2>
+<p>When a ticket is exchanged or cancelled, the airline decides how any money comes back:</p>
+<ul>
+  <li><b>Cash.</b> The airline refunds us, and we refund that amount to the card you
+    paid with.</li>
+  <li><b>Airline credit</b> in the traveler's name. It's subject to the airline's rules,
+    including expiry dates and who can use it, and it can't be turned into cash or moved
+    to another person.</li>
+  <li><b>Nothing.</b> Some fares return nothing on a change or cancellation.</li>
+</ul>
+<p>We show you what the airline is offering before you confirm.</p>
+
+<h2>6. Our fee</h2>
+<ul>
+  <li>Our only fee is a <b>success fee</b>: a percentage of the money recovered when we
+    rebook a ticket for less, whether it comes back as cash or as airline credit. Your
+    rate is shown when you add your card and in Settings. There is no subscription.</li>
+  <li>We charge the fee to your card on file once the saving reaches you, meaning when
+    the cash refund is sent to your card or the airline credit is issued. The fee is a
+    separate charge and is never deducted from your refund.</li>
+  <li>There's no fee on a cancellation, on money the airline doesn't return, or when
+    nothing is saved.</li>
+  <li>If you dispute a charge with your card issuer, please contact us first. We're
+    usually faster.</li>
+</ul>
+
+<h2>7. Scouts</h2>
+<p>If you join our referral program as a scout, these additional terms apply:</p>
+<ul>
+  <li>You earn a share of the success fees we actually collect from businesses you
+    refer, at the rate we agree with you. If we refund a fee or it's disputed, the
+    earning on it is reversed or deducted from a later payout.</li>
+  <li>Payouts are made through Stripe Connect in US dollars, on the schedule shown in your
+    scout dashboard. You're responsible for the taxes on what you earn.</li>
+  <li>You can't refer yourself or your own business, and you can't misrepresent
+    TripDifference, our fees or what we can save. You can't spam, and you can't run
+    paid ads on our name.</li>
+  <li>We can end a scout's participation at any time. Earnings already confirmed before
+    then will still be paid.</li>
+</ul>
+
+<h2>8. Acceptable use</h2>
+<p>Don't use TripDifference to break the law or an airline's rules. That includes
+speculative or fictitious bookings, hidden-city or throwaway ticketing, and reselling
+tickets. Don't interfere with or probe the service, use automated tools to access it,
+use a payment card you aren't authorized to use, or try to see another business's
+data.</p>
+
+<h2>9. Ending your account</h2>
+<p>You can stop using TripDifference at any time. We may suspend or close an account
+that breaks these terms, is used for fraud, or leaves fees unpaid. Closing an account
+doesn't cancel tickets already issued, and doesn't cancel fees for savings already
+delivered.</p>
+
+<h2>10. Disclaimers</h2>
+<p>We work hard to keep TripDifference accurate and available. Except where the law
+doesn't allow it, the service is provided "as is", without warranties of any kind. Fares,
+availability and eligibility information come from airlines and Duffel, and they can
+change or be wrong.</p>
+
+<h2>11. Limits on our liability</h2>
+<p>To the extent the law allows, we aren't liable for indirect or consequential losses,
+such as lost profits, missed meetings or the cost of alternative travel. That includes
+losses caused by an airline's acts or omissions. Our total liability to you for any
+claim is limited to the success fees you paid us in the 12 months before the claim.
+This doesn't limit the airline's obligations to travelers, or any liability that can't
+be limited by law.</p>
+
+<h2>12. Indemnity</h2>
+<p>You'll cover our reasonable losses arising from inaccurate information you give us,
+from bookings you weren't authorized to make, or from your breach of these terms.</p>
+
+<h2>13. Changes</h2>
+<p>We may update these terms. When we do, we'll change the date at the top, and we'll
+tell account holders about significant changes before they take effect. If you keep
+using TripDifference after a change takes effect, you're accepting the new terms.</p>
+
+<h2>14. Contact</h2>
+<p><a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
+{% endblock %}
