@@ -167,8 +167,10 @@ _APPLICANT_ENDPOINTS = frozenset({"scout_apply", "scout_dashboard", "logout", "s
 @app.before_request
 def _gate_scout_applicants():
     user = auth.current_user() if request.endpoint not in PUBLIC_ENDPOINTS else None
+    # Staff are exempt: someone given is_staff may have no login but the one
+    # applying at /scout/apply made, and still has to reach /admin.
     if (user and user.get("scout_only") and user.get("scout_status") in (None, "applied", "rejected")
-            and request.endpoint not in _APPLICANT_ENDPOINTS):
+            and not user.get("is_staff") and request.endpoint not in _APPLICANT_ENDPOINTS):
         return redirect(url_for("scout_dashboard"))
     return None
 

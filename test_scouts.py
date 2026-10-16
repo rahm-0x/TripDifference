@@ -615,6 +615,22 @@ def test_admin_pages_are_staff_only_and_approval_issues_a_code(client, ledger):
     assert len(codes) == 1 and codes[0]["code"].startswith("SCOUT-") and db.scout(applicant.id)["status"] == "approved"
 
 
+def test_staff_whose_only_login_is_a_scout_application_still_reach_admin(client, ledger):
+    """The way someone without a referral code gets a login is applying to be
+    a scout; once made staff, the applicant gate must not keep them out."""
+    email = f"staffer-{uuid.uuid4().hex[:10]}@example.org"
+    client.post("/scout/apply", data={
+        "_csrf": CSRF, "given_name": "Jo", "family_name": "Staff", "email": email,
+        "password": "correct horse battery", "confirm": "correct horse battery",
+        "company": "TD", "sourcing_plan": "n/a", "agree": "yes"})
+    ledger.adopt_signup(email)
+    ledger.scouts.append(db.q("SELECT s.id FROM scouts s JOIN users u ON u.id = s.user_id WHERE u.email = %s",
+                              (email,), fetch="one")["id"])
+    assert client.get("/admin/scouts").headers["Location"].endswith("/scout")   # not staff yet
+    db.q("UPDATE users SET is_staff = true WHERE email = %s", (email,))
+    assert client.get("/admin/scouts").status_code == 200
+
+
 def test_a_scout_sees_earnings_but_never_the_clients_travel(client, ledger):
     scout = make_scout(ledger)
     account = referred_account(ledger, scout)
