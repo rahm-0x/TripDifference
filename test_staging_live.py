@@ -398,6 +398,52 @@ def test_test_token_payment_needs_no_authorization(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Stays is sandbox-only
+# ---------------------------------------------------------------------------
+
+# Paid from the Duffel balance, so there is no `payment` for the spend check to read.
+STAYS_BOOKING_BODY = {"data": {"quote_id": "quo_x", "guests": [{"given_name": "Ada", "family_name": "Lovelace"}],
+                               "email": "ada@acme.test", "phone_number": "+15550100"}}
+STAYS_REQUESTS = [
+    ("POST", "/stays/search", True),
+    ("POST", "/stays/search_results/srr_x/actions/fetch_all_rates", True),
+    ("POST", "/stays/quotes", False),
+    ("POST", "/stays/bookings", False),
+    ("GET", "/stays/bookings/bok_x", False),
+    ("POST", "/stays/bookings/bok_x/actions/cancel", False),
+]
+
+
+@pytest.mark.parametrize("method,path,search", STAYS_REQUESTS)
+def test_only_a_stays_search_counts_as_a_search(method, path, search):
+    assert duffel_http.is_search_request(method, path) is search
+
+
+@pytest.mark.parametrize("method,path,search", STAYS_REQUESTS)
+def test_live_token_never_reaches_stays(live_staging, method, path, search):
+    """Every authorization the flight path could hold is in scope, and it still doesn't go."""
+    spend = duffel_http.SpendAuthorization(1, "Acme", Decimal("100000.00"), "USD")
+    with patch("duffel_http.requests.request") as sent, duffel_http.spend_authorized(spend), \
+         duffel_http.search_authorized(duffel_http.SearchAuthorization(0)):
+        with pytest.raises(duffel_http.RequestRefused, match="sandbox-only"):
+            duffel_http.request(method, path, body=STAYS_BOOKING_BODY)
+    sent.assert_not_called()
+
+
+def test_staging_without_live_orders_searches_sandbox_stays_and_books_none(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("DUFFEL_TOKEN", TEST_TOKEN)
+    with patch("duffel_http.requests.request", return_value=_duffel_response({"results": []})) as sent:
+        for method, path, search in STAYS_REQUESTS:
+            if search:
+                duffel_http.request(method, path, body={"data": {}})
+            else:
+                with pytest.raises(duffel_http.RequestRefused, match="orders are disabled"):
+                    duffel_http.request(method, path, body=STAYS_BOOKING_BODY)
+    assert sent.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # live_guard.check — the rules, in order
 # ---------------------------------------------------------------------------
 

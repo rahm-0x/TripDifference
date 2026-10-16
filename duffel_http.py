@@ -21,7 +21,12 @@ duffel.py and duffel_reshop_test.py keep their own test-only guards, untouched.
 Per-request guard (_check_request):
   - on APP_ENV=staging, everything but a search request — order create,
     order change, cancel — is refused unless DUFFEL_LIVE_ORDERS_ENABLED=true,
-    whatever the token: no sandbox bookings on staging either;
+    whatever the token: no sandbox bookings on staging either. A Stays search
+    (POST /stays/search, fetch_all_rates) counts as a search; a Stays quote,
+    booking or cancel does not;
+  - with a live token, only /air endpoints are allowed at all. Stays is
+    sandbox-only: a booking paid from the Duffel balance carries no payment
+    object, so the spend check below would have nothing to refuse;
   - with a live token, a search request (POST /air/offer_requests,
     GET /air/offer_requests…, GET /air/offers…) needs DUFFEL_LIVE_SEARCH_ENABLED,
     and a live offer request also needs a single-use SearchAuthorization from
@@ -183,12 +188,19 @@ def staging_orders_refusal():
 # ---------------------------------------------------------------------------
 
 def is_search_request(method, path):
+    """A request that only looks at prices. A Stays quote is not one: it is
+    the step before a booking, so staging treats it as part of ordering."""
     method, path = method.upper(), path.split("?")[0].rstrip("/")
     if method == "POST":
-        return path == "/air/offer_requests"
+        return (path in ("/air/offer_requests", "/stays/search")
+                or (path.startswith("/stays/search_results/") and path.endswith("/actions/fetch_all_rates")))
     if method == "GET":
         return any(path == p or path.startswith(p + "/") for p in ("/air/offer_requests", "/air/offers"))
     return False
+
+
+def is_air_request(path):
+    return path.split("?")[0].startswith("/air/")
 
 
 class SearchAuthorization:
@@ -275,6 +287,11 @@ def _check_request(method, path, body, mode):
         raise RequestRefused(f"{staging_orders_refusal()} Refused {method} {path}.")
     if mode != "live":
         return
+    if not is_air_request(path):
+        # Before the spend check, because that check reads the payment in the
+        # body and a Stays booking paid from the Duffel balance has none.
+        raise RequestRefused(f"Only flight (/air) endpoints may be called with a live Duffel token; everything "
+                             f"else is sandbox-only: refused {method} {path}.")
     if search:
         if not config.DUFFEL_LIVE_SEARCH_ENABLED:
             raise RequestRefused(f"Live Duffel search is disabled on this deployment "
