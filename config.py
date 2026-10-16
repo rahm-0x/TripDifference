@@ -43,6 +43,17 @@ read).
   STRIPE_PUBLISHABLE_KEY        with STRIPE_LIVE_ENABLED, otherwise the environment
                                 variable of the same name. "" when unset.
   STRIPE_LIVEMODE               True when that secret key is a live one (sk_live_).
+  STRIPE_WEBHOOK_SECRETS        the signing secrets /webhooks/stripe accepts: the
+                                endpoint for TD's own account (STRIPE_WEBHOOK_SECRET)
+                                and the Connect endpoint for scouts' connected accounts
+                                (STRIPE_CONNECT_WEBHOOK_SECRET) — the STRIPE_LIVE_ pair
+                                under the same rule as the keys. Empty when neither is
+                                set, and the endpoint then refuses everything.
+  SCOUT_HOLD_DAYS               int >= 0; 30 when unset or not a whole number. How long a
+                                scout's earning stays pending after the commission it is a
+                                share of was charged — the customer's dispute window.
+  SCOUT_PAYOUT_MINIMUM          Decimal > 0; 25.00 when unset or invalid. A scout's
+                                available balance below this rolls to the next month.
 """
 
 import os
@@ -102,6 +113,15 @@ def _stripe_key(name):
     return os.environ.get(f"STRIPE_LIVE_{name}" if live else f"STRIPE_{name}", "").strip()
 
 
+def _webhook_secrets():
+    return tuple(s for s in (_stripe_key("WEBHOOK_SECRET"), _stripe_key("CONNECT_WEBHOOK_SECRET")) if s)
+
+
+def _scout_hold_days():
+    raw = os.environ.get("SCOUT_HOLD_DAYS", "").strip()
+    return int(raw) if raw.isdigit() else 30
+
+
 def startup_check():
     """Run at app import. A Vercel Preview deployment must say what it is:
     with VERCEL_ENV=preview, APP_ENV has to be set explicitly to one of
@@ -132,6 +152,9 @@ _READERS = {
     "STRIPE_SECRET_KEY": lambda: _stripe_key("SECRET_KEY"),
     "STRIPE_PUBLISHABLE_KEY": lambda: _stripe_key("PUBLISHABLE_KEY"),
     "STRIPE_LIVEMODE": lambda: _stripe_key("SECRET_KEY").startswith("sk_live_"),
+    "STRIPE_WEBHOOK_SECRETS": _webhook_secrets,
+    "SCOUT_HOLD_DAYS": _scout_hold_days,
+    "SCOUT_PAYOUT_MINIMUM": lambda: _usd("SCOUT_PAYOUT_MINIMUM") or Decimal("25.00"),
 }
 
 

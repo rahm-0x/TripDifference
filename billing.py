@@ -8,6 +8,7 @@ Python SDK — the supported integration path for a Vercel-Marketplace-
 provisioned Stripe account, not a hand-rolled HTTP client.
 """
 
+import json
 from decimal import Decimal
 
 import stripe
@@ -293,3 +294,119 @@ def charge_commission(account_id, *, amount, currency, idempotency_key, descript
         raise CardError(exc.user_message or str(exc)) from exc
     except stripe.error.StripeError as exc:
         raise CardError(str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# scouts — Stripe Connect Express accounts and monthly transfers
+# ---------------------------------------------------------------------------
+#
+# A scout is paid by a transfer from TD's Stripe balance to their own Express
+# account. Stripe does the onboarding, identity checks, bank details and the
+# 1099-NEC; TD only ever holds the connected account's id
+# (scouts.stripe_connect_account_id). Connect and 1099 reporting have to be
+# switched on in the Stripe dashboard first — nothing here works around that.
+
+
+class PayoutError(RuntimeError):
+    """A transfer to a scout was refused or could not be made."""
+
+
+class WebhookRefused(RuntimeError):
+    """A request to /webhooks/stripe that is not a verifiable Stripe event."""
+
+
+def _field(obj, key):
+    """obj[key] for a webhook's plain dict and a StripeObject alike (which is
+    no longer a dict subclass), None when absent."""
+    try:
+        return obj[key]
+    except (KeyError, TypeError):
+        return None
+
+
+def connect_create_account(email, scout_id):
+    """A new Express account for the scout, asking for the transfers capability."""
+    return _client().Account.create(
+        type="express", email=email,
+        capabilities={"transfers": {"requested": True}},
+        metadata={"scout_id": str(scout_id)})
+
+
+def connect_onboarding_url(connect_account_id, *, refresh_url, return_url):
+    """Stripe's hosted onboarding. Single-use and short-lived: Stripe sends the
+    scout to refresh_url when it has expired, which makes a fresh one."""
+    return _client().AccountLink.create(account=connect_account_id, refresh_url=refresh_url,
+                                        return_url=return_url, type="account_onboarding").url
+
+
+def connect_dashboard_url(connect_account_id):
+    """A one-time sign-in to the scout's Express dashboard (bank, tax forms)."""
+    return _client().Account.create_login_link(connect_account_id).url
+
+
+def connect_can_receive(account):
+    """Whether a connected account can be paid: Stripe says payouts are enabled
+    and the transfers capability is active."""
+    capabilities = _field(account, "capabilities") or {}
+    return bool(_field(account, "payouts_enabled")) and _field(capabilities, "transfers") == "active"
+
+
+def connect_status(connect_account_id):
+    return connect_can_receive(_client().Account.retrieve(connect_account_id))
+
+
+def _transfer_group(payout_id):
+    return f"scout-payout-{payout_id}"
+
+
+def transfer_to_scout(connect_account_id, *, amount, currency, payout_id, attempt):
+    """One scout payout as one transfer. The transfer group names the payout,
+    so a run that stopped before recording it can ask Stripe whether it was
+    made (scout_transfer_for); the idempotency key names the attempt, so a
+    retry of the same attempt never pays twice.
+
+    Test mode only, for now: under a live key this refuses. Real money to a
+    real scout is switched on deliberately, not by a staging deploy that
+    happens to hold a live key."""
+    if config.STRIPE_LIVEMODE:
+        raise PayoutError("scout payouts run in Stripe test mode only; live transfers are not switched on")
+    try:
+        return _client().Transfer.create(
+            amount=_to_minor_units(amount), currency=currency.lower(),
+            destination=connect_account_id, transfer_group=_transfer_group(payout_id),
+            metadata={"scout_payout_id": str(payout_id)},
+            idempotency_key=f"scout-payout-{payout_id}-{attempt}")
+    except stripe.error.StripeError as exc:
+        raise PayoutError(str(exc)) from exc
+
+
+def scout_transfer_for(payout_id):
+    """The transfer made for a payout, or None when there is none."""
+    found = _client().Transfer.list(transfer_group=_transfer_group(payout_id), limit=1)
+    return found.data[0] if found.data else None
+
+
+def webhook_event(payload, signature):
+    """The event, as plain JSON, once its signature verifies against one of
+    config.STRIPE_WEBHOOK_SECRETS (TD's own endpoint, and the Connect one for
+    scouts' accounts). Raises WebhookRefused otherwise — including when no
+    secret is configured, so an unconfigured endpoint accepts nothing."""
+    secrets = config.STRIPE_WEBHOOK_SECRETS
+    if not secrets:
+        raise WebhookRefused("no webhook signing secret is configured")
+    try:
+        # As text: verify_header signs "%d.%s" % (timestamp, payload), so bytes
+        # would be signed as "b'...'" and no real event would ever verify.
+        payload = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+    except UnicodeDecodeError as exc:
+        raise WebhookRefused("payload is not UTF-8") from exc
+    for secret in secrets:
+        try:
+            stripe.WebhookSignature.verify_header(payload, signature or "", secret, tolerance=300)
+        except stripe.error.SignatureVerificationError:
+            continue
+        try:
+            return json.loads(payload)
+        except ValueError as exc:
+            raise WebhookRefused("payload is not JSON") from exc
+    raise WebhookRefused("signature does not verify")

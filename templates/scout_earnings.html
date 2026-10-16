@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_scout_macros.html" import earning_tag %}
+{% block title %}Earnings — Trip Difference{% endblock %}
+{% block crumb %}Scout · Earnings{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Earnings</h1>
+  <p>One line for each fee Trip Difference collected from a business you referred. <b>Pending</b> becomes
+     <b>Available</b> after the hold, and <b>Available</b> is paid on the 1st of the month.</p>
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  {% if earnings %}
+  <table>
+    <thead>
+      <tr><th>Date</th><th>Business</th><th class="num">Our fee</th><th class="num">Rate</th>
+          <th class="num">You earn</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      {% for e in earnings %}
+      <tr>
+        <td class="mono">{{ e.created_at.strftime('%-d %b %Y') }}</td>
+        <td>
+          {{ e.business }}
+          {% if e.entry == 'reversal' %}<small class="soft">Fee refunded after payout — taken from your next one</small>{% endif %}
+          {% if e.status == 'reversed' and e.reversal_reason %}<small class="soft">{{ e.reversal_reason|capitalize }}</small>{% endif %}
+        </td>
+        <td class="num">{{ '%.2f'|format(e.commission_amount) }}</td>
+        <td class="num">{{ e.rate|pct }}</td>
+        <td class="num {{ 'pos' if e.amount < 0 }}">{{ '%.2f'|format(e.amount) }} <span class="cur">{{ e.currency }}</span></td>
+        <td>
+          {{ earning_tag(e.status) }}
+          {% if e.status == 'pending' %}<small class="soft">from {{ e.available_at.strftime('%-d %b') }}</small>{% endif %}
+          {% if e.status == 'available' and e.currency != payout_currency %}<small class="soft">held — not {{ payout_currency }}</small>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="text-align:center; padding:48px 24px">
+    <p class="muted" style="margin:0">Nothing yet. You earn when a business you referred saves on a rebooked flight
+       and our fee on it is collected.</p>
+  </div>
+  {% endif %}
+</div>
+
+<style>
+  td small { display:block; font-size:11.5px; margin-top:2px; }
+</style>
+
+{% endblock %}

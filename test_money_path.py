@@ -52,7 +52,8 @@ CSRF = "test-csrf-token"
 def new_account(prefix="test"):
     """An account + user named db.TEST_ACCOUNT_NAME. The caller deletes it by
     the returned account_id."""
-    user = db.create_account(f"{prefix}-{uuid.uuid4().hex[:12]}@example.com", password_hash="x")
+    user = db.create_account(f"{prefix}-{uuid.uuid4().hex[:12]}@example.com", password_hash="x",
+                             referral=db.internal_referral_code("LEGACY"))
     db.q("UPDATE accounts SET name = %s WHERE id = %s", (db.TEST_ACCOUNT_NAME, user["account_id"]))
     return user
 

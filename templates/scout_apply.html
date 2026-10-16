@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Become a scout — Trip Difference{% endblock %}
+{% block body %}
+
+<div class="apply">
+  <div class="page-head" style="{{ 'text-align:center' if not signed_in }}">
+    <h1>Become a scout</h1>
+    <p>Refer businesses to Trip Difference and earn a share of what we collect on their savings, for as long as
+       they're a customer.</p>
+  </div>
+
+  <div class="card">
+    <form method="post" action="{{ url_for('scout_apply') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+      {% if not signed_in %}
+      <div class="grid2">
+        <div class="field">
+          <label for="given_name">First name</label>
+          <input id="given_name" name="given_name" value="{{ form.given_name }}" required autofocus>
+        </div>
+        <div class="field">
+          <label for="family_name">Last name</label>
+          <input id="family_name" name="family_name" value="{{ form.family_name }}" required>
+        </div>
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" value="{{ form.email }}" placeholder="you@example.com" required>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" minlength="10" placeholder="At least 10 characters" required>
+        </div>
+        <div class="field">
+          <label for="confirm">Confirm password</label>
+          <input id="confirm" name="confirm" type="password" minlength="10" required>
+        </div>
+      </div>
+      {% else %}
+      <p class="soft" style="margin-top:0">Applying as <b>{{ form.given_name }} {{ form.family_name }}</b> · {{ form.email }}</p>
+      {% endif %}
+
+      <div class="field">
+        <label for="company">Company or network</label>
+        <input id="company" name="company" value="{{ form.company }}" placeholder="e.g. Northwind Travel Consulting" required>
+      </div>
+      <div class="field">
+        <label for="sourcing_plan">How will you find businesses?</label>
+        <textarea id="sourcing_plan" name="sourcing_plan" rows="4" required
+                  placeholder="Who you know, which industries, roughly how many companies">{{ form.sourcing_plan }}</textarea>
+      </div>
+
+      <div class="terms">
+        <b>Scout terms</b>
+        <ul>
+          <li>You earn a share of the fee Trip Difference actually collects on savings for each business you refer
+              — 10% of our fee unless agreed otherwise — for the life of that business's account.</li>
+          <li>Earnings are held for {{ hold_days }} days after each fee is collected, then paid monthly through
+              Stripe once you have at least {{ '%.2f'|format(payout_minimum) }} USD available.</li>
+          <li>Stripe collects your identity, bank and tax details and issues your 1099. Trip Difference never sees
+              your bank account.</li>
+          <li>You can't refer yourself or your own company. Every application is reviewed by a person.</li>
+        </ul>
+        <p class="hint">The full scout agreement is provided before your application is approved.</p>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" name="agree" value="yes" required>
+        <span>I agree to the scout terms above</span>
+      </label>
+
+      <button type="submit" class="btn-block" style="margin-top:14px">Submit application</button>
+    </form>
+  </div>
+
+  {% if not signed_in %}
+  <p class="foot">Already have an account? <a href="{{ url_for('login', next=url_for('scout_apply')) }}">Sign in</a> to apply with it.</p>
+  {% endif %}
+</div>
+
+<style>
+  .apply { max-width:560px; margin:{{ '40px auto 0' if not signed_in else '0' }}; }
+  .terms { background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r);
+           padding:12px 14px; font-size:13px; margin:4px 0 14px; }
+  .terms ul { margin:6px 0 4px; padding-left:18px; color:var(--muted); }
+  .terms li { margin-bottom:4px; }
+  .check { display:flex; align-items:center; gap:9px; font-size:13.5px; font-weight:500; text-transform:none;
+           letter-spacing:0; color:var(--text); }
+  .check input { width:auto; }
+  .foot { text-align:center; margin-top:18px; font-size:13.5px; color:var(--muted); }
+  textarea { width:100%; font:inherit; }
+</style>
+
+{% endblock %}

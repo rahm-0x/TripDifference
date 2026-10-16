@@ -1,7 +1,9 @@
 """
 Every route requires a signed-in session except the ones app.PUBLIC_ENDPOINTS
-names — landing, login, signup, the Google auth callbacks, static files, and the
-CRON_SECRET-authenticated reshop scheduler — and /healthz/env reports what a
+names — landing, login, signup (and its Google step), a scout's /r/<code> link,
+the scout application, the Google auth callbacks, static files, the
+CRON_SECRET-authenticated schedulers and the signature-authenticated Stripe
+webhook — and /healthz/env reports what a
 deployment is running as without exposing a secret.
 
 The route-map walk sends one anonymous request per rule and method, with
@@ -29,15 +31,16 @@ LIVE_TOKEN = "duffel_live_" + "0" * 32
 # The allowlist, restated here on purpose: making a route public means editing
 # both app.PUBLIC_ENDPOINTS and this set.
 EXPECTED_PUBLIC = {
-    "index", "login", "signup",
+    "index", "login", "signup", "signup_google", "referral_link", "scout_apply",
     "google_auth_start", "google_auth_callback",
     "static", "logo",
-    "cron_reshop",
+    "cron_reshop", "cron_scouts", "stripe_webhook",
 }
 
 
 def _concrete(rule):
-    return re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"pytest-\1", rule.rule)
+    path = re.sub(r"<int:[^<>]+>", "1", rule.rule)   # an int converter won't match text
+    return re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"pytest-\1", path)
 
 
 def test_public_endpoints_are_exactly_the_allowlist():

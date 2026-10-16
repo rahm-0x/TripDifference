@@ -11,6 +11,10 @@
     {
       "path": "/cron/reshop",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/cron/scouts",
+      "schedule": "0 10 * * *"
     }
   ]
 }

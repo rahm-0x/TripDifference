@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "_scout_macros.html" import scout_status_tag %}
+{% block title %}Scout settings — Trip Difference{% endblock %}
+{% block crumb %}Scout · Settings{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Settings</h1>
+</div>
+
+<div class="cols-2">
+  <div class="card">
+    <h3 style="margin-bottom:12px">About you</h3>
+    <form method="post" action="{{ url_for('scout_settings') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="company">Company or network</label>
+        <input id="company" name="company" value="{{ scout.company }}">
+      </div>
+      <div class="field">
+        <label for="sourcing_plan">How you find businesses</label>
+        <textarea id="sourcing_plan" name="sourcing_plan" rows="4">{{ scout.sourcing_plan }}</textarea>
+      </div>
+      <button type="submit" class="btn-sm">Save</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-bottom:12px">Your scout terms</h3>
+    <dl class="facts">
+      <dt>Status</dt><dd>{{ scout_status_tag(scout.status) }}</dd>
+      <dt>Your rate</dt><dd>{{ scout.default_rate|pct }} of our fee, for businesses that sign up from now on</dd>
+      <dt>Hold</dt><dd>{{ hold_days }} days after each fee is collected</dd>
+      <dt>Minimum payout</dt><dd>{{ '%.2f'|format(payout_minimum) }} USD</dd>
+      <dt>Agreement accepted</dt><dd>{{ scout.agreement_accepted_at.strftime('%-d %b %Y') if scout.agreement_accepted_at else '—' }}</dd>
+      <dt>Approved</dt><dd>{{ scout.approved_at.strftime('%-d %b %Y') if scout.approved_at else '—' }}</dd>
+    </dl>
+    <p class="hint">Bank and tax details are kept by Stripe — change them from <a href="{{ url_for('scout_payouts') }}">Payouts</a>.</p>
+  </div>
+</div>
+
+<style>
+  .cols-2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+  .facts { display:grid; grid-template-columns:150px 1fr; gap:8px 12px; margin:0; font-size:13.5px; }
+  .facts dt { color:var(--muted-2); }
+  .facts dd { margin:0; }
+  textarea { width:100%; font:inherit; }
+  @media (max-width:860px){ .cols-2 { grid-template-columns:1fr; } }
+</style>
+
+{% endblock %}

@@ -3,8 +3,9 @@ Session auth. Passwords are argon2id; the cookie holds an opaque token whose
 SHA-256 is what the sessions table stores, so a database leak yields no usable
 sessions.
 
-Signup is open — anyone can create an account. The first user of a signup owns
-a fresh `accounts` row, and every order is scoped to that account.
+Signup needs a referral code (referrals.py) — no code, no account. The first
+user of a signup owns a fresh `accounts` row, and every order is scoped to that
+account.
 """
 
 import functools
@@ -88,6 +89,22 @@ def role_required(*roles):
             return view(*a, **kw)
         return wrapped
     return decorator
+
+
+def staff_required(view):
+    """TD's own staff only (users.is_staff, migration 038) — not users.role,
+    whose 'admin' is every customer's role in their own account. Nothing in the
+    app grants the flag; it is set by hand in SQL."""
+    @functools.wraps(view)
+    def wrapped(*a, **kw):
+        user = current_user()
+        if user is None:
+            return redirect(url_for("login", next=request.full_path.rstrip("?")))
+        if not user.get("is_staff"):
+            return render_template("error.html", hide_nav=True,
+                                   error="You don't have permission to do that."), 403
+        return view(*a, **kw)
+    return wrapped
 
 
 def view_model(user):

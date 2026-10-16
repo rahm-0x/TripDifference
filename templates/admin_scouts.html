@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% from "_scout_macros.html" import scout_status_tag %}
+{% block title %}Scouts — Trip Difference{% endblock %}
+{% block crumb %}Operations · Scouts{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Scouts</h1>
+  <p>Applications, scouts, their codes and rates. Every action here is written to the audit log.</p>
+</div>
+
+{% if message %}
+<div class="notice" style="margin-bottom:18px"><span>✓</span><div>{{ message }}</div></div>
+{% endif %}
+
+{% set applications = scouts|selectattr('status', 'equalto', 'applied')|list %}
+{% set others = scouts|rejectattr('status', 'equalto', 'applied')|list %}
+
+<div class="card" style="margin-bottom:18px">
+  <h3 style="margin-bottom:10px">Applications <span class="muted" style="font-weight:400">· {{ applications|length }}</span></h3>
+  {% if applications %}
+  {% for s in applications %}
+  <div class="app-row">
+    <div>
+      <b>{{ s.given_name }} {{ s.family_name }}</b> <span class="soft">· {{ s.email }}</span>
+      <div class="soft">{{ s.company }}</div>
+      <p class="plan">{{ s.sourcing_plan }}</p>
+      <span class="hint">Applied {{ s.applied_at.strftime('%-d %b %Y') }}</span>
+    </div>
+    <div class="acts">
+      <form method="post" action="{{ url_for('admin_scout_approve', scout_id=s.id) }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn-sm btn-sage">Approve &amp; issue code</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_scout_status', scout_id=s.id, action='reject') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn-sm btn-ghost">Reject</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="muted" style="margin:0">No applications waiting.</p>
+  {% endif %}
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto; margin-bottom:18px">
+  <div style="padding:16px 18px 0"><h3>Scouts</h3></div>
+  {% if others %}
+  <table style="margin-top:10px">
+    <thead>
+      <tr><th>Scout</th><th>Status</th><th>Codes</th><th class="num">Referred</th><th class="num">Lifetime earned</th>
+          <th>Rate (future signups)</th><th>Payouts</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in others %}
+      <tr>
+        <td><b>{{ s.given_name }} {{ s.family_name }}</b><small class="soft">{{ s.email }}</small></td>
+        <td>{{ scout_status_tag(s.status) }}</td>
+        <td>
+          {% for c in s.codes %}
+          <div class="code-row">
+            <span class="mono {{ 'muted' if not c.active }}">{{ c.code }}{% if not c.active %} (off){% endif %}</span>
+            {% if c.active %}
+            <form method="post" action="{{ url_for('admin_code_deactivate', code_id=c.id) }}">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit" class="link-btn">deactivate</button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </td>
+        <td class="num">{{ s.referred }}</td>
+        <td class="num">{{ s.lifetime or '0.00' }}</td>
+        <td>
+          <form method="post" action="{{ url_for('admin_scout_rate', scout_id=s.id) }}" class="rate-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input name="rate_percent" value="{{ (s.default_rate * 100)|round(2) }}" inputmode="decimal" aria-label="Rate percent">
+            <span>%</span>
+            <button type="submit" class="btn-sm btn-ghost">Set</button>
+          </form>
+        </td>
+        <td>{% if s.payouts_enabled %}<span class="tag tag-sage">On</span>{% elif s.stripe_connect_account_id %}<span class="tag tag-terra">Setting up</span>{% else %}<span class="tag tag-mute">Not set up</span>{% endif %}</td>
+        <td class="acts-cell">
+          {% for action, label, cls in [('suspend', 'Suspend', 'btn-ghost'), ('reinstate', 'Reinstate', 'btn-ghost'), ('terminate', 'Terminate', 'btn-danger')] %}
+          {% if s.status in {'suspend': ['approved'], 'reinstate': ['suspended'], 'terminate': ['approved', 'suspended']}[action] %}
+          <form method="post" action="{{ url_for('admin_scout_status', scout_id=s.id, action=action) }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button type="submit" class="btn-sm {{ cls }}">{{ label }}</button>
+          </form>
+          {% endif %}
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="text-align:center; padding:40px 24px"><p class="muted" style="margin:0">No scouts yet.</p></div>
+  {% endif %}
+</div>
+
+<div class="grid2" style="align-items:start">
+  <div class="card">
+    <h3 style="margin-bottom:6px">Change an account's attribution</h3>
+    <p class="hint" style="margin-top:0">Attribution is fixed at signup. This moves an account to another code — at that
+       scout's current rate — and records who did it and why. Earnings already written stay where they are.</p>
+    <form method="post" action="{{ url_for('admin_attribution') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="field"><label for="ov-email">Email of a user on the account</label>
+        <input id="ov-email" name="email" type="email" required></div>
+      <div class="field"><label for="ov-code">New referral code</label>
+        <input id="ov-code" name="code" placeholder="SCOUT-XXXXX or LEGACY" required></div>
+      <div class="field"><label for="ov-reason">Reason</label>
+        <input id="ov-reason" name="reason" required></div>
+      <button type="submit" class="btn-sm">Change attribution</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-bottom:6px">Flagged signups</h3>
+    <p class="hint" style="margin-top:0">Let through, but sharing a free-mail domain with the scout whose code they used.</p>
+    {% if flagged %}
+    {% for f in flagged %}
+    <div class="app-row">
+      <div>
+        <b>{{ f.business }}</b> <span class="soft">· {{ f.email }}</span>
+        <div class="soft">Code {{ f.code }} · {{ f.referred_at.strftime('%-d %b %Y') }}</div>
+        <span class="hint">{{ f.referral_flag }}</span>
+      </div>
+      <form method="post" action="{{ url_for('admin_referral_reviewed', account_id=f.id) }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn-sm btn-ghost">Reviewed</button>
+      </form>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="muted" style="margin:0">Nothing flagged.</p>
+    {% endif %}
+
+    <h3 style="margin:22px 0 6px">Run the ledger jobs now</h3>
+    <p class="hint" style="margin-top:0">Normally /cron/scouts does this daily, with payouts on the 1st.</p>
+    <div class="acts">
+      <form method="post" action="{{ url_for('admin_scouts_run', job='release') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn-sm btn-ghost">Release matured earnings</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_scouts_run', job='payouts') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn-sm btn-ghost">Run this month's payouts</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<style>
+  .app-row { display:flex; justify-content:space-between; gap:16px; padding:12px 0; border-top:1px solid var(--line-soft); }
+  .app-row:first-of-type { border-top:0; padding-top:0; }
+  .plan { margin:6px 0 4px; font-size:13px; white-space:pre-line; }
+  .acts { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
+  .acts-cell { white-space:nowrap; }
+  .acts-cell form { display:inline-block; }
+  td small { display:block; font-size:11.5px; }
+  .code-row { display:flex; gap:8px; align-items:baseline; }
+  .link-btn { background:none; border:0; padding:0; color:var(--gold); font-size:12px; cursor:pointer; }
+  .link-btn:hover { background:none; color:var(--gold-hi); text-decoration:underline; }
+  .rate-form { display:flex; align-items:center; gap:6px; }
+  .rate-form input { width:70px; padding:6px 8px; }
+</style>
+
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Referrals — Trip Difference{% endblock %}
+{% block crumb %}Scout · Referrals{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Referrals</h1>
+  <p>Every business that signed up with your code. You see what you've earned from each — never their trips,
+     travelers or fares.</p>
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  {% if referrals %}
+  <table>
+    <thead>
+      <tr><th>Business</th><th>Signed up</th><th>Status</th><th class="num">Savings events</th><th class="num">You've earned</th></tr>
+    </thead>
+    <tbody>
+      {% for r in referrals %}
+      <tr>
+        <td><b>{{ r.business }}</b></td>
+        <td class="mono">{{ r.referred_at.strftime('%-d %b %Y') }}</td>
+        <td>
+          {% if r.has_orders %}<span class="tag tag-sage">Active</span>
+          {% else %}<span class="tag tag-mute">No reservations yet</span>{% endif %}
+        </td>
+        <td class="num">{{ r.savings_events }}</td>
+        <td class="num">{% if r.earned %}{{ r.earned }}{% else %}0.00{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="text-align:center; padding:48px 24px">
+    <p class="muted" style="margin:0">No referrals yet. Share your link from the <a href="{{ url_for('scout_dashboard') }}">dashboard</a>.</p>
+  </div>
+  {% endif %}
+</div>
+
+{% endblock %}

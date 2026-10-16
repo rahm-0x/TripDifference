@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Scout application — Trip Difference{% endblock %}
+{% block crumb %}Scout · Application{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>{{ 'Application received' if scout.status == 'applied' else 'Application not approved' }}</h1>
+</div>
+
+<div class="card" style="max-width:640px">
+  {% if scout.status == 'applied' %}
+  <p style="margin-top:0">Thanks for applying to be a Trip Difference scout. A person on our team reviews every
+     application. Once you're approved, your referral link and code appear here and you can set up payouts.</p>
+  <p class="hint" style="margin-bottom:0">Applied {{ scout.applied_at.strftime('%-d %b %Y') }}
+     {% if scout.company %}· {{ scout.company }}{% endif %}</p>
+  {% else %}
+  <p style="margin-top:0">We weren't able to approve your application this time.</p>
+  <a href="{{ url_for('scout_apply') }}" class="btn btn-ghost btn-sm">Apply again</a>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,20 @@
+{# Shared by the scout portal and /admin/scouts. #}
+
+{# {currency: amount} → "5.00 USD", each currency on its own; never summed across them. #}
+{% macro money(by_currency, empty_currency='USD') -%}
+  {%- if by_currency -%}
+    {%- for cur, amt in by_currency|dictsort -%}
+      <span class="num">{{ '%.2f'|format(amt) }}</span> <span class="cur">{{ cur }}</span>{% if not loop.last %}<br>{% endif %}
+    {%- endfor -%}
+  {%- else -%}
+    <span class="num">0.00</span> <span class="cur">{{ empty_currency }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro earning_tag(status) -%}
+  <span class="tag {{ {'pending': 'tag-mute', 'available': 'tag-terra', 'paid': 'tag-sage', 'reversed': 'tag-alert'}.get(status, 'tag-mute') }}">{{ status|capitalize }}</span>
+{%- endmacro %}
+
+{% macro scout_status_tag(status) -%}
+  <span class="tag {{ {'applied': 'tag-terra', 'approved': 'tag-sage', 'suspended': 'tag-credit', 'terminated': 'tag-alert', 'rejected': 'tag-mute'}.get(status, 'tag-mute') }}">{{ status|capitalize }}</span>
+{%- endmacro %}

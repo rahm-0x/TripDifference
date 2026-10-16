@@ -693,7 +693,10 @@ def rolled_back():
 
 
 def _account(conn):
-    return conn.execute("INSERT INTO accounts (name) VALUES (%s) RETURNING id",
+    # Every account carries a referral code (migration 038); a test's is LEGACY.
+    return conn.execute("""INSERT INTO accounts (name, referral_code_id, scout_id, scout_rate, referred_at)
+                           SELECT %s, id, scout_id, 0, now() FROM referral_codes WHERE code = 'LEGACY'
+                           RETURNING id""",
                         (config.TEST_ACCOUNT_NAME,)).fetchone()["id"]
 
 

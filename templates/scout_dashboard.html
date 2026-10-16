@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% from "_scout_macros.html" import money %}
+{% block title %}Scout dashboard — Trip Difference{% endblock %}
+{% block crumb %}Scout · Dashboard{% endblock %}
+{% block body %}
+
+<div class="page-head scout-head">
+  <div>
+    <h1>Scout dashboard</h1>
+    {% if scout.status == 'terminated' %}
+    <p class="hero-gate gate-off">Your scout agreement has ended</p>
+    {% elif not connected %}
+    <p class="hero-gate">Set up payouts to get paid</p>
+    {% endif %}
+  </div>
+  {% if not connected and scout.status != 'terminated' %}
+  <a href="{{ url_for('scout_payouts') }}" class="btn">Set up payouts</a>
+  {% endif %}
+</div>
+
+{% if scout.status == 'suspended' %}
+<div class="notice" style="margin-bottom:18px"><span>!</span>
+  <div>Your scout account is suspended. Your links don't accept new signups right now; businesses you
+       already referred still earn for you, and what you're owed is still paid out.</div></div>
+{% elif scout.status == 'terminated' %}
+<div class="notice" style="margin-bottom:18px"><span>!</span>
+  <div>Nothing new accrues. Anything you earned before is still paid out once it's available.</div></div>
+{% endif %}
+
+<div class="card ref-card">
+  <div class="eyebrow">Your referral link</div>
+  {% if link %}
+  <div class="ref-row">
+    <input id="ref-link" value="{{ link }}" readonly aria-label="Referral link">
+    <button type="button" class="btn-sm" id="copy-link" data-copy="{{ link }}">Copy link</button>
+  </div>
+  <p class="hint">Code <b class="mono">{{ code }}</b> · Every business that signs up through it is yours for
+     the life of its account.</p>
+  {% else %}
+  <p class="soft" style="margin:8px 0 0">You don't have an active code. Contact Trip Difference to get a new one.</p>
+  {% endif %}
+</div>
+
+<div class="kpis kpis-5">
+  <div class="card kpi">
+    <span class="k-label">Businesses referred</span>
+    <div class="k-val">{{ referred }}</div>
+  </div>
+  <div class="card kpi">
+    <span class="k-label">Lifetime earned</span>
+    <div class="k-val">{{ money(balances.lifetime) }}</div>
+  </div>
+  <div class="card kpi">
+    <span class="k-label">Pending</span>
+    <div class="k-val">{{ money(balances.pending) }}</div>
+    <div class="k-note">Held {{ hold_days }} days after the fee is collected</div>
+  </div>
+  <div class="card kpi" style="border-left:3px solid var(--gold)">
+    <span class="k-label">Available</span>
+    <div class="k-val">{{ money(balances.available) }}</div>
+    <div class="k-note">Paid on the 1st once it reaches {{ '%.2f'|format(payout_minimum) }} {{ payout_currency }}</div>
+  </div>
+  <div class="card kpi" style="border-left:3px solid var(--green)">
+    <span class="k-label">Paid</span>
+    <div class="k-val">{{ money(balances.paid) }}</div>
+  </div>
+</div>
+
+<div class="card-flat how">
+  <h3>How you earn</h3>
+  <p>You earn <b>{{ scout.default_rate|pct }}</b> of the fee Trip Difference collects whenever a business you
+     referred saves money on a rebooked flight — only once that fee has actually been charged, never on a
+     saving that's still pending. Each business keeps the rate it signed up under.</p>
+  {% if balances.lifetime|reject('equalto', payout_currency)|list %}
+  <p class="hint">Earnings in currencies other than {{ payout_currency }} are held until we can pay them out.</p>
+  {% endif %}
+</div>
+
+<style>
+  .scout-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+  .gate-off { color:var(--muted); }
+  .ref-card { margin-bottom:18px; }
+  .ref-row { display:flex; gap:8px; margin-top:10px; }
+  .ref-row input { flex:1; font-family:'IBM Plex Mono', monospace; font-size:13px; }
+  .kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:22px; }
+  .kpi { padding:14px 16px; }
+  .k-label { font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em;
+             text-transform:uppercase; color:var(--muted-2); display:block; margin-bottom:7px; }
+  .k-val { font-family:'IBM Plex Mono', monospace; font-size:20px; font-weight:500;
+           letter-spacing:-.025em; font-variant-numeric:tabular-nums; line-height:1.15; }
+  .k-val .cur { font-size:11px; }
+  .k-note { font-size:11.5px; color:var(--muted-2); margin-top:6px; }
+  .how h3 { margin-bottom:6px; }
+  .how p { margin:0 0 6px; font-size:13.5px; color:var(--muted); }
+  @media (max-width:1180px){ .kpis { grid-template-columns:repeat(3,1fr); } }
+  @media (max-width:720px){ .kpis { grid-template-columns:repeat(2,1fr); } .ref-row { flex-direction:column; } }
+</style>
+<script>
+  (function () {
+    var btn = document.getElementById('copy-link');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy link'; }, 1600); };
+      if (navigator.clipboard) { navigator.clipboard.writeText(btn.dataset.copy).then(done); }
+      else { var i = document.getElementById('ref-link'); i.select(); document.execCommand('copy'); done(); }
+    });
+  })();
+</script>
+
+{% endblock %}

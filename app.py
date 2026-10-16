@@ -14,6 +14,7 @@ Login / activate are presentation screens. They do not gate anything: this is a
 single-operator rig and adding real auth would only get in the way.
 """
 
+import functools
 import hmac
 import json
 import os
@@ -23,8 +24,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from flask import (Flask, abort, flash, get_flashed_messages, redirect, render_template,
-                   request, send_from_directory, session, url_for)
+from flask import (Flask, abort, flash, g, get_flashed_messages, make_response, redirect,
+                   render_template, request, send_from_directory, session, url_for)
 
 import requests
 
@@ -39,6 +40,7 @@ import live_search
 import offer_eligibility
 import paths
 import policy
+import referrals
 import supabase_auth
 from duffel_http import DuffelError
 from engine import (OrderSnapshot, Outcome, ReshopPolicy,
@@ -114,12 +116,21 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 PUBLIC_ENDPOINTS = frozenset({
     "index",                                       # landing
     "login", "signup",
+    "signup_google",                               # checks the referral code, then Google
+    "referral_link",                               # /r/<code>: a scout's link
+    "scout_apply",                                 # applying to be a scout
     "google_auth_start", "google_auth_callback",   # auth callbacks
     "static", "logo",                              # static
     # Server-to-server: Vercel Cron can't hold a session. Authenticated by a
     # CRON_SECRET bearer token instead, and refused without one.
-    "cron_reshop",
+    "cron_reshop", "cron_scouts",
+    # Server-to-server: Stripe. Authenticated by its signature instead.
+    "stripe_webhook",
 })
+
+# Signature-authenticated rather than session-authenticated, so a CSRF token
+# means nothing to them: the caller is Stripe, not a browser.
+CSRF_EXEMPT_ENDPOINTS = frozenset({"stripe_webhook"})
 
 
 @app.before_request
@@ -137,11 +148,29 @@ def _require_login():
 def _csrf_guard():
     """Every state-changing request, without exception. A per-form hidden field
     is something you forget on the one form that matters."""
+    if request.endpoint in CSRF_EXEMPT_ENDPOINTS:
+        return None
     if request.method in UNSAFE_METHODS and not auth.csrf_ok():
         return render_template("error.html",
                                hide_nav=True,
                                error="That form expired or came from somewhere "
                                      "else. Go back and try again."), 403
+
+
+# What a scout applicant whose account exists only because they applied
+# (SCOUT-APPLICANT, no referral code) may reach before a person approves them:
+# their application and nothing on the booking side. Without this, applying to
+# be a scout would be a way to open a customer account with no code.
+_APPLICANT_ENDPOINTS = frozenset({"scout_apply", "scout_dashboard", "logout", "static", "logo"})
+
+
+@app.before_request
+def _gate_scout_applicants():
+    user = auth.current_user() if request.endpoint not in PUBLIC_ENDPOINTS else None
+    if (user and user.get("scout_only") and user.get("scout_status") in (None, "applied", "rejected")
+            and request.endpoint not in _APPLICANT_ENDPOINTS):
+        return redirect(url_for("scout_dashboard"))
+    return None
 
 
 def _onboarding_steps(user, card, counts):
@@ -173,6 +202,9 @@ def inject_globals():
         onboarding = {"done": done, "total": len(steps), "complete": next_step is None,
                       "next": next_step}
     return {"user": auth.view_model(user), "card": card, "onboarding": onboarding,
+            # the sidebar's switcher and the staff link (migration 038)
+            "scout_status": user.get("scout_status") if user else None,
+            "is_staff": bool(user and user.get("is_staff")),
             "policy": DEFAULT_POLICY, "profile": auth.profile_of(user),
             "csrf_token": auth.csrf_token(),
             # templates/_live_banner.html, included by every full-page template:
@@ -938,19 +970,29 @@ def logo():
     return send_from_directory(HERE / "public", "logo.png")
 
 
-def _safe_next(target):
+def _safe_next(target, default=None):
     """Only ever redirect within this site."""
     if target and target.startswith("/") and not target.startswith("//"):
         return target
-    return url_for("trips")
+    return default or url_for("trips")
+
+
+def _client_ip():
+    return (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote_addr)
+
+
+def _home_for(user_id):
+    """Where someone lands after signing in with nowhere else asked for: the
+    scout portal when their account exists only for scouting."""
+    return url_for("scout_dashboard") if db.is_scout_only(user_id) else None
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
-        ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-              or request.remote_addr)
+        ip = _client_ip()
 
         if auth.throttled(email, ip):
             return render_template(
@@ -968,21 +1010,66 @@ def login():
                                    error="That email and password don't match."), 401
         db.clear_failures(email)
         auth.sign_in(user["id"])
-        return redirect(_safe_next(request.args.get("next")))
+        return redirect(_safe_next(request.args.get("next"), _home_for(user["id"])))
     return render_template("login.html", hide_nav=True, prefill_email="")
+
+
+def _signup_page(*, email="", code="", error=None, status=200, clear_cookie=False):
+    """The signup form, with the referral field in whichever state the visitor
+    is in: locked to the code a /r/<code> link set (td_ref), or empty and
+    editable. A td_ref cookie that does not verify is dropped here, so the
+    visitor is not stuck behind it."""
+    locked, verified = referrals.locked_code(request.cookies.get(referrals.COOKIE))
+    referral = {"code": referrals.normalize(code or request.args.get("ref", "")),
+                "locked": False, "referrer": None}
+    if locked:
+        row = db.referral_code_lookup(locked)
+        referral = {"code": referrals.normalize(locked), "locked": True,
+                    "referrer": referrals.referrer_name(row) if row else None}
+    resp = make_response(render_template("signup.html", hide_nav=True, email=email,
+                                         referral=referral, error=error), status)
+    if clear_cookie or not verified:
+        resp.delete_cookie(referrals.COOKIE)
+    return resp
+
+
+@app.route("/r/<code>")
+def referral_link(code):
+    """A scout's link. A code signup can use sets td_ref — signed, httpOnly,
+    90 days — which locks the signup form to it (referrals.resolve), then goes
+    on to signup. Anything else shows signup with the link refused."""
+    if db.referral_recent_failures(_client_ip(), referrals.FAILURE_WINDOW_MIN) >= referrals.MAX_FAILURES:
+        return _signup_page(error=referrals.THROTTLED, status=429)
+    row, problem = referrals.check(code)
+    if problem:
+        db.referral_failure_record(_client_ip(), code)
+        return _signup_page(error=referrals.INACTIVE, status=404)
+    resp = redirect(url_for("signup", ref=row["code"]))
+    resp.set_cookie(referrals.COOKIE, referrals.sign(row["code"]),
+                    max_age=int(referrals.COOKIE_MAX_AGE.total_seconds()),
+                    httponly=True, secure=paths.ON_VERCEL, samesite="Lax")
+    return resp
 
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
-    """Step 1 of onboarding: just email + password (or Google — see
-    /auth/google/start). Name, DOB and the rest of the profile are
-    collected in /onboarding/profile, not here."""
+    """Step 1 of onboarding: email + password (or Google — see /signup/google)
+    and the referral code every account needs. Name, DOB and the rest of the
+    profile are collected in /onboarding/profile, not here."""
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
+        form_code = request.form.get("referral_code", "")
+
+        referral, refusal = referrals.resolve(cookie_value=request.cookies.get(referrals.COOKIE),
+                                              form_code=form_code, ip=_client_ip())
+        if refusal:
+            message, status = refusal
+            return _signup_page(email=email, code=form_code, error=message, status=status,
+                                clear_cookie=message == referrals.UNVERIFIED)
 
         def again(msg):
-            return render_template("signup.html", hide_nav=True, email=email, error=msg), 400
+            return _signup_page(email=email, code=referral["code"], error=msg, status=400)
 
         problem = auth.password_problem(password, request.form.get("confirm", ""))
         if problem:
@@ -991,11 +1078,33 @@ def signup():
             return again("Email is required.")
         if db.email_taken(email):
             return again("An account already exists for that email.")
+        verdict, why = referrals.self_referral(email, referral)
+        if verdict == "block":
+            return again(why)
 
-        user = db.create_account(email, auth.hash_password(password))
+        user = db.create_account(email, auth.hash_password(password), referral=referral,
+                                 referral_flag=why if verdict == "flag" else None)
         auth.sign_in(user["id"])
-        return redirect(url_for("onboarding_profile"))
-    return render_template("signup.html", hide_nav=True, email="")
+        resp = redirect(url_for("onboarding_profile"))
+        resp.delete_cookie(referrals.COOKIE)
+        return resp
+    return _signup_page()
+
+
+@app.route("/signup/google", methods=["POST"])
+def signup_google():
+    """Google signup from the signup form: the referral code is checked here,
+    under the same rules as a password signup, and kept for the callback,
+    which checks it again before it creates anything."""
+    form_code = request.form.get("referral_code", "")
+    referral, refusal = referrals.resolve(cookie_value=request.cookies.get(referrals.COOKIE),
+                                          form_code=form_code, ip=_client_ip())
+    if refusal:
+        message, status = refusal
+        return _signup_page(code=form_code, error=message, status=status,
+                            clear_cookie=message == referrals.UNVERIFIED)
+    session["_signup_referral"] = referral["code"]
+    return redirect(url_for("google_auth_start"))
 
 
 # ---------------------------------------------------------------------------
@@ -1009,8 +1118,10 @@ def onboarding_profile():
     user = auth.current_user()
     if request.method == "POST":
         form = {k: request.form.get(k, "").strip() for k in
-                ("given_name", "middle_name", "family_name", "born_on",
-                 "referral_source", "invite_code")}
+                ("given_name", "middle_name", "family_name", "born_on", "referral_source")}
+        # The optional invite code this step used to ask for is gone: the code
+        # that matters is the referral code signup requires. Kept as it was.
+        form["invite_code"] = user.get("invite_code", "")
         if not (form["given_name"] and form["family_name"]):
             return render_template("onboarding_profile.html", hide_nav=True, form=form,
                                    error="First and last name are required."), 400
@@ -1021,7 +1132,6 @@ def onboarding_profile():
         "family_name": user["family_name"],
         "born_on": user["born_on"].isoformat() if user["born_on"] else "",
         "referral_source": user.get("referral_source", ""),
-        "invite_code": user.get("invite_code", ""),
     })
 
 
@@ -1091,13 +1201,29 @@ def google_auth_callback():
         if user:
             db.link_supabase_id(user["id"], supabase_user_id)
     if not user:
-        user = db.create_account(email, password_hash=None,
-                                 supabase_user_id=supabase_user_id)
+        # A new account, so it needs a referral code like any other: the one
+        # /signup/google checked and kept, or the one a /r/<code> link locked.
+        # Checked again now — the code may have been switched off since.
+        referral, refusal = referrals.resolve(cookie_value=request.cookies.get(referrals.COOKIE),
+                                              form_code=session.pop("_signup_referral", ""),
+                                              ip=_client_ip())
+        if refusal:
+            message, status = refusal
+            return _signup_page(email=email, error=message, status=status)
+        verdict, why = referrals.self_referral(email, referral)
+        if verdict == "block":
+            return _signup_page(email=email, code=referral["code"], error=why, status=400)
+        user = db.create_account(email, password_hash=None, supabase_user_id=supabase_user_id,
+                                 referral=referral, referral_flag=why if verdict == "flag" else None)
+        auth.sign_in(user["id"])
+        resp = redirect(url_for("onboarding_profile"))
+        resp.delete_cookie(referrals.COOKIE)
+        return resp
 
     auth.sign_in(user["id"])
     if not (user.get("given_name") and user.get("family_name")):
         return redirect(url_for("onboarding_profile"))
-    return redirect(url_for("overview"))
+    return redirect(_home_for(user["id"]) or url_for("overview"))
 
 
 # ---------------------------------------------------------------------------
@@ -2290,6 +2416,17 @@ CRON_MAX_ORDERS = 8
 CRON_EXECUTE_BY_SECONDS = 30
 
 
+def _cron_authorized():
+    """Whether the request carries CRON_SECRET the way Vercel Cron sends it.
+    Strictly the documented shape: removeprefix() alone is a no-op when the
+    prefix is absent, which quietly accepted a bare secret in the Authorization
+    header — one accepted format, not two. An unset secret refuses everything."""
+    secret = config.CRON_SECRET
+    header = request.headers.get("Authorization", "")
+    presented = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
+    return bool(secret and presented and hmac.compare_digest(presented, secret))
+
+
 @app.route("/cron/reshop")
 def cron_reshop():
     """Run a reshop cycle over the orders due one, least-recently-checked first.
@@ -2302,13 +2439,7 @@ def cron_reshop():
     Decides only, unless RESHOP_AUTOPILOT_ENABLED is on — then a RESHOP
     decision is exchanged in the same run, as the account's owner.
     """
-    # Strictly the documented shape Vercel Cron sends. removeprefix() alone is a
-    # no-op when the prefix is absent, which quietly accepted a bare secret in
-    # the Authorization header — one accepted format, not two.
-    secret = config.CRON_SECRET
-    header = request.headers.get("Authorization", "")
-    presented = header[len("Bearer "):].strip() if header.startswith("Bearer ") else ""
-    if not secret or not presented or not hmac.compare_digest(presented, secret):
+    if not _cron_authorized():
         return {"error": "unauthorized"}, 401
 
     autopilot = config.RESHOP_AUTOPILOT_ENABLED
@@ -2990,6 +3121,20 @@ def _charge_commission(record, event):
         db.savings_event_commission_charged(event["id"], charge.id)
     except Exception as exc:  # e.g. the database, or migration 035 not applied yet
         print(f"  commission for savings event {event.get('id')} not recorded: {type(exc).__name__}: {exc}")
+        return
+    _accrue_scout_earning(event)
+
+
+def _accrue_scout_earning(event):
+    """The referring scout's share of a commission that has just been
+    collected — written only now, after the charge succeeded and was recorded,
+    never on a fee that is merely owed. Never raises: the rebooking and its
+    fee stand whatever happens here, and the daily /cron/scouts catch-up
+    writes any earning this misses."""
+    try:
+        db.scout_earning_accrue(event["id"], config.SCOUT_HOLD_DAYS)
+    except Exception as exc:
+        print(f"  scout earning for savings event {event.get('id')} not recorded: {type(exc).__name__}: {exc}")
 
 
 @app.route("/orders/<order_id>/execute/<action>", methods=["POST"])
@@ -3042,6 +3187,412 @@ def decisions():
     # account, same as the Activity Timeline this already powers.
     return render_template("decisions.html", nav="log",
                            rows=db.audit_rows_for_account(_account(), limit=200))
+
+
+# ---------------------------------------------------------------------------
+# scouts — referral partners (migration 038). The portal is theirs; the
+# admin pages are TD staff's (auth.staff_required).
+# ---------------------------------------------------------------------------
+
+# Scout payouts are made in USD only: a scout's Express account is paid in
+# dollars, and commission charged in another currency is held, visibly, until
+# there is a rule for converting it.
+SCOUT_PAYOUT_CURRENCY = "USD"
+
+
+@app.template_filter("pct")
+def _pct(rate):
+    """0.1000 → '10%', 0.025 → '2.5%'."""
+    value = (Decimal(str(rate or 0)) * 100).normalize()
+    return f"{value:f}%"
+
+
+def scout_required(view):
+    """The signed-in user's scout record on g.scout. No record → the
+    application; one still being reviewed (or rejected) → that status page."""
+    @functools.wraps(view)
+    def wrapped(*a, **kw):
+        user = auth.current_user()
+        scout = db.scout_for_user(user["id"])
+        if scout is None:
+            return redirect(url_for("scout_apply"))
+        if scout["status"] in ("applied", "rejected"):
+            return render_template("scout_pending.html", portal="scout", nav="scout_dashboard",
+                                   scout=scout)
+        g.scout = scout
+        return view(*a, **kw)
+    return wrapped
+
+
+def _scout_page(template, **ctx):
+    return render_template(template, portal="scout", scout=g.scout, **ctx)
+
+
+@app.route("/scout/apply", methods=["GET", "POST"])
+def scout_apply():
+    """Apply to be a scout. A signed-in customer applies as themselves; anyone
+    else creates a login here too, on an account attributed to SCOUT-APPLICANT
+    (no referral code — a scout is someone TD approves, not someone a scout
+    referred). Either way the application waits for a person to approve it."""
+    user = auth.current_user()
+    if user and db.scout_for_user(user["id"]):
+        return redirect(url_for("scout_dashboard"))
+    form = {k: request.form.get(k, "").strip() for k in
+            ("given_name", "family_name", "email", "company", "sourcing_plan")}
+    terms = {"hold_days": config.SCOUT_HOLD_DAYS, "payout_minimum": config.SCOUT_PAYOUT_MINIMUM}
+
+    def again(msg):
+        return render_template("scout_apply.html", hide_nav=not user, form=form, error=msg,
+                               signed_in=bool(user), **terms), 400
+
+    if request.method == "POST":
+        if request.form.get("agree") != "yes":
+            return again("Accept the scout terms to apply.")
+        if not form["company"] or not form["sourcing_plan"]:
+            return again("Tell us your company or network and how you'll find businesses.")
+        if user:
+            db.scout_apply(user["id"], company=form["company"], sourcing_plan=form["sourcing_plan"])
+            return redirect(url_for("scout_dashboard"))
+
+        email = form["email"].lower()
+        if not (form["given_name"] and form["family_name"]):
+            return again("First and last name are required.")
+        if not email:
+            return again("Email is required.")
+        problem = auth.password_problem(request.form.get("password", ""), request.form.get("confirm", ""))
+        if problem:
+            return again(problem)
+        if db.email_taken(email):
+            return again("An account already exists for that email. Sign in, then apply.")
+        new_user = db.create_account(email, auth.hash_password(request.form["password"]),
+                                     referral=db.internal_referral_code("SCOUT-APPLICANT"))
+        db.user_set_name(new_user["id"], given_name=form["given_name"], family_name=form["family_name"])
+        db.scout_apply(new_user["id"], company=form["company"], sourcing_plan=form["sourcing_plan"])
+        auth.sign_in(new_user["id"])
+        return redirect(url_for("scout_dashboard"))
+
+    if user:
+        form.update(given_name=user["given_name"], family_name=user["family_name"], email=user["email"])
+    return render_template("scout_apply.html", hide_nav=not user, form=form, signed_in=bool(user), **terms)
+
+
+def _scout_code(scout_id):
+    """The scout's code to share: the newest active one."""
+    active = [c for c in db.scout_codes(scout_id) if c["active"]]
+    return active[-1]["code"] if active else None
+
+
+@app.route("/scout")
+@scout_required
+def scout_dashboard():
+    scout = g.scout
+    code = _scout_code(scout["id"])
+    return _scout_page("scout_dashboard.html", nav="scout_dashboard", code=code,
+                       link=url_for("referral_link", code=code, _external=True) if code else None,
+                       balances=db.scout_balances(scout["id"]),
+                       referred=len(db.scout_referrals(scout["id"])),
+                       connected=bool(db.scout_connect_account(scout)),
+                       payout_currency=SCOUT_PAYOUT_CURRENCY,
+                       payout_minimum=config.SCOUT_PAYOUT_MINIMUM,
+                       hold_days=config.SCOUT_HOLD_DAYS)
+
+
+@app.route("/scout/referrals")
+@scout_required
+def scout_referrals():
+    return _scout_page("scout_referrals.html", nav="scout_referrals",
+                       referrals=db.scout_referrals(g.scout["id"]))
+
+
+@app.route("/scout/earnings")
+@scout_required
+def scout_earnings():
+    return _scout_page("scout_earnings.html", nav="scout_earnings",
+                       earnings=db.scout_earnings_ledger(g.scout["id"]),
+                       payout_currency=SCOUT_PAYOUT_CURRENCY)
+
+
+@app.route("/scout/payouts")
+@scout_required
+def scout_payouts():
+    scout = g.scout
+    return _scout_page("scout_payouts.html", nav="scout_payouts",
+                       connected=bool(db.scout_connect_account(scout)),
+                       payouts=db.scout_payouts_for(scout["id"]),
+                       balances=db.scout_balances(scout["id"]),
+                       payout_currency=SCOUT_PAYOUT_CURRENCY,
+                       payout_minimum=config.SCOUT_PAYOUT_MINIMUM,
+                       message=request.args.get("m"))
+
+
+def _scout_onboarding_redirect(connect_account_id):
+    return redirect(billing.connect_onboarding_url(
+        connect_account_id,
+        refresh_url=url_for("scout_payouts_refresh", _external=True),
+        return_url=url_for("scout_payouts_return", _external=True)))
+
+
+@app.route("/scout/payouts/connect", methods=["POST"])
+@scout_required
+def scout_payouts_connect():
+    """Start (or resume) Stripe's Express onboarding for this scout."""
+    scout = g.scout
+    if scout["status"] == "terminated":
+        return redirect(url_for("scout_payouts"))
+    try:
+        connect_id = db.scout_connect_account(scout)
+        if not connect_id:
+            connect_id = billing.connect_create_account(auth.current_user()["email"], scout["id"]).id
+            db.scout_set_connect_account(scout["id"], connect_id)
+        return _scout_onboarding_redirect(connect_id)
+    except Exception as exc:  # Stripe refused (e.g. Connect not enabled) or is unreachable
+        return redirect(url_for("scout_payouts", m=f"Stripe could not start payout setup: {exc}"))
+
+
+@app.route("/scout/payouts/refresh")
+@scout_required
+def scout_payouts_refresh():
+    """Where Stripe sends a scout whose onboarding link expired: a fresh one."""
+    connect_id = db.scout_connect_account(g.scout)
+    if not connect_id:
+        return redirect(url_for("scout_payouts"))
+    try:
+        return _scout_onboarding_redirect(connect_id)
+    except Exception as exc:
+        return redirect(url_for("scout_payouts", m=f"Stripe could not resume payout setup: {exc}"))
+
+
+@app.route("/scout/payouts/return")
+@scout_required
+def scout_payouts_return():
+    """Back from onboarding. Asks Stripe straight away rather than waiting for
+    account.updated, so the page is right on arrival; the webhook keeps it
+    right afterwards."""
+    connect_id = db.scout_connect_account(g.scout)
+    if connect_id:
+        try:
+            db.scout_sync_payouts_enabled(connect_id, billing.connect_status(connect_id))
+        except Exception as exc:
+            return redirect(url_for("scout_payouts", m=f"Couldn't check your payout status with Stripe: {exc}"))
+    return redirect(url_for("scout_payouts"))
+
+
+@app.route("/scout/payouts/dashboard", methods=["POST"])
+@scout_required
+def scout_payouts_dashboard():
+    """A one-time sign-in to the scout's own Stripe Express dashboard."""
+    connect_id = db.scout_connect_account(g.scout)
+    if not connect_id:
+        return redirect(url_for("scout_payouts"))
+    try:
+        return redirect(billing.connect_dashboard_url(connect_id))
+    except Exception as exc:
+        return redirect(url_for("scout_payouts", m=f"Stripe could not open your dashboard: {exc}"))
+
+
+@app.route("/scout/settings", methods=["GET", "POST"])
+@scout_required
+def scout_settings():
+    scout = g.scout
+    if request.method == "POST":
+        db.scout_update_profile(scout["id"], company=request.form.get("company", "").strip(),
+                                sourcing_plan=request.form.get("sourcing_plan", "").strip())
+        return redirect(url_for("scout_settings"))
+    return _scout_page("scout_settings.html", nav="scout_settings",
+                       hold_days=config.SCOUT_HOLD_DAYS, payout_minimum=config.SCOUT_PAYOUT_MINIMUM)
+
+
+# --- the scout ledger's jobs: /cron/scouts, and the same from /admin/scouts ---
+
+def _run_scout_payouts(period):
+    """Pay every scout whose available USD balance clears the minimum: one
+    payout row, then one transfer, then the record of it. A transfer that fails
+    returns its earnings to the pool; a run that stopped between the two is
+    settled first, by asking Stripe whether the transfer was made."""
+    out = {"paid": [], "failed": [], "settled": []}
+    for stuck in db.scout_payouts_stuck():
+        try:
+            transfer = billing.scout_transfer_for(stuck["id"])
+        except Exception as exc:
+            out["failed"].append({"payout_id": stuck["id"], "error": f"could not check: {exc}"[:200]})
+            continue
+        if transfer:
+            db.scout_payout_paid(stuck["id"], transfer.id)
+        else:
+            db.scout_payout_failed(stuck["id"], "the run stopped before a transfer was made")
+        out["settled"].append(stuck["id"])
+
+    minimum = config.SCOUT_PAYOUT_MINIMUM
+    for candidate in db.scout_payout_candidates(SCOUT_PAYOUT_CURRENCY, minimum):
+        payout = db.scout_payout_open(candidate["scout_id"], period, SCOUT_PAYOUT_CURRENCY, minimum)
+        if not payout:
+            continue
+        try:
+            transfer = billing.transfer_to_scout(candidate["stripe_connect_account_id"],
+                                                 amount=payout["amount"], currency=SCOUT_PAYOUT_CURRENCY,
+                                                 payout_id=payout["id"], attempt=payout["attempts"])
+        except Exception as exc:  # billing.PayoutError, or Stripe unreachable
+            db.scout_payout_failed(payout["id"], exc)
+            out["failed"].append({"payout_id": payout["id"], "error": str(exc)[:200]})
+            continue
+        db.scout_payout_paid(payout["id"], transfer.id)
+        out["paid"].append({"payout_id": payout["id"], "scout_id": candidate["scout_id"],
+                            "amount": str(payout["amount"]), "transfer": transfer.id})
+    return out
+
+
+def _scout_release():
+    """Write any earning the charge hook missed, then make every earning whose
+    hold has passed available."""
+    accrued = db.scout_earnings_accrue_missing(config.SCOUT_HOLD_DAYS)
+    released = db.scout_earnings_release()
+    return {"accrued": len(accrued), "released": len(released)}
+
+
+@app.route("/cron/scouts")
+def cron_scouts():
+    """Daily (vercel.json): release matured earnings; on the 1st of the month
+    (UTC), pay scouts out as well. Same CRON_SECRET bearer as /cron/reshop, and
+    the same caveat: Vercel fires crons on production deployments only."""
+    if not _cron_authorized():
+        return {"error": "unauthorized"}, 401
+    today = datetime.now(timezone.utc).date()
+    result = _scout_release()
+    if today.day == 1:
+        result["payouts"] = _run_scout_payouts(today)
+    return result
+
+
+# --- admin ------------------------------------------------------------------
+
+@app.route("/admin/scouts")
+@auth.staff_required
+def admin_scouts():
+    return render_template("admin_scouts.html", nav="admin_scouts",
+                           scouts=db.scouts_admin_list(), flagged=db.referrals_flagged(),
+                           message=request.args.get("m"))
+
+
+def _admin_back(message):
+    return redirect(url_for("admin_scouts", m=message))
+
+
+@app.route("/admin/scouts/<int:scout_id>/approve", methods=["POST"])
+@auth.staff_required
+def admin_scout_approve(scout_id):
+    code = db.scout_approve(scout_id, auth.current_user()["id"])
+    return _admin_back(f"Approved — code {code} issued." if code else "That scout isn't awaiting approval.")
+
+
+@app.route("/admin/scouts/<int:scout_id>/status/<action>", methods=["POST"])
+@auth.staff_required
+def admin_scout_status(scout_id, action):
+    if action not in db.SCOUT_TRANSITIONS:
+        abort(404)
+    status = db.scout_transition(scout_id, action, auth.current_user()["id"],
+                                 request.form.get("reason", "").strip())
+    return _admin_back(f"Scout {scout_id} is now {status}." if status
+                       else f"Can't {action} scout {scout_id} from its current status.")
+
+
+@app.route("/admin/scouts/<int:scout_id>/rate", methods=["POST"])
+@auth.staff_required
+def admin_scout_rate(scout_id):
+    try:
+        percent = Decimal(request.form.get("rate_percent", "").strip())
+    except InvalidOperation:
+        return _admin_back("Enter the rate as a percentage, e.g. 10.")
+    if not (0 <= percent <= 100):
+        return _admin_back("The rate must be between 0 and 100%.")
+    db.scout_set_rate(scout_id, (percent / 100).quantize(Decimal("0.0001")), auth.current_user()["id"])
+    return _admin_back(f"Scout {scout_id}'s rate is now {percent}% for future signups.")
+
+
+@app.route("/admin/codes/<int:code_id>/deactivate", methods=["POST"])
+@auth.staff_required
+def admin_code_deactivate(code_id):
+    code = db.referral_code_deactivate(code_id, auth.current_user()["id"])
+    return _admin_back(f"Code {code} deactivated." if code else "That code is already off.")
+
+
+@app.route("/admin/attribution", methods=["POST"])
+@auth.staff_required
+def admin_attribution():
+    """Move an account to another referral code. Reason required; audited in
+    the same transaction (db.account_attribution_override)."""
+    email = request.form.get("email", "").strip().lower()
+    reason = request.form.get("reason", "").strip()
+    if not reason:
+        return _admin_back("An attribution override needs a reason.")
+    account = db.account_for_override(email)
+    if not account:
+        return _admin_back(f"No account has a user with the email {email}.")
+    referral = db.referral_code_lookup(request.form.get("code", ""))
+    if not referral:
+        return _admin_back("No such referral code.")
+    before = db.account_attribution_override(account["id"], referral, reason=reason,
+                                             staff_user_id=auth.current_user()["id"])
+    return _admin_back(f"{account['business']}: attribution moved from {before} to {referral['code']}.")
+
+
+@app.route("/admin/referrals/<account_id>/reviewed", methods=["POST"])
+@auth.staff_required
+def admin_referral_reviewed(account_id):
+    db.referral_flag_reviewed(account_id)
+    return _admin_back("Flag marked reviewed.")
+
+
+@app.route("/admin/scouts/run/<job>", methods=["POST"])
+@auth.staff_required
+def admin_scouts_run(job):
+    """The cron's two jobs on demand — after a failed transfer, say. Payouts run
+    for the current month, so they never pay a scout twice in it."""
+    if job == "release":
+        r = _scout_release()
+        return _admin_back(f"{r['released']} earning(s) released, {r['accrued']} written by the catch-up.")
+    if job == "payouts":
+        r = _run_scout_payouts(datetime.now(timezone.utc).date().replace(day=1))
+        return _admin_back(f"{len(r['paid'])} payout(s) made, {len(r['failed'])} failed"
+                           + (f": {r['failed'][0]['error']}" if r["failed"] else "."))
+    abort(404)
+
+
+# --- Stripe webhook -----------------------------------------------------------
+
+_COMMISSION_REVERSALS = {"charge.refunded": "commission charge refunded",
+                         "charge.dispute.created": "commission charge disputed"}
+
+
+@app.route("/webhooks/stripe", methods=["POST"])
+def stripe_webhook():
+    """Signature-verified (billing.webhook_event), never session-authenticated.
+
+      account.updated          a scout's connected account: mirror whether it
+                               can be paid (scouts.payouts_enabled)
+      charge.refunded,         the commission charge on a rebooking was
+      charge.dispute.created   refunded or disputed: reverse the scout's share
+                               (db.scout_earning_reverse). Matched on the
+                               commission's own PaymentIntent, so a fare
+                               refunded to the card never matches.
+
+    An event from the other Stripe mode than the key in use is ignored.
+    """
+    try:
+        event = billing.webhook_event(request.get_data(), request.headers.get("Stripe-Signature"))
+    except billing.WebhookRefused as exc:
+        return {"error": str(exc)}, 400
+    if bool(event.get("livemode")) != config.STRIPE_LIVEMODE:
+        return {"ignored": "other Stripe mode"}
+    kind, obj = event.get("type"), (event.get("data") or {}).get("object") or {}
+    if kind == "account.updated":
+        touched = db.scout_sync_payouts_enabled(obj.get("id"), billing.connect_can_receive(obj))
+        return {"scouts": touched}
+    if kind in _COMMISSION_REVERSALS:
+        intent = obj.get("payment_intent")
+        outcome = db.scout_earning_reverse(intent, _COMMISSION_REVERSALS[kind],
+                                           config.SCOUT_HOLD_DAYS) if intent else None
+        return {"scout_earning": outcome}
+    return {"ignored": kind}
 
 
 if __name__ == "__main__":

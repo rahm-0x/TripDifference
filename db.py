@@ -146,25 +146,35 @@ def audit_append(payload):
     `payload` is the same dict the JSONL carried. It is stored verbatim in
     `payload`; the promoted columns exist only so ops views can sort and filter.
     """
-    ts = payload.get("ts")
-    q("""INSERT INTO audit_events
-           (ts, kind, order_id, source, outcome, reason, execution,
-            market_best, market_delta, change_total, currency, detail, payload)
-         VALUES (COALESCE(%s::timestamptz, now()), %s, %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s, %s, %s)""",
-      (ts,
-       payload.get("kind", "decision"),
-       payload.get("order_id", ""),
-       payload.get("source", "") or "",
-       payload.get("outcome"),
-       payload.get("reason") or payload.get("state"),
-       payload.get("execution"),
-       _num(payload.get("market_best")),
-       _num(payload.get("market_delta")),
-       _num(payload.get("change_total")),
-       payload.get("currency", "") or "",
-       payload.get("detail", "") or "",
-       Jsonb(payload)))
+    with pool().connection() as conn, conn.cursor() as cur:
+        _audit_insert(cur, payload)
+
+
+def _audit_insert(cur, payload):
+    """audit_append on a caller's cursor, so a row can land in the same
+    transaction as the change it records (create_account,
+    account_attribution_override). A referral or scout row describes an
+    account rather than an order: order_id '' and account_id set (migration 038)."""
+    cur.execute(
+        """INSERT INTO audit_events
+             (ts, kind, order_id, account_id, source, outcome, reason, execution,
+              market_best, market_delta, change_total, currency, detail, payload)
+           VALUES (COALESCE(%s::timestamptz, now()), %s, %s, %s, %s, %s, %s, %s,
+                   %s, %s, %s, %s, %s, %s)""",
+        (payload.get("ts"),
+         payload.get("kind", "decision"),
+         payload.get("order_id", ""),
+         payload.get("account_id"),
+         payload.get("source", "") or "",
+         payload.get("outcome"),
+         payload.get("reason") or payload.get("state"),
+         payload.get("execution"),
+         _num(payload.get("market_best")),
+         _num(payload.get("market_delta")),
+         _num(payload.get("change_total")),
+         payload.get("currency", "") or "",
+         payload.get("detail", "") or "",
+         Jsonb(payload)))
 
 
 _AUDIT_COLS = """id, ts, kind, order_id, source, outcome, reason, execution,
@@ -531,26 +541,61 @@ def _hash_token(token):
     return hashlib.sha256(token.encode()).digest()
 
 
-def create_account(email, password_hash=None, supabase_user_id=None):
-    """Open signup: one new account plus its first user. Just email/password
+def create_account(email, password_hash=None, supabase_user_id=None, *, referral,
+                   referral_flag=None):
+    """Signup: one new account plus its first user. Just email/password
     (or a linked Google identity) — name, DOB and the rest of the profile
     are collected in the onboarding profile step (complete_profile), not
     here. `accounts.name` gets a placeholder from the email's local part
     until complete_profile fills in the real name.
 
-    Both rows or neither — a user without an account has nothing to own.
+    `referral` is the code the account signed up with — a referral_code_lookup()
+    row, already checked by referrals.py for signup, or an internal code
+    (internal_referral_code) for a scout applicant or a test. Required: every
+    account carries one (migration 038). The scout's rate is snapshotted onto
+    the account here and never read from the scout again.
+
+    The account, its user and the audit row of the referral: all or nothing.
     """
     placeholder = email.split("@")[0]
     if placeholder == TEST_ACCOUNT_NAME:
         placeholder = "account"  # reserved for test accounts; see TEST_ACCOUNT_NAME
     with pool().connection() as conn, conn.cursor() as cur:
-        cur.execute("INSERT INTO accounts (name) VALUES (%s) RETURNING id", (placeholder,))
+        cur.execute(
+            """INSERT INTO accounts (name, referral_code_id, scout_id, scout_rate, referred_at,
+                                     referral_flag)
+               VALUES (%s, %s, %s, %s, now(), %s) RETURNING id""",
+            (placeholder, referral["code_id"], referral["scout_id"], referral["default_rate"],
+             referral_flag))
         account_id = cur.fetchone()["id"]
         cur.execute(
             """INSERT INTO users (account_id, email, password_hash, supabase_user_id)
                VALUES (%s, %s, %s, %s) RETURNING *""",
             (account_id, email, password_hash, supabase_user_id))
-        return cur.fetchone()
+        user = cur.fetchone()
+        _audit_insert(cur, {
+            "kind": "referral", "account_id": str(account_id), "outcome": "referred",
+            "detail": f"Referred by scout {referral['scout_id']} via {referral['code']}",
+            "scout_id": referral["scout_id"], "code": referral["code"],
+            "rate": str(referral["default_rate"]), "flag": referral_flag})
+        return user
+
+
+def user_set_name(user_id, *, given_name, family_name):
+    """A scout applicant's name, collected on the application rather than the
+    customer onboarding step."""
+    q("UPDATE users SET given_name = %s, family_name = %s WHERE id = %s",
+      (given_name, family_name, user_id))
+
+
+def is_scout_only(user_id):
+    """Whether the user's account exists only because they applied to be a
+    scout — where they land after signing in."""
+    row = q("""SELECT rc.code = 'SCOUT-APPLICANT' AS scout_only
+                 FROM users u JOIN accounts a ON a.id = u.account_id
+                 JOIN referral_codes rc ON rc.id = a.referral_code_id
+                WHERE u.id = %s""", (user_id,), fetch="one")
+    return bool(row and row["scout_only"])
 
 
 def complete_profile(user_id, account_id, *, given_name, family_name, middle_name,
@@ -665,12 +710,18 @@ def start_session(user_id):
 
 
 def session_user(token):
+    """The signed-in user, plus what the sidebar and the scout gate need: the
+    status of their scout record (None when they have none), and whether their
+    account exists only because they applied to be a scout (SCOUT-APPLICANT)."""
     if not token:
         return None
-    return q("""SELECT u.*, a.name AS company
+    return q("""SELECT u.*, a.name AS company, sc.status AS scout_status,
+                       (rc.code = 'SCOUT-APPLICANT') AS scout_only
                   FROM sessions s
                   JOIN users u ON u.id = s.user_id
                   JOIN accounts a ON a.id = u.account_id
+                  JOIN referral_codes rc ON rc.id = a.referral_code_id
+                  LEFT JOIN scouts sc ON sc.user_id = u.id
                  WHERE s.token_hash = %s
                    AND s.revoked_at IS NULL
                    AND s.expires_at > now()""",
@@ -1537,3 +1588,537 @@ def live_search_record(log_id, **fields):
     sets = ", ".join(f"{k} = %s" for k in updates)
     q(f"UPDATE live_search_log SET {sets} WHERE id = %s", (*updates.values(), log_id))
 
+
+
+# ---------------------------------------------------------------------------
+# referral codes (migration 038; the signup rules live in referrals.py)
+# ---------------------------------------------------------------------------
+
+_REFERRAL_COLS = """rc.id AS code_id, rc.code::text AS code, rc.internal, rc.active,
+                    s.id AS scout_id, s.status AS scout_status, s.default_rate, s.is_system,
+                    u.email AS scout_email, u.given_name AS scout_given_name"""
+
+
+def referral_code_lookup(code):
+    """The code and the scout behind it, or None. Case-insensitive (citext).
+    Whether signup may use it is referrals.check's to say, not this."""
+    code = (code or "").strip()
+    if not code:
+        return None
+    return q(f"""SELECT {_REFERRAL_COLS}
+                   FROM referral_codes rc
+                   JOIN scouts s ON s.id = rc.scout_id
+                   LEFT JOIN users u ON u.id = s.user_id
+                  WHERE rc.code = %s""", (code,), fetch="one")
+
+
+def internal_referral_code(code):
+    """LEGACY or SCOUT-APPLICANT, for an account no scout referred: a scout
+    applicant's own account, or a test's. Raises for any other code — this is
+    never a way to attribute a signup."""
+    row = referral_code_lookup(code)
+    if not row or not row["internal"]:
+        raise ValueError(f"{code!r} is not an internal referral code")
+    return row
+
+
+def referral_failure_record(ip, code):
+    q("INSERT INTO referral_code_failures (ip, code) VALUES (%s::inet, %s)",
+      (ip or None, (code or "")[:64]))
+
+
+def referral_recent_failures(ip, window_minutes):
+    """Wrong codes from this address inside the window. By IP only: a code
+    guesser has no email worth counting by."""
+    if not ip:
+        return 0
+    row = q("""SELECT count(*) AS n FROM referral_code_failures
+                WHERE ip = %s::inet AND ts > now() - make_interval(mins => %s)""",
+            (ip, window_minutes), fetch="one")
+    return row["n"]
+
+
+# ---------------------------------------------------------------------------
+# scouts
+# ---------------------------------------------------------------------------
+
+# Unambiguous characters only (no 0/O, 1/I/L): a code is read aloud and typed.
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_SCOUT_PAYOUT_LOCK = 7_302_038
+
+
+def _new_code():
+    return "SCOUT-" + "".join(secrets.choice(_CODE_ALPHABET) for _ in range(5))
+
+
+def scout_for_user(user_id):
+    return q("SELECT * FROM scouts WHERE user_id = %s", (user_id,), fetch="one")
+
+
+def scout(scout_id):
+    return q("""SELECT s.*, u.email, u.given_name, u.family_name, u.account_id AS own_account_id
+                  FROM scouts s LEFT JOIN users u ON u.id = s.user_id
+                 WHERE s.id = %s""", (scout_id,), fetch="one")
+
+
+def scout_apply(user_id, *, company, sourcing_plan):
+    """A scout record for this user, status 'applied', the agreement accepted
+    now. One per user: applying again changes nothing unless the last
+    application was rejected, which this reopens."""
+    row = q("""INSERT INTO scouts (user_id, company, sourcing_plan, agreement_accepted_at)
+               VALUES (%s, %s, %s, now())
+               ON CONFLICT (user_id) DO UPDATE
+                  SET status = 'applied', company = EXCLUDED.company,
+                      sourcing_plan = EXCLUDED.sourcing_plan, applied_at = now(),
+                      agreement_accepted_at = now(), status_changed_at = now()
+                WHERE scouts.status = 'rejected'
+               RETURNING *""", (user_id, company, sourcing_plan), fetch="one")
+    return row or scout_for_user(user_id)
+
+
+def scout_update_profile(scout_id, *, company, sourcing_plan):
+    q("UPDATE scouts SET company = %s, sourcing_plan = %s WHERE id = %s AND NOT is_system",
+      (company, sourcing_plan, scout_id))
+
+
+def _scout_audit(cur, scout_row, outcome, detail, **extra):
+    _audit_insert(cur, {"kind": "scout", "account_id": str(scout_row["own_account_id"])
+                        if scout_row.get("own_account_id") else None,
+                        "outcome": outcome, "detail": detail,
+                        "scout_id": scout_row["id"], **extra})
+
+
+def _scout_for_update(cur, scout_id):
+    cur.execute("""SELECT s.*, u.account_id AS own_account_id
+                     FROM scouts s LEFT JOIN users u ON u.id = s.user_id
+                    WHERE s.id = %s AND NOT s.is_system FOR UPDATE OF s""", (scout_id,))
+    return cur.fetchone()
+
+
+def scout_approve(scout_id, staff_user_id):
+    """applied → approved, with the scout's first code issued, in one
+    transaction. Returns the code, or None when the scout was not awaiting
+    approval."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        row = _scout_for_update(cur, scout_id)
+        if not row or row["status"] != "applied":
+            return None
+        cur.execute("""UPDATE scouts SET status = 'approved', approved_at = now(), approved_by = %s,
+                                         status_changed_at = now()
+                        WHERE id = %s""", (staff_user_id, scout_id))
+        for _ in range(10):
+            cur.execute("""INSERT INTO referral_codes (scout_id, code) VALUES (%s, %s)
+                           ON CONFLICT (code) DO NOTHING RETURNING code::text AS code""",
+                        (scout_id, _new_code()))
+            issued = cur.fetchone()
+            if issued:
+                break
+        else:
+            raise RuntimeError("could not issue a unique referral code")
+        _scout_audit(cur, row, "approved", f"Scout {scout_id} approved; code {issued['code']} issued",
+                     by=str(staff_user_id), code=issued["code"])
+        return issued["code"]
+
+
+# action -> (statuses it applies to, the status it sets)
+SCOUT_TRANSITIONS = {
+    "reject":    ({"applied"}, "rejected"),
+    "suspend":   ({"approved"}, "suspended"),
+    "reinstate": ({"suspended"}, "approved"),
+    "terminate": ({"approved", "suspended"}, "terminated"),
+}
+
+
+def scout_transition(scout_id, action, staff_user_id, reason=""):
+    """Reject an application, or suspend, reinstate or terminate a scout —
+    audited. A suspended scout's codes stop working at signup and their
+    earnings keep accruing; a terminated scout's accrual stops too. Returns
+    the new status, or None when the action does not apply to the scout's
+    current status."""
+    allowed, new_status = SCOUT_TRANSITIONS[action]
+    with pool().connection() as conn, conn.cursor() as cur:
+        row = _scout_for_update(cur, scout_id)
+        if not row or row["status"] not in allowed:
+            return None
+        cur.execute("UPDATE scouts SET status = %s, status_changed_at = now() WHERE id = %s",
+                    (new_status, scout_id))
+        _scout_audit(cur, row, new_status, f"Scout {scout_id} {row['status']} → {new_status}"
+                     + (f": {reason}" if reason else ""), by=str(staff_user_id), reason=reason)
+        return new_status
+
+
+def scout_set_rate(scout_id, rate, staff_user_id):
+    """The rate future signups through this scout are snapshotted at. Accounts
+    already referred keep the rate they signed up with."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        row = _scout_for_update(cur, scout_id)
+        if not row:
+            return False
+        cur.execute("UPDATE scouts SET default_rate = %s WHERE id = %s", (_num(rate), scout_id))
+        _scout_audit(cur, row, "rate_changed",
+                     f"Scout {scout_id} rate {row['default_rate']} → {rate} (future signups only)",
+                     by=str(staff_user_id), old=str(row["default_rate"]), new=str(rate))
+        return True
+
+
+def referral_code_deactivate(code_id, staff_user_id):
+    """Stops a code working at signup. Accounts already referred through it are
+    unaffected. Internal codes are not deactivated this way."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE referral_codes SET active = false, deactivated_at = now()
+                        WHERE id = %s AND active AND NOT internal
+                        RETURNING scout_id, code::text AS code""", (code_id,))
+        done = cur.fetchone()
+        if not done:
+            return None
+        row = _scout_for_update(cur, done["scout_id"])
+        if row:
+            _scout_audit(cur, row, "code_deactivated", f"Code {done['code']} deactivated",
+                         by=str(staff_user_id), code=done["code"])
+        return done["code"]
+
+
+def _amounts_by_currency(column_sql):
+    """A ' · '-joined "5.00 USD" list for one scout's earnings — never a sum
+    across currencies."""
+    return f"""(SELECT string_agg(t.total::text || ' ' || t.currency, ' · ' ORDER BY t.currency)
+                  FROM (SELECT e.currency, sum(e.amount) AS total FROM scout_earnings e
+                         WHERE {column_sql} AND e.status <> 'reversed'
+                         GROUP BY e.currency) t)"""
+
+
+def scouts_admin_list():
+    """Every scout but the system one, applications first."""
+    return q(f"""SELECT s.id, s.status, s.default_rate, s.company, s.sourcing_plan, s.applied_at,
+                        s.approved_at, s.payouts_enabled, s.stripe_connect_account_id,
+                        u.email, u.given_name, u.family_name,
+                        COALESCE((SELECT json_agg(json_build_object('id', rc.id, 'code', rc.code,
+                                                                    'active', rc.active)
+                                                  ORDER BY rc.created_at)
+                                    FROM referral_codes rc WHERE rc.scout_id = s.id), '[]') AS codes,
+                        (SELECT count(*) FROM accounts a WHERE a.scout_id = s.id) AS referred,
+                        {_amounts_by_currency("e.scout_id = s.id")} AS lifetime
+                   FROM scouts s JOIN users u ON u.id = s.user_id
+                  WHERE NOT s.is_system
+                  ORDER BY (s.status = 'applied') DESC, s.applied_at DESC""", fetch="all")
+
+
+def scout_codes(scout_id):
+    return q("""SELECT id, code::text AS code, active, created_at FROM referral_codes
+                 WHERE scout_id = %s ORDER BY active DESC, created_at""", (scout_id,), fetch="all")
+
+
+def scout_balances(scout_id):
+    """{'pending'|'available'|'paid'|'lifetime': {currency: Decimal}} — a
+    reversal row (negative) nets inside whichever status it holds; a reversed
+    earning counts nowhere."""
+    rows = q("""SELECT currency, status, sum(amount) AS total FROM scout_earnings
+                 WHERE scout_id = %s AND status <> 'reversed'
+                 GROUP BY currency, status""", (scout_id,), fetch="all")
+    out = {k: {} for k in ("pending", "available", "paid", "lifetime")}
+    for r in rows:
+        out[r["status"]][r["currency"]] = out[r["status"]].get(r["currency"], Decimal("0")) + r["total"]
+        out["lifetime"][r["currency"]] = out["lifetime"].get(r["currency"], Decimal("0")) + r["total"]
+    return out
+
+
+def scout_referrals(scout_id):
+    """One row per business the scout referred: name, signup date, whether it
+    has booked, how many rebookings it has had, and the scout's earnings from
+    it. Nothing about trips, routes, travelers or fares — a scout sees their
+    earnings, never the client's travel."""
+    return q(f"""SELECT a.id, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business, a.referred_at,
+                        EXISTS (SELECT 1 FROM orders o WHERE o.account_id = a.id) AS has_orders,
+                        (SELECT count(*) FROM savings_events se JOIN orders o ON o.order_id = se.order_id
+                          WHERE o.account_id = a.id AND se.action = 'exchange') AS savings_events,
+                        {_amounts_by_currency("e.account_id = a.id AND e.scout_id = a.scout_id")} AS earned
+                   FROM accounts a
+                  WHERE a.scout_id = %s
+                  ORDER BY a.referred_at DESC""", (scout_id,), fetch="all")
+
+
+def scout_earnings_ledger(scout_id, limit=500):
+    return q("""SELECT e.*, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business
+                  FROM scout_earnings e JOIN accounts a ON a.id = e.account_id
+                 WHERE e.scout_id = %s
+                 ORDER BY e.created_at DESC, e.id DESC LIMIT %s""", (scout_id, limit), fetch="all")
+
+
+def scout_payouts_for(scout_id):
+    return q("SELECT * FROM scout_payouts WHERE scout_id = %s ORDER BY created_at DESC",
+             (scout_id,), fetch="all")
+
+
+# ---------------------------------------------------------------------------
+# scouts' Stripe connected accounts
+# ---------------------------------------------------------------------------
+
+def scout_connect_account(scout_row):
+    """The scout's connected account under the Stripe mode in use, else None —
+    an id saved under the other mode does not exist under this key."""
+    if scout_row and scout_row.get("stripe_connect_account_id") \
+            and scout_row["stripe_connect_livemode"] == config.STRIPE_LIVEMODE:
+        return scout_row["stripe_connect_account_id"]
+    return None
+
+
+def scout_set_connect_account(scout_id, connect_account_id):
+    q("""UPDATE scouts SET stripe_connect_account_id = %s, stripe_connect_livemode = %s,
+                           payouts_enabled = false
+          WHERE id = %s AND NOT is_system""", (connect_account_id, config.STRIPE_LIVEMODE, scout_id))
+
+
+def scout_sync_payouts_enabled(connect_account_id, enabled):
+    """Mirrors Stripe's view of a connected account (account.updated, or the
+    return from onboarding). Returns how many scouts it touched."""
+    rows = q("""UPDATE scouts SET payouts_enabled = %s
+                 WHERE stripe_connect_account_id = %s RETURNING id""",
+             (bool(enabled), connect_account_id), fetch="all")
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# attribution — fixed at signup, changed only by an audited override
+# ---------------------------------------------------------------------------
+
+def account_for_override(email):
+    """The account a user email belongs to, with its current attribution."""
+    return q("""SELECT a.id, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business, a.scout_rate,
+                       a.referred_at, rc.code::text AS code, a.scout_id
+                  FROM users u JOIN accounts a ON a.id = u.account_id
+                  JOIN referral_codes rc ON rc.id = a.referral_code_id
+                 WHERE u.email = %s""", ((email or "").strip(),), fetch="one")
+
+
+def account_attribution_override(account_id, referral, *, reason, staff_user_id):
+    """Re-attribute an account to another code (and so another scout), at that
+    scout's current rate. The one way past the attribution trigger (migration
+    038): it opens the override for this transaction only, and the audit row is
+    written in the same transaction, so an override never happens unrecorded.
+    Earnings already written stay with the scout who earned them; the next
+    commission goes to the new one. Returns the previous code, or None when
+    there is no such account."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT a.scout_id, a.scout_rate, rc.code::text AS code
+                         FROM accounts a JOIN referral_codes rc ON rc.id = a.referral_code_id
+                        WHERE a.id = %s FOR UPDATE OF a""", (account_id,))
+        before = cur.fetchone()
+        if not before:
+            return None
+        cur.execute("SELECT set_config('td.attribution_override', 'on', true)")
+        cur.execute("""UPDATE accounts SET referral_code_id = %s, scout_id = %s, scout_rate = %s
+                        WHERE id = %s""",
+                    (referral["code_id"], referral["scout_id"], referral["default_rate"], account_id))
+        _audit_insert(cur, {
+            "kind": "referral", "account_id": str(account_id), "outcome": "override",
+            "detail": (f"Attribution changed from {before['code']} (scout {before['scout_id']}) to "
+                       f"{referral['code']} (scout {referral['scout_id']}): {reason}"),
+            "by": str(staff_user_id), "reason": reason,
+            "from_code": before["code"], "from_scout_id": before["scout_id"],
+            "from_rate": str(before["scout_rate"]),
+            "to_code": referral["code"], "to_scout_id": referral["scout_id"],
+            "to_rate": str(referral["default_rate"])})
+        return before["code"]
+
+
+def referrals_flagged():
+    """Signups that looked like a scout referring themselves but were let
+    through (a shared free-mail domain), not yet reviewed."""
+    return q("""SELECT a.id, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business, a.referral_flag,
+                       a.referred_at, rc.code::text AS code,
+                       (SELECT u.email FROM users u WHERE u.account_id = a.id
+                         ORDER BY u.created_at LIMIT 1) AS email
+                  FROM accounts a JOIN referral_codes rc ON rc.id = a.referral_code_id
+                 WHERE a.referral_flag IS NOT NULL AND a.referral_flag_reviewed_at IS NULL
+                 ORDER BY a.referred_at DESC""", fetch="all")
+
+
+def referral_flag_reviewed(account_id):
+    q("UPDATE accounts SET referral_flag_reviewed_at = now() WHERE id = %s", (account_id,))
+
+
+# ---------------------------------------------------------------------------
+# scout earnings — a share of commission TD has actually collected
+# ---------------------------------------------------------------------------
+
+# The billing rule, mirrored exactly: a rebooking (never a cancellation) whose
+# commission was charged to the card and succeeded — commission_charged_at is
+# stamped only on a succeeded charge (app._charge_commission). Never a rate of
+# zero (LEGACY, SCOUT-APPLICANT), never the system scout, never a terminated
+# scout.
+_EARNING_INSERT = """
+INSERT INTO scout_earnings (scout_id, account_id, savings_event_id, entry, commission_amount, rate,
+                            amount, currency, status, available_at, reversed_at, reversal_reason)
+SELECT a.scout_id, a.id, se.id, 'earning', se.commission_amount, a.scout_rate,
+       round(se.commission_amount * a.scout_rate, 2), se.currency, %(status)s,
+       se.commission_charged_at + make_interval(days => %(hold_days)s),
+       CASE WHEN %(status)s = 'reversed' THEN now() END, %(reason)s
+  FROM savings_events se
+  JOIN orders o   ON o.order_id = se.order_id
+  JOIN accounts a ON a.id = o.account_id
+  JOIN scouts s   ON s.id = a.scout_id
+ WHERE se.status = 'completed' AND se.action = 'exchange'
+   AND se.commission_charged_at IS NOT NULL
+   AND se.commission_payment_intent_id IS NOT NULL
+   AND round(se.commission_amount * a.scout_rate, 2) > 0
+   AND NOT s.is_system AND s.status <> 'terminated'
+   AND {where}
+ON CONFLICT (savings_event_id, entry) DO NOTHING
+RETURNING *"""
+
+
+def scout_earning_accrue(savings_event_id, hold_days):
+    """The scout's share of one collected commission, as a pending earning
+    available `hold_days` after the charge. None when nothing is owed (see
+    _EARNING_INSERT) or the earning already exists."""
+    return q(_EARNING_INSERT.format(where="se.id = %(event)s"),
+             {"status": "pending", "hold_days": hold_days, "reason": None,
+              "event": savings_event_id}, fetch="one")
+
+
+def scout_earnings_accrue_missing(hold_days):
+    """The daily catch-up: every collected commission that should have an
+    earning and does not, should the hook in app._charge_commission have
+    failed. Idempotent by the (savings_event_id, entry) key."""
+    return q(_EARNING_INSERT.format(where="true"),
+             {"status": "pending", "hold_days": hold_days, "reason": None}, fetch="all")
+
+
+def scout_earnings_release():
+    """pending → available once the hold has passed."""
+    return q("""UPDATE scout_earnings SET status = 'available'
+                 WHERE status = 'pending' AND available_at <= now()
+                RETURNING id, scout_id, amount, currency""", fetch="all")
+
+
+def scout_earning_reverse(payment_intent_id, reason, hold_days):
+    """The commission charge behind an earning was refunded or disputed.
+    Matched on savings_events.commission_payment_intent_id, so a refund of a
+    fare (refund_to_card) never matches. Returns what happened:
+
+      None             not a commission charge, or no scout is owed anything on it
+      'reversed'       an unpaid earning, now reversed
+      'clawback'       the earning was paid (or is in a payout being made): a
+                       negative row now nets against the scout's next payout
+      'already'        reversed before
+      'never_accrued'  recorded as reversed, so the catch-up never pays it
+    """
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM savings_events WHERE commission_payment_intent_id = %s",
+                    (payment_intent_id,))
+        event = cur.fetchone()
+        if not event:
+            return None
+        cur.execute("""SELECT * FROM scout_earnings WHERE savings_event_id = %s AND entry = 'earning'
+                       FOR UPDATE""", (event["id"],))
+        earning = cur.fetchone()
+        if earning is None:
+            cur.execute(_EARNING_INSERT.format(where="se.id = %(event)s"),
+                        {"status": "reversed", "hold_days": hold_days, "reason": reason,
+                         "event": event["id"]})
+            return "never_accrued" if cur.fetchone() else None
+        if earning["status"] == "reversed":
+            return "already"
+        if earning["status"] in ("pending", "available") and earning["payout_id"] is None:
+            cur.execute("""UPDATE scout_earnings SET status = 'reversed', reversed_at = now(),
+                                                     reversal_reason = %s
+                            WHERE id = %s""", (reason, earning["id"]))
+            outcome = "reversed"
+        else:
+            cur.execute("""INSERT INTO scout_earnings
+                               (scout_id, account_id, savings_event_id, entry, commission_amount, rate,
+                                amount, currency, status, available_at, reversal_reason)
+                           VALUES (%s, %s, %s, 'reversal', %s, %s, %s, %s, 'available', now(), %s)
+                           ON CONFLICT (savings_event_id, entry) DO NOTHING RETURNING id""",
+                        (earning["scout_id"], earning["account_id"], earning["savings_event_id"],
+                         earning["commission_amount"], earning["rate"], -earning["amount"],
+                         earning["currency"], reason))
+            outcome = "clawback" if cur.fetchone() else "already"
+        if outcome != "already":
+            cur.execute("SELECT s.*, u.account_id AS own_account_id FROM scouts s "
+                        "LEFT JOIN users u ON u.id = s.user_id WHERE s.id = %s", (earning["scout_id"],))
+            _scout_audit(cur, cur.fetchone(), f"earning_{outcome}",
+                         f"Earning on savings event {event['id']} {outcome}: {reason}",
+                         savings_event_id=event["id"], amount=str(earning["amount"]))
+        return outcome
+
+
+# ---------------------------------------------------------------------------
+# scout payouts — monthly, one Stripe transfer per scout per currency
+# ---------------------------------------------------------------------------
+
+def scout_payout_candidates(currency, minimum):
+    """Scouts who can be paid now: payouts enabled on a connected account in
+    the Stripe mode in use, and an available, unpaid balance in `currency` of
+    at least `minimum`. Reversal rows net inside that balance."""
+    return q("""SELECT s.id AS scout_id, s.stripe_connect_account_id, sum(e.amount) AS total
+                  FROM scouts s JOIN scout_earnings e ON e.scout_id = s.id
+                 WHERE NOT s.is_system AND s.payouts_enabled
+                   AND s.stripe_connect_account_id IS NOT NULL AND s.stripe_connect_livemode = %s
+                   AND e.status = 'available' AND e.payout_id IS NULL AND e.currency = %s
+                 GROUP BY s.id
+                HAVING sum(e.amount) >= %s""",
+             (config.STRIPE_LIVEMODE, currency, _num(minimum)), fetch="all")
+
+
+def scout_payout_open(scout_id, period, currency, minimum):
+    """This month's payout for the scout, with every available unpaid earning
+    in `currency` attached to it, in one transaction — or None when there is
+    nothing to open: a payout for the period is already paid or under way, or
+    the balance is under `minimum` now. A payout that failed earlier in the
+    period is reopened (attempts + 1) rather than duplicated; the unique key
+    (scout_id, period, currency) is what stops a second run paying twice."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s, %s::int)", (_SCOUT_PAYOUT_LOCK, scout_id))
+        cur.execute("""SELECT * FROM scout_payouts WHERE scout_id = %s AND period = %s AND currency = %s""",
+                    (scout_id, period, currency))
+        existing = cur.fetchone()
+        if existing and existing["status"] != "failed":
+            return None
+        cur.execute("""SELECT COALESCE(sum(amount), 0) AS total FROM scout_earnings
+                        WHERE scout_id = %s AND currency = %s AND status = 'available'
+                          AND payout_id IS NULL""", (scout_id, currency))
+        total = cur.fetchone()["total"]
+        if total < _num(minimum) or total <= 0:
+            return None
+        if existing:
+            cur.execute("""UPDATE scout_payouts SET status = 'pending', amount = %s, opened_at = now(),
+                                                    attempts = attempts + 1, error = NULL
+                            WHERE id = %s RETURNING *""", (total, existing["id"]))
+        else:
+            cur.execute("""INSERT INTO scout_payouts (scout_id, period, currency, amount, attempts)
+                           VALUES (%s, %s, %s, %s, 1) RETURNING *""", (scout_id, period, currency, total))
+        payout = cur.fetchone()
+        cur.execute("""UPDATE scout_earnings SET payout_id = %s
+                        WHERE scout_id = %s AND currency = %s AND status = 'available'
+                          AND payout_id IS NULL""", (payout["id"], scout_id, currency))
+        return payout
+
+
+def scout_payout_paid(payout_id, transfer_id):
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE scout_payouts SET status = 'paid', paid_at = now(), stripe_transfer_id = %s,
+                                                error = NULL
+                        WHERE id = %s""", (transfer_id, payout_id))
+        cur.execute("""UPDATE scout_earnings SET status = 'paid', stripe_transfer_id = %s
+                        WHERE payout_id = %s AND status = 'available'""", (transfer_id, payout_id))
+
+
+def scout_payout_failed(payout_id, error):
+    """The transfer was not made. Its earnings go back to the available pool,
+    so the next run (or a retry this month) can pay them."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE scout_payouts SET status = 'failed', error = %s WHERE id = %s",
+                    (str(error)[:500], payout_id))
+        cur.execute("""UPDATE scout_earnings SET payout_id = NULL
+                        WHERE payout_id = %s AND status = 'available'""", (payout_id,))
+
+
+def scout_payouts_stuck(older_than_minutes=10):
+    """Payouts left 'pending' by a run that stopped between opening the payout
+    and recording the transfer. Whether the transfer happened is Stripe's to
+    say (billing.scout_transfer_for)."""
+    return q("""SELECT p.*, s.stripe_connect_account_id FROM scout_payouts p
+                  JOIN scouts s ON s.id = p.scout_id
+                 WHERE p.status = 'pending' AND p.opened_at < now() - make_interval(mins => %s)""",
+             (older_than_minutes,), fetch="all")
