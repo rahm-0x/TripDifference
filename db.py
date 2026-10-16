@@ -1804,8 +1804,45 @@ def scouts_admin_list():
 
 
 def scout_codes(scout_id):
-    return q("""SELECT id, code::text AS code, active, created_at FROM referral_codes
-                 WHERE scout_id = %s ORDER BY active DESC, created_at""", (scout_id,), fetch="all")
+    """Active codes first; within each, in the order they were chosen — so the
+    last active one is the link to share (migration 039)."""
+    return q("""SELECT id, code::text AS code, active, custom, created_at, chosen_at FROM referral_codes
+                 WHERE scout_id = %s ORDER BY active DESC, chosen_at""", (scout_id,), fetch="all")
+
+
+def scout_choose_code(scout_id, code, limit):
+    """Make `code` the scout's link to share. Returns one of:
+
+      'added'     a new custom code, now the one shown
+      'current'   one of the scout's own active codes, chosen again
+      'taken'     someone else's (or a deactivated one — never reissued)
+      'limit'     the scout already has `limit` active custom codes (staff
+                  turning one off frees its place)
+
+    Their earlier codes stay active either way: links already shared keep
+    crediting them. Audited."""
+    code = code.strip()
+    with pool().connection() as conn, conn.cursor() as cur:
+        row = _scout_for_update(cur, scout_id)
+        if not row:
+            return "taken"
+        cur.execute("SELECT id, scout_id, active FROM referral_codes WHERE code = %s", (code,))
+        existing = cur.fetchone()
+        if existing:
+            if existing["scout_id"] != scout_id or not existing["active"]:
+                return "taken"
+            cur.execute("UPDATE referral_codes SET chosen_at = now() WHERE id = %s", (existing["id"],))
+            return "current"
+        cur.execute("SELECT count(*) AS n FROM referral_codes WHERE scout_id = %s AND custom AND active",
+                    (scout_id,))
+        if cur.fetchone()["n"] >= limit:
+            return "limit"
+        cur.execute("""INSERT INTO referral_codes (scout_id, code, custom) VALUES (%s, %s, true)
+                       ON CONFLICT (code) DO NOTHING RETURNING id""", (scout_id, code))
+        if not cur.fetchone():
+            return "taken"
+        _scout_audit(cur, row, "code_customized", f"Scout {scout_id} chose the code {code}", code=code)
+        return "added"
 
 
 def scout_balances(scout_id):

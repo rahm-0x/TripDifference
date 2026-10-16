@@ -17,6 +17,7 @@ not verify is refused too. The `readonly` field on the form is a courtesy; this
 is the enforcement.
 """
 
+import re
 from datetime import timedelta
 
 from flask import current_app
@@ -49,6 +50,36 @@ FREE_MAIL = frozenset({
     "protonmail.com", "pm.me", "gmx.com", "gmx.net", "mail.com", "zoho.com", "fastmail.com",
     "hey.com", "yandex.com", "tutanota.com",
 })
+
+
+# A scout's own link, chosen in Settings (db.scout_choose_code). Letters,
+# numbers and single hyphens, starting and ending with a letter or number. At
+# least 4 characters: anyone who types a scout's code can sign up as their
+# referral, so a code should not be a guess like "sam".
+CUSTOM_MIN, CUSTOM_MAX = 4, 32
+CUSTOM_LIMIT = 5            # custom codes per scout; every one keeps working
+_CUSTOM_SHAPE = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$")
+_RESERVED = frozenset({
+    "LEGACY", "SCOUT-APPLICANT", "ADMIN", "STAFF", "SCOUT", "SCOUTS", "SIGNUP", "LOGIN", "LOGOUT",
+    "SUPPORT", "HELP", "BILLING", "PAYMENTS", "SECURITY", "OFFICIAL", "TRIPDIFFERENCE",
+    "TRIP-DIFFERENCE", "TEST", "NULL", "NONE", "API", "WWW",
+})
+
+
+def custom_code_problem(code):
+    """None when a scout may choose `code` as their link, else why not.
+    Uniqueness is the database's to answer (referral_codes.code is unique,
+    case-insensitively)."""
+    code = (code or "").strip()
+    if not (CUSTOM_MIN <= len(code) <= CUSTOM_MAX):
+        return f"Use {CUSTOM_MIN} to {CUSTOM_MAX} characters."
+    if not _CUSTOM_SHAPE.match(code):
+        return "Use letters, numbers and single hyphens only, starting and ending with a letter or number."
+    if code.upper() in _RESERVED:
+        return "That name is reserved. Pick another."
+    if code.upper().startswith("SCOUT-"):
+        return "Codes starting with SCOUT- are the ones Trip Difference issues. Pick another."
+    return None
 
 
 def normalize(code):

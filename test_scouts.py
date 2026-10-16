@@ -648,3 +648,76 @@ def test_the_scout_dashboard_leads_with_payout_setup_and_shows_the_link(client, 
     sign_in_as(client, scout.user)
     page = client.get("/scout").get_data(as_text=True)
     assert "Set up payouts to get paid" in page and f"/r/{scout.code}" in page
+
+
+# ---------------------------------------------------------------------------
+# custom links (migration 039)
+# ---------------------------------------------------------------------------
+
+def _choose(client, code):
+    with client.session_transaction() as sess:
+        sess["_csrf"] = CSRF
+    return client.post("/scout/settings/link", data={"_csrf": CSRF, "code": code})
+
+
+def test_a_scout_chooses_a_custom_link_and_it_works_at_signup(client, ledger):
+    scout = make_scout(ledger)
+    sign_in_as(client, scout.user)
+    custom = f"Acme-{uuid.uuid4().hex[:6]}"
+    resp = _choose(client, custom)
+    assert resp.status_code == 302 and "m=" in resp.headers["Location"]
+    assert app_module._scout_code(scout.id) == custom
+    assert f"/r/{custom}" in client.get("/scout").get_data(as_text=True)
+
+    business = app_module.app.test_client()
+    with business.session_transaction() as sess:
+        sess["_csrf"] = CSRF
+    r = business.get(f"/r/{custom.lower()}", headers={"X-Forwarded-For": ledger.ip()})
+    assert r.status_code == 302
+    assert f"value=\"{custom}\"" in business.get(r.headers["Location"]).get_data(as_text=True)
+    resp, _, account = signup(business, ledger, code=custom)
+    assert resp.status_code == 302
+    assert db.q("SELECT scout_id FROM accounts WHERE id = %s", (account,), fetch="one")["scout_id"] == scout.id
+
+
+def test_the_old_link_keeps_working_after_a_change(client, ledger):
+    scout = make_scout(ledger)
+    sign_in_as(client, scout.user)
+    _choose(client, f"first-{uuid.uuid4().hex[:6]}")
+    _choose(client, f"second-{uuid.uuid4().hex[:6]}")
+    for code in [c["code"] for c in db.scout_codes(scout.id)]:   # issued SCOUT- code + both custom ones
+        row, problem = referrals.check(code)
+        assert problem is None and row["scout_id"] == scout.id, code
+
+    # choosing the issued code again puts it back on the dashboard
+    _choose(client, scout.code)
+    assert app_module._scout_code(scout.id) == scout.code
+
+
+def test_custom_links_are_unique_case_insensitively_and_follow_the_rules(client, ledger):
+    first, second = make_scout(ledger), make_scout(ledger)
+    custom = f"Taken-{uuid.uuid4().hex[:6]}"
+    sign_in_as(client, first.user)
+    _choose(client, custom)
+    sign_in_as(client, second.user)
+    resp = _choose(client, custom.upper())
+    assert "e=" in resp.headers["Location"] and app_module._scout_code(second.id) == second.code
+
+    for bad in ("abc", "has space", "-edge", "double--hyphen", "LEGACY", "admin", "SCOUT-ABCDE", "x" * 33):
+        assert referrals.custom_code_problem(bad), bad
+    assert referrals.custom_code_problem("acme-travel-2026") is None
+
+
+def test_a_scout_can_hold_only_so_many_custom_links(client, ledger):
+    scout = make_scout(ledger)
+    for i in range(referrals.CUSTOM_LIMIT):
+        assert db.scout_choose_code(scout.id, f"cap{i}-{uuid.uuid4().hex[:6]}", referrals.CUSTOM_LIMIT) == "added"
+    assert db.scout_choose_code(scout.id, f"over-{uuid.uuid4().hex[:6]}", referrals.CUSTOM_LIMIT) == "limit"
+
+
+def test_a_suspended_scout_cannot_change_their_link(client, ledger):
+    scout = make_scout(ledger, status="suspended")
+    sign_in_as(client, scout.user)
+    resp = _choose(client, f"nope-{uuid.uuid4().hex[:6]}")
+    assert "e=" in resp.headers["Location"]
+    assert [c["code"] for c in db.scout_codes(scout.id)] == [scout.code]

@@ -1022,11 +1022,10 @@ def _signup_page(*, email="", code="", error=None, status=200, clear_cookie=Fals
     editable. A td_ref cookie that does not verify is dropped here, so the
     visitor is not stuck behind it."""
     locked, verified = referrals.locked_code(request.cookies.get(referrals.COOKIE))
-    referral = {"code": referrals.normalize(code or request.args.get("ref", "")),
-                "locked": False, "referrer": None}
+    referral = {"code": (code or request.args.get("ref", "")).strip(), "locked": False, "referrer": None}
     if locked:
         row = db.referral_code_lookup(locked)
-        referral = {"code": referrals.normalize(locked), "locked": True,
+        referral = {"code": row["code"] if row else locked, "locked": True,
                     "referrer": referrals.referrer_name(row) if row else None}
     resp = make_response(render_template("signup.html", hide_nav=True, email=email,
                                          referral=referral, error=error), status)
@@ -3279,7 +3278,8 @@ def scout_apply():
 
 
 def _scout_code(scout_id):
-    """The scout's code to share: the newest active one."""
+    """The scout's code to share: the active one chosen most recently — their
+    custom link once they have one (migration 039)."""
     active = [c for c in db.scout_codes(scout_id) if c["active"]]
     return active[-1]["code"] if active else None
 
@@ -3400,8 +3400,44 @@ def scout_settings():
         db.scout_update_profile(scout["id"], company=request.form.get("company", "").strip(),
                                 sourcing_plan=request.form.get("sourcing_plan", "").strip())
         return redirect(url_for("scout_settings"))
+    code = _scout_code(scout["id"])
     return _scout_page("scout_settings.html", nav="scout_settings",
-                       hold_days=config.SCOUT_HOLD_DAYS, payout_minimum=config.SCOUT_PAYOUT_MINIMUM)
+                       hold_days=config.SCOUT_HOLD_DAYS, payout_minimum=config.SCOUT_PAYOUT_MINIMUM,
+                       code=code, link=url_for("referral_link", code=code, _external=True) if code else None,
+                       link_base=url_for("index", _external=True) + "r/",
+                       codes=[c for c in db.scout_codes(scout["id"]) if c["active"]],
+                       custom_min=referrals.CUSTOM_MIN, custom_max=referrals.CUSTOM_MAX,
+                       custom_limit=referrals.CUSTOM_LIMIT,
+                       link_message=request.args.get("m"), link_error=request.args.get("e"),
+                       tried=request.args.get("tried", ""))
+
+
+@app.route("/scout/settings/link", methods=["POST"])
+@scout_required
+def scout_settings_link():
+    """A scout chooses their own link (/r/<their-code>). It works straight away,
+    and every code they had before keeps working."""
+    scout = g.scout
+    code = request.form.get("code", "").strip()
+
+    def back(**kw):
+        return redirect(url_for("scout_settings", **kw) + "#link")
+
+    if scout["status"] != "approved":
+        return back(e="Only an active scout can change their link.", tried=code)
+    # One of their own codes — the SCOUT-XXXXX one included — is always theirs
+    # to show again; the naming rules are for choosing a new one.
+    own = {c["code"].upper() for c in db.scout_codes(scout["id"]) if c["active"]}
+    problem = None if code.upper() in own else referrals.custom_code_problem(code)
+    if problem:
+        return back(e=problem, tried=code)
+    outcome = db.scout_choose_code(scout["id"], code, referrals.CUSTOM_LIMIT)
+    if outcome == "taken":
+        return back(e="That link is taken. Try another.", tried=code)
+    if outcome == "limit":
+        return back(e=f"You've used all {referrals.CUSTOM_LIMIT} custom links. Contact Trip Difference "
+                      "to free one up, or choose one of your existing links below.", tried=code)
+    return back(m="Your link is updated. Links you shared before still work.")
 
 
 # --- the scout ledger's jobs: /cron/scouts, and the same from /admin/scouts ---

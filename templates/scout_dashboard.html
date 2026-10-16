@@ -35,7 +35,7 @@
     <button type="button" class="btn-sm" id="copy-link" data-copy="{{ link }}">Copy link</button>
   </div>
   <p class="hint">Code <b class="mono">{{ code }}</b> · Every business that signs up through it is yours for
-     the life of its account.</p>
+     the life of its account. <a href="{{ url_for('scout_settings') }}#link">Choose your own link</a></p>
   {% else %}
   <p class="soft" style="margin:8px 0 0">You don't have an active code. Contact Trip Difference to get a new one.</p>
   {% endif %}

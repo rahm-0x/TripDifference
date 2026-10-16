@@ -8,6 +8,55 @@
   <h1>Settings</h1>
 </div>
 
+<div class="card link-card" id="link">
+  <h3 style="margin-bottom:4px">Your link</h3>
+  <p class="hint" style="margin-top:0">Choose a link that's easy to say and remember. Links you've shared before keep
+     working and still credit you.</p>
+  {% if link_message %}<div class="notice" style="margin:10px 0"><span>✓</span><div>{{ link_message }}</div></div>{% endif %}
+  {% if link_error %}<div class="notice notice-err" style="margin:10px 0">{{ link_error }}</div>{% endif %}
+
+  {% if link %}
+  <div class="current-link">
+    <span class="mono">{{ link }}</span>
+    <button type="button" class="btn-sm btn-ghost" id="copy-link" data-copy="{{ link }}">Copy</button>
+  </div>
+  {% endif %}
+
+  {% if scout.status == 'approved' %}
+  <form method="post" action="{{ url_for('scout_settings_link') }}" class="link-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label for="code">New link</label>
+    <div class="link-input">
+      <span class="link-base mono">{{ link_base }}</span>
+      <input id="code" name="code" value="{{ tried }}" placeholder="acme-travel" required
+             minlength="{{ custom_min }}" maxlength="{{ custom_max }}" pattern="[A-Za-z0-9]+(-[A-Za-z0-9]+)*"
+             autocomplete="off" spellcheck="false">
+      <button type="submit" class="btn-sm">Save</button>
+    </div>
+    <p class="hint">{{ custom_min }}–{{ custom_max }} letters, numbers or hyphens. Up to {{ custom_limit }} custom links.</p>
+  </form>
+  {% endif %}
+
+  {% if codes|length > 1 %}
+  <div class="older">
+    <span class="hint">All your links (every one still works):</span>
+    {% for c in codes|reverse %}
+    <div class="older-row">
+      <span class="mono">{{ c.code }}</span>
+      {% if c.code == code %}<span class="tag tag-sage">Shown on your dashboard</span>
+      {% elif scout.status == 'approved' %}
+      <form method="post" action="{{ url_for('scout_settings_link') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="code" value="{{ c.code }}">
+        <button type="submit" class="link-btn">use this one</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
 <div class="cols-2">
   <div class="card">
     <h3 style="margin-bottom:12px">About you</h3>
@@ -45,7 +94,32 @@
   .facts dt { color:var(--muted-2); }
   .facts dd { margin:0; }
   textarea { width:100%; font:inherit; }
+  .link-card { margin-bottom:18px; }
+  .current-link { display:flex; align-items:center; gap:10px; margin:10px 0 14px; padding:10px 12px;
+                  background:var(--surface-2); border:1px solid var(--line-soft); border-radius:var(--r);
+                  overflow-wrap:anywhere; }
+  .current-link .mono { flex:1; font-size:13px; }
+  .link-input { display:flex; align-items:stretch; gap:8px; }
+  .link-base { display:flex; align-items:center; color:var(--muted); font-size:12.5px; white-space:nowrap; }
+  .link-input input { flex:1; min-width:120px; font-family:'IBM Plex Mono', monospace; }
+  .older { margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft); }
+  .older-row { display:flex; align-items:center; gap:10px; padding:4px 0; font-size:13px; }
+  .older-row form { display:inline; }
+  .link-btn { background:none; border:0; padding:0; color:var(--gold); font-size:12.5px; cursor:pointer; }
+  .link-btn:hover { background:none; color:var(--gold-hi); text-decoration:underline; }
   @media (max-width:860px){ .cols-2 { grid-template-columns:1fr; } }
+  @media (max-width:640px){ .link-input { flex-wrap:wrap; } .link-base { width:100%; } }
 </style>
+<script>
+  (function () {
+    var btn = document.getElementById('copy-link');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      if (navigator.clipboard) navigator.clipboard.writeText(btn.dataset.copy).then(function () {
+        btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
+      });
+    });
+  })();
+</script>
 
 {% endblock %}
