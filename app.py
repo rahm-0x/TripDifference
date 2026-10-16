@@ -3556,8 +3556,12 @@ def cron_scouts():
 @app.route("/admin/scouts")
 @auth.staff_required
 def admin_scouts():
+    search_text = request.args.get("q", "").strip()
+    status = request.args.get("status", "")
+    status = status if status in db.SCOUT_STATUSES else ""
     return render_template("admin_scouts.html", nav="admin_scouts",
-                           scouts=db.scouts_admin_list(), flagged=db.referrals_flagged(),
+                           scouts=db.scouts_admin_list(search_text, status), flagged=db.referrals_flagged(),
+                           q=search_text, status=status, statuses=db.SCOUT_STATUSES,
                            message=request.args.get("m"))
 
 

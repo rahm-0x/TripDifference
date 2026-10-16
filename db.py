@@ -1787,8 +1787,13 @@ def _amounts_by_currency(column_sql):
                          GROUP BY e.currency) t)"""
 
 
-def scouts_admin_list():
-    """Every scout but the system one, applications first."""
+SCOUT_STATUSES = ("applied", "approved", "suspended", "terminated", "rejected")
+
+
+def scouts_admin_list(search="", status=""):
+    """Every scout but the system one, applications first — narrowed to those
+    whose name, email, company or any code contains `search`, and to one
+    `status` when given."""
     return q(f"""SELECT s.id, s.status, s.default_rate, s.company, s.sourcing_plan, s.applied_at,
                         s.approved_at, s.payouts_enabled, s.stripe_connect_account_id,
                         u.email, u.given_name, u.family_name,
@@ -1800,7 +1805,13 @@ def scouts_admin_list():
                         {_amounts_by_currency("e.scout_id = s.id")} AS lifetime
                    FROM scouts s JOIN users u ON u.id = s.user_id
                   WHERE NOT s.is_system
-                  ORDER BY (s.status = 'applied') DESC, s.applied_at DESC""", fetch="all")
+                    AND (%(any)s OR u.email ILIKE %(like)s OR u.given_name || ' ' || u.family_name ILIKE %(like)s
+                         OR s.company ILIKE %(like)s
+                         OR EXISTS (SELECT 1 FROM referral_codes rc WHERE rc.scout_id = s.id AND rc.code ILIKE %(like)s))
+                    AND (%(status)s = '' OR s.status = %(status)s)
+                  ORDER BY (s.status = 'applied') DESC, s.applied_at DESC""",
+             {"any": not (search or "").strip(), "like": f"%{(search or '').strip()}%",
+              "status": status if status in SCOUT_STATUSES else ""}, fetch="all")
 
 
 def scout_codes(scout_id):

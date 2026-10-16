@@ -721,3 +721,21 @@ def test_a_suspended_scout_cannot_change_their_link(client, ledger):
     resp = _choose(client, f"nope-{uuid.uuid4().hex[:6]}")
     assert "e=" in resp.headers["Location"]
     assert [c["code"] for c in db.scout_codes(scout.id)] == [scout.code]
+
+
+def test_the_scouts_admin_page_searches_and_filters(client, ledger):
+    staff = new_account("staff")
+    ledger.accounts.append(staff["account_id"])
+    db.q("UPDATE users SET is_staff = true WHERE id = %s", (staff["id"],))
+    found = make_scout(ledger, email=f"findme-{uuid.uuid4().hex[:8]}@example.org")
+    other = make_scout(ledger, status="suspended")
+    sign_in_as(client, staff)
+
+    page = client.get(f"/admin/scouts?q={found.code.lower()}").get_data(as_text=True)
+    assert found.code in page and other.code not in page and "1 match" in page
+
+    page = client.get("/admin/scouts?status=suspended").get_data(as_text=True)
+    assert other.code in page and found.code not in page
+
+    page = client.get("/admin/scouts?q=no-such-scout-anywhere").get_data(as_text=True)
+    assert "No scouts match." in page and "No applications match." in page

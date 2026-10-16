@@ -13,6 +13,19 @@
 <div class="notice" style="margin-bottom:18px"><span>✓</span><div>{{ message }}</div></div>
 {% endif %}
 
+<form method="get" action="{{ url_for('admin_scouts') }}" class="card filter-bar">
+  <input name="q" value="{{ q }}" placeholder="Search name, email, company or code" aria-label="Search scouts">
+  <select name="status" aria-label="Status">
+    <option value="">All statuses</option>
+    {% for st in statuses %}<option value="{{ st }}" {{ 'selected' if st == status }}>{{ st|capitalize }}</option>{% endfor %}
+  </select>
+  <button type="submit" class="btn-sm">Filter</button>
+  {% if q or status %}
+  <a href="{{ url_for('admin_scouts') }}" class="btn btn-sm btn-ghost">Clear</a>
+  <span class="soft filter-count">{{ scouts|length }} match{{ 'es' if scouts|length != 1 }}</span>
+  {% endif %}
+</form>
+
 {% set applications = scouts|selectattr('status', 'equalto', 'applied')|list %}
 {% set others = scouts|rejectattr('status', 'equalto', 'applied')|list %}
 
@@ -40,7 +53,7 @@
   </div>
   {% endfor %}
   {% else %}
-  <p class="muted" style="margin:0">No applications waiting.</p>
+  <p class="muted" style="margin:0">{{ 'No applications match.' if (q or status) else 'No applications waiting.' }}</p>
   {% endif %}
 </div>
 
@@ -96,7 +109,7 @@
     </tbody>
   </table>
   {% else %}
-  <div style="text-align:center; padding:40px 24px"><p class="muted" style="margin:0">No scouts yet.</p></div>
+  <div style="text-align:center; padding:40px 24px"><p class="muted" style="margin:0">{{ 'No scouts match.' if (q or status) else 'No scouts yet.' }}</p></div>
   {% endif %}
 </div>
 
@@ -154,6 +167,10 @@
 </div>
 
 <style>
+  .filter-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:12px 14px; margin-bottom:18px; }
+  .filter-bar input { flex:1; min-width:220px; }
+  .filter-bar select { width:auto; }
+  .filter-count { font-size:12.5px; }
   .app-row { display:flex; justify-content:space-between; gap:16px; padding:12px 0; border-top:1px solid var(--line-soft); }
   .app-row:first-of-type { border-top:0; padding-top:0; }
   .plan { margin:6px 0 4px; font-size:13px; white-space:pre-line; }
