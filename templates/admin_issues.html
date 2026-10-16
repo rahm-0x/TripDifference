@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Issues — Trip Difference{% endblock %}
+{% block crumb %}Admin · Issues{% endblock %}
+{% block body %}
+
+{% macro section(title, why, rows, kind) %}
+<div class="card issue-card">
+  <div class="issue-head">
+    <h3>{{ title }} <span class="count {{ 'zero' if not rows }}">{{ rows|length }}</span></h3>
+  </div>
+  <p class="hint" style="margin-top:2px">{{ why }}</p>
+  {% if rows %}
+  <div style="overflow-x:auto">
+  <table>
+    <thead><tr>
+      <th>When</th>
+      <th>{{ 'Scout' if kind == 'payout' else 'Company' }}</th>
+      <th>{{ 'Month' if kind == 'payout' else 'Booking' }}</th>
+      <th class="num">Amount</th><th>Stripe said</th>
+    </tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="mono">{{ r.at.strftime('%-d %b %Y %H:%M') if r.at else '—' }}</td>
+        {% if kind == 'payout' %}
+        <td>{{ r.given_name }} {{ r.family_name }}<small class="soft">{{ r.email }}</small></td>
+        <td>{{ r.period.strftime('%B %Y') }}</td>
+        {% else %}
+        <td>{{ r.business }}</td>
+        <td class="mono">{{ r.booking_reference or r.order_id }}</td>
+        {% endif %}
+        <td class="num">{{ '{:,.2f}'.format(r.paid if kind == 'capture' else r.amount) }} <span class="cur">{{ r.currency }}</span></td>
+        <td class="err">{{ r.error or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}<p class="muted" style="margin:0">Nothing outstanding.</p>{% endif %}
+</div>
+{% endmacro %}
+
+<div class="page-head">
+  <h1>Issues</h1>
+  <p>Money that needs a person. Each of these was recorded when it happened and stays here until it's resolved.</p>
+</div>
+
+{{ section("Tickets issued, card not charged", "The ticket exists and TD paid the airline from its Duffel balance, but capturing the customer's card failed. The customer owes the fare.", issues.captures, 'capture') }}
+{{ section("Recoveries not yet refunded", "An exchange or cancellation returned cash to TD's Duffel balance, and passing it on to the customer's card failed. TD owes the customer.", issues.refunds, 'refund') }}
+{{ section("Commission not collected", "A rebooking delivered its saving, but charging TD's fee to the card failed. It stays invoiceable.", issues.commissions, 'commission') }}
+{{ section("Scout payouts that failed", "The monthly transfer to a scout didn't go through. Their earnings went back to the pool and are retried with the next run.", issues.payouts, 'payout') }}
+
+<style>
+  .issue-card { margin-bottom:14px; }
+  .issue-head h3 { display:flex; align-items:center; gap:8px; font-size:14px; }
+  .count { font: 600 11px/1 'IBM Plex Mono', monospace; padding:3px 7px; border-radius:999px;
+           background:var(--alert-wash); color:var(--alert); }
+  .count.zero { background:var(--surface-2); color:var(--muted-2); }
+  td small { display:block; font-size:11.5px; }
+  td.err { font-size:12px; color:var(--muted); max-width:340px; }
+</style>
+
+{% endblock %}

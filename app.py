@@ -175,6 +175,34 @@ def _gate_scout_applicants():
     return None
 
 
+@app.before_request
+def _note_seen():
+    """users.last_seen_at, refreshed at most once an hour (migration 040) —
+    what /admin/analytics counts as an active user. Never stops a request."""
+    if request.endpoint is None or request.endpoint in PUBLIC_ENDPOINTS:
+        return None
+    user = auth.current_user()
+    seen = user.get("last_seen_at") if user else None
+    if user and (seen is None or seen < datetime.now(timezone.utc) - timedelta(hours=1)):
+        try:
+            db.user_seen(user["id"])
+        except Exception as exc:  # e.g. migration 040 not applied yet
+            print(f"  last_seen not recorded: {type(exc).__name__}: {exc}")
+    return None
+
+
+def _funnel(step, *, offer_id=None, detail="", amount=None, currency=""):
+    """One step of the booking funnel (migration 040, /admin/analytics). Never
+    raises: a booking never fails because measuring it did."""
+    try:
+        user = auth.current_user()
+        if user:
+            db.funnel_event(user["account_id"], user["id"], step, offer_ref=offer_id,
+                            detail=detail, amount=amount, currency=currency)
+    except Exception as exc:
+        print(f"  funnel event {step} not recorded: {type(exc).__name__}: {exc}")
+
+
 def _onboarding_steps(user, card, counts):
     return [
         {"done": bool(user.get("given_name") and user.get("family_name")),
@@ -1402,6 +1430,7 @@ def search():
     # them a page at a time, and the no-change-fee filter has to see all of
     # them, not just the ones that ranked first.
     flights = group_by_flight(offers)
+    _funnel("search", detail=f"{len(offers)} fares")
     return render_template("results.html", nav="search", flights=flights, form=form,
                            fare_count=len(offers),
                            free_change_flights=sum(1 for f in flights if f["free_change_from"]))
@@ -1587,6 +1616,7 @@ def passenger_step():
     offer_id = request.form["offer_id"]
     try:
         offer = fetch_offer_view(offer_id)
+        _funnel("passenger", offer_id=offer_id)
         prefill = auth.profile_of(auth.current_user())
         # The booker is usually traveler one; the rest start empty.
         people = [prefill] + [{} for _ in range(offer["passenger_count"] - 1)]
@@ -1615,8 +1645,10 @@ def payment_step():
                                cost_centers=db.cost_centers_for_account(_account(), active_only=True),
                                error=" · ".join(problems)), 400
     try:
+        offer = fetch_offer_view(offer_id)
+        _funnel("payment", offer_id=offer_id)
         return render_template("payment.html", nav="search",
-                               offer=fetch_offer_view(offer_id), people=people,
+                               offer=offer, people=people,
                                cost_center_id=cost_center_id)
     except (DuffelError, RuntimeError) as exc:
         return render_template("results.html", nav="search", flights=None, form={},
@@ -1668,9 +1700,15 @@ def book():
     cost_center_id = request.form.get("cost_center_id", "").strip() or None
     if cost_center_id and not db.cost_center(cost_center_id, account_id):
         cost_center_id = None
+    _funnel("purchase_attempt", offer_id=offer_id)
+
+    def failed(reason):
+        _funnel("purchase_failed", offer_id=offer_id, detail=reason)
+
     try:
         offer = duffel_http.request("GET", f"/air/offers/{offer_id}", label="ui_offer")
     except (DuffelError, RuntimeError) as exc:
+        failed("offer_expired")
         return render_template("results.html", nav="search", flights=None, form={},
                                error=f"{exc} — offers expire; search again.")
 
@@ -1679,6 +1717,7 @@ def book():
     saved = _saved_travelers_for_picker(account_id)
     problems = passenger_problems(people)
     if problems:
+        failed("passenger_details")
         return render_template("passenger.html", nav="search", offer=offer_view(offer),
                                people=people, saved=saved,
                                error=" · ".join(problems)), 400
@@ -1687,6 +1726,7 @@ def book():
     # duffel_http would refuse the order call anyway; refusing here means no
     # card is authorized and no spend is reserved first.
     if config.APP_ENV == "staging" and not config.DUFFEL_LIVE_ORDERS_ENABLED:
+        failed("staging_refused")
         return render_template("payment.html", nav="search", offer=offer_view(offer),
                                people=people, error=duffel_http.staging_orders_refusal()), 403
 
@@ -1696,6 +1736,7 @@ def book():
 
     card = db.account_card(account_id)
     if not card:
+        failed("no_card")
         return render_template("payment.html", nav="search", offer=offer_view(offer),
                                people=people,
                                error="No payment method on file — link a company card "
@@ -1703,6 +1744,7 @@ def book():
 
     decision = policy.evaluate(account_id, offer)
     if decision.blocked:
+        failed("policy_blocked")
         detail = "; ".join(r.detail for r in decision.results if r.enforcement == "block")
         return render_template("payment.html", nav="search", offer=offer_view(offer),
                                people=people,
@@ -1714,6 +1756,7 @@ def book():
         # hold a live offer to purchase later — the snapshot and the
         # offer's current price (the ceiling) are what a later purchase
         # step re-searches and matches against, not this offer_id.
+        failed("sent_for_approval")
         facts = policy.extract_itinerary_facts(offer)
         db.booking_request_create(
             account_id, requested_by=auth.current_user()["id"],
@@ -1743,6 +1786,7 @@ def book():
                 "booking", account_id=account_id, email=auth.current_user()["email"],
                 amount=offer["total_amount"], currency=offer["total_currency"], reference=offer_id)
         except live_guard.LiveSpendRejected as exc:
+            failed("live_spend_refused")
             return render_template("payment.html", nav="search", offer=offer_view(offer),
                                    people=people, error=f"Live booking refused: {exc.detail}"), 403
 
@@ -1756,6 +1800,7 @@ def book():
             idempotency_key=f"book-{offer_id}")
     except billing.CardError as exc:
         live_guard.release(spend)
+        failed("card_declined")
         return render_template("payment.html", nav="search", offer=offer_view(offer),
                                people=people, error=f"Payment failed: {exc}"), 402
 
@@ -1767,6 +1812,7 @@ def book():
     if not _is_the_price_shown(offer, request.form):
         billing.cancel_authorization(intent.id)
         live_guard.release(spend)
+        failed("price_changed")
         shown = f"{request.form.get('shown_total') or '?'} {request.form.get('shown_currency') or ''}".strip()
         return render_template("payment.html", nav="search", offer=offer_view(offer), people=people,
                                error=(f"The fare is now {offer['total_amount']} {offer['total_currency']}, "
@@ -1816,10 +1862,12 @@ def book():
             existing = db.order_for_offer(account_id, offer_id)
             if existing:
                 return redirect(url_for("trip_booked", order_id=existing["order_id"]))
+            failed("already_booked")
             return render_template("results.html", nav="search", flights=None, form={},
                                    error="That search has already been booked from — "
                                          "offers are single use. Search again for fresh "
                                          "prices.")
+        failed("airline_error")
         return render_template("results.html", nav="search", flights=None, form={},
                                error=str(exc))
 
@@ -1905,6 +1953,8 @@ def book():
         except billing.CardError as exc:
             capture_error = exc
 
+    _funnel("purchased", offer_id=offer_id, amount=order["total_amount"], currency=order["total_currency"],
+            detail="capture_failed" if capture_error is not None else "")
     if capture_error is not None:
         upsert_order({"order_id": order["id"],
                       "payment_capture_failed_at": datetime.now(timezone.utc).isoformat(),
@@ -3593,6 +3643,126 @@ def admin_scouts_run(job):
         return _admin_back(f"{len(r['paid'])} payout(s) made, {len(r['failed'])} failed"
                            + (f": {r['failed'][0]['error']}" if r["failed"] else "."))
     abort(404)
+
+
+# --- admin: analytics, accounts, issues ---------------------------------------
+
+@app.route("/admin")
+@auth.staff_required
+def admin_home():
+    return redirect(url_for("admin_analytics"))
+
+
+def _nice_ceiling(value):
+    """The axis top: the smallest 1 / 2 / 5 × 10^k at or above `value`."""
+    if value <= 0:
+        return 1
+    magnitude = 10 ** (len(str(int(value))) - 1)
+    for step in (1, 2, 5, 10):
+        if value <= step * magnitude:
+            return step * magnitude
+    return 10 * magnitude
+
+
+def _column_chart(rows, value_key, *, label, width=640, height=150):
+    """Geometry for a one-series column chart, drawn by the template: columns
+    no wider than 24px with a 4px rounded top and a square base, a clean axis
+    top, and a few x labels (first, middle, last) rather than one per day."""
+    pad_left, pad_bottom, pad_top = 34, 22, 8
+    plot_w, plot_h = width - pad_left - 4, height - pad_bottom - pad_top
+    top = _nice_ceiling(max((r[value_key] for r in rows), default=0))
+    slot = plot_w / max(len(rows), 1)
+    bar_w = min(24.0, max(slot - 2, 1.0))   # a 2px surface gap between touching bars
+    base = pad_top + plot_h
+    bars = []
+    for i, r in enumerate(rows):
+        v = r[value_key]
+        x = pad_left + i * slot + (slot - bar_w) / 2
+        h = plot_h * v / top if top else 0
+        y = base - h
+        rad = min(4.0, bar_w / 2, h)
+        path = (f"M{x:.1f},{base:.1f} V{y + rad:.1f} Q{x:.1f},{y:.1f} {x + rad:.1f},{y:.1f} "
+                f"H{x + bar_w - rad:.1f} Q{x + bar_w:.1f},{y:.1f} {x + bar_w:.1f},{y + rad:.1f} V{base:.1f} Z") if v else ""
+        bars.append({"path": path, "hit_x": pad_left + i * slot, "hit_w": slot, "value": v,
+                     "tip": f"{r['day']:%-d %b} · {v} {label}"})
+    ticks = [{"y": base - plot_h * f, "label": f"{int(top * f):,}"} for f in (0, 0.5, 1)]
+    marks = sorted({0, len(rows) // 2, len(rows) - 1}) if rows else []
+    xlabels = [{"x": pad_left + i * slot + slot / 2, "label": f"{rows[i]['day']:%-d %b}"} for i in marks]
+    return {"width": width, "height": height, "bars": bars, "ticks": ticks, "xlabels": xlabels,
+            "left": pad_left, "right": width - 4, "base": base, "plot_top": pad_top, "plot_h": plot_h,
+            "total": sum(r[value_key] for r in rows), "rows": rows, "value_key": value_key}
+
+
+def _funnel_rows(steps):
+    """[(label, count)] → each step's share of the first, and what was lost
+    since the step before."""
+    first = steps[0][1] if steps else 0
+    out, prev = [], None
+    for label, n in steps:
+        out.append({"label": label, "n": n,
+                    "pct": round(100 * n / first) if first else 0,
+                    "drop": (round(100 * (prev - n) / prev) if prev else 0) if prev is not None else None})
+        prev = n
+    return out
+
+
+# What a purchase_failed detail means, in words (app.book's failed(...) calls).
+_FAILURE_REASONS = {
+    "offer_expired": "Offer expired before Pay", "passenger_details": "Passenger details rejected",
+    "staging_refused": "Staging books nothing", "no_card": "No card on file",
+    "policy_blocked": "Blocked by travel policy", "sent_for_approval": "Sent for manager approval",
+    "live_spend_refused": "Live spend refused", "card_declined": "Card declined",
+    "price_changed": "Fare changed before Pay", "already_booked": "Search already booked from",
+    "airline_error": "Airline / Duffel error",
+}
+
+
+@app.route("/admin/analytics")
+@auth.staff_required
+def admin_analytics():
+    days = 30
+    signups = db.admin_signups(days)
+    checkout = db.admin_checkout_funnel(days)
+    st = checkout["steps"]
+    checkout_rows = _funnel_rows([("Checkout started", st.get("passenger", 0)),
+                                  ("Passenger details done", st.get("payment", 0)),
+                                  ("Pressed Pay", st.get("purchase_attempt", 0)),
+                                  ("Ticket issued", st.get("purchased", 0))])
+    started, bought = st.get("passenger", 0), st.get("purchased", 0)
+    ob = db.admin_onboarding_funnel()
+    onboarding_rows = _funnel_rows([("Signed up", ob["signed_up"]), ("Profile complete", ob["profile"]),
+                                    ("Card linked", ob["card"]), ("Booked a flight", ob["booked"]),
+                                    ("Got a saving", ob["saved"])])
+    try:
+        stripe_live, stripe_error = billing.stripe_summary(days), None
+    except Exception as exc:  # Stripe unreachable, or no key configured
+        stripe_live, stripe_error = None, str(exc)[:300]
+    return render_template(
+        "admin_analytics.html", nav="admin_analytics", days=days,
+        totals=db.admin_signup_totals(), active=db.admin_active_users(),
+        signups_chart=_column_chart(signups, "customers", label="signups"),
+        scout_apps=sum(r["scouts"] for r in signups),
+        signins_chart=_column_chart(db.admin_signins(days), "users", label="users signed in"),
+        onboarding_funnel=onboarding_rows, checkout=checkout_rows, searches=checkout["searches"],
+        drop_off=round(100 * (started - bought) / started) if started else None,
+        failures=[{"reason": _FAILURE_REASONS.get(r["reason"], r["reason"] or "Unknown"), "n": r["n"]}
+                  for r in checkout["reasons"]],
+        funnel_since=checkout["since"], bookings=db.admin_bookings(days), money=db.admin_money(),
+        stripe=stripe_live, stripe_error=stripe_error)
+
+
+@app.route("/admin/accounts")
+@auth.staff_required
+def admin_accounts():
+    search_text = request.args.get("q", "").strip()
+    return render_template("admin_accounts.html", nav="admin_accounts", q=search_text,
+                           accounts=db.admin_accounts(search_text))
+
+
+@app.route("/admin/issues")
+@auth.staff_required
+def admin_issues():
+    return render_template("admin_issues.html", nav="admin_issues", issues=db.admin_issues())
 
 
 # --- Stripe webhook -----------------------------------------------------------

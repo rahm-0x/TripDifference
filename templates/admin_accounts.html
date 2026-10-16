@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Accounts — Trip Difference{% endblock %}
+{% block crumb %}Admin · Accounts{% endblock %}
+{% block body %}
+
+<div class="page-head head-row">
+  <div>
+    <h1>Accounts</h1>
+    <p>Every customer account, newest first. Test accounts are left out.</p>
+  </div>
+  <form method="get" action="{{ url_for('admin_accounts') }}" class="search">
+    <input name="q" value="{{ q }}" placeholder="Company or email" aria-label="Search accounts">
+    <button type="submit" class="btn-sm">Search</button>
+    {% if q %}<a href="{{ url_for('admin_accounts') }}" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
+  </form>
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  {% if accounts %}
+  <table>
+    <thead>
+      <tr><th>Company</th><th>Signed up</th><th>Referral</th><th>Card</th>
+          <th class="num">Tickets</th><th class="num">Savings</th><th>Last seen</th></tr>
+    </thead>
+    <tbody>
+      {% for a in accounts %}
+      <tr>
+        <td>
+          <b>{{ a.business }}</b>{% if a.is_scout %} <span class="tag tag-terra">Scout</span>{% endif %}
+          <small class="soft">{{ a.email }}{% if a.users > 1 %} · {{ a.users }} users{% endif %}</small>
+        </td>
+        <td class="mono">{{ a.created_at.strftime('%-d %b %Y') }}</td>
+        <td class="mono {{ 'muted' if a.unreferred }}">{{ a.code }}</td>
+        <td>{% if a.has_card %}<span class="tag tag-sage">On file</span>{% else %}<span class="tag tag-mute">None</span>{% endif %}</td>
+        <td class="num">{{ a.orders }}</td>
+        <td class="num">{{ a.savings }}</td>
+        <td class="mono soft">{{ a.last_seen.strftime('%-d %b %Y') if a.last_seen else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if accounts|length >= 200 %}<p class="hint" style="padding:0 18px 14px">Showing the newest 200. Search to find others.</p>{% endif %}
+  {% else %}
+  <div style="text-align:center; padding:48px 24px">
+    <p class="muted" style="margin:0">{{ 'No account matches “' ~ q ~ '”.' if q else 'No accounts yet.' }}</p>
+  </div>
+  {% endif %}
+</div>
+
+<style>
+  .head-row { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  .search { display:flex; gap:8px; align-items:center; }
+  .search input { width:240px; }
+  td small { display:block; font-size:11.5px; margin-top:2px; }
+</style>
+
+{% endblock %}

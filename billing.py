@@ -410,3 +410,40 @@ def webhook_event(payload, signature):
         except ValueError as exc:
             raise WebhookRefused("payload is not JSON") from exc
     raise WebhookRefused("signature does not verify")
+
+
+# ---------------------------------------------------------------------------
+# /admin/analytics — what Stripe itself says
+# ---------------------------------------------------------------------------
+
+def stripe_summary(days=30, max_charges=1000):
+    """Stripe's view, for the admin analytics page: the balance, and the last
+    `days` of charges by currency (succeeded, failed, refunded, disputed).
+    Raises if Stripe can't be asked; the page shows why instead. Reads at most
+    `max_charges` charges and says so when it stopped there."""
+    import time
+    client = _client()
+    balance = client.Balance.retrieve()
+    since = int(time.time()) - days * 86400
+    by_currency, read, truncated = {}, 0, False
+    for charge in client.Charge.list(created={"gte": since}, limit=100).auto_paging_iter():
+        if read >= max_charges:
+            truncated = True
+            break
+        read += 1
+        row = by_currency.setdefault(charge.currency.upper(), {
+            "succeeded": 0, "gross": Decimal("0"), "failed": 0, "refunded": Decimal("0"), "disputed": 0})
+        if charge.status == "succeeded":
+            row["succeeded"] += 1
+            row["gross"] += Decimal(charge.amount) / 100
+        elif charge.status == "failed":
+            row["failed"] += 1
+        row["refunded"] += Decimal(charge.amount_refunded or 0) / 100
+        if charge.disputed:
+            row["disputed"] += 1
+    return {
+        "livemode": config.STRIPE_LIVEMODE,
+        "available": {b.currency.upper(): Decimal(b.amount) / 100 for b in balance.available},
+        "pending": {b.currency.upper(): Decimal(b.amount) / 100 for b in balance.pending},
+        "charges": by_currency, "read": read, "truncated": truncated, "days": days,
+    }

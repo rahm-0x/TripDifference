@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Analytics — Trip Difference{% endblock %}
+{% block crumb %}Admin · Analytics{% endblock %}
+{% block body %}
+
+{% macro money_list(rows, amount_key, empty='—') -%}
+  {%- if rows -%}
+    {%- for r in rows -%}
+      <span class="num">{{ '{:,.2f}'.format(r[amount_key]) }}</span> <span class="cur">{{ r.currency }}</span>{% if not loop.last %}<br>{% endif %}
+    {%- endfor -%}
+  {%- else -%}{{ empty }}{%- endif -%}
+{%- endmacro %}
+
+{% macro by_currency(d, empty='—') -%}
+  {%- if d -%}
+    {%- for cur, amt in d|dictsort -%}
+      <span class="num">{{ '{:,.2f}'.format(amt) }}</span> <span class="cur">{{ cur }}</span>{% if not loop.last %}<br>{% endif %}
+    {%- endfor -%}
+  {%- else -%}{{ empty }}{%- endif -%}
+{%- endmacro %}
+
+{# One-series column chart; geometry from app._column_chart. No legend: the
+   title names the single series. Every column has a hover target the full
+   height of its slot, and the same numbers are in the table below it. #}
+{% macro column_chart(c, title, summary) %}
+<div class="card chart-card">
+  <div class="chart-head">
+    <h3>{{ title }}</h3>
+    <span class="soft">{{ summary }}</span>
+  </div>
+  <svg viewBox="0 0 {{ c.width }} {{ c.height }}" class="chart" role="img" aria-label="{{ title }}: {{ summary }}">
+    {% for t in c.ticks %}
+    <line x1="{{ c.left }}" x2="{{ c.right }}" y1="{{ t.y }}" y2="{{ t.y }}" class="grid"/>
+    <text x="{{ c.left - 6 }}" y="{{ t.y + 3.5 }}" class="tick" text-anchor="end">{{ t.label }}</text>
+    {% endfor %}
+    {% for b in c.bars %}
+    {% if b.path %}<path d="{{ b.path }}" class="col"/>{% endif %}
+    <rect x="{{ b.hit_x }}" y="{{ c.plot_top }}" width="{{ b.hit_w }}" height="{{ c.plot_h }}" class="hit" data-tip="{{ b.tip }}"/>
+    {% endfor %}
+    {% for x in c.xlabels %}
+    <text x="{{ x.x }}" y="{{ c.base + 15 }}" class="tick" text-anchor="middle">{{ x.label }}</text>
+    {% endfor %}
+  </svg>
+  <details class="as-table">
+    <summary>Show as table</summary>
+    <table>
+      <thead><tr><th>Day</th><th class="num">Count</th></tr></thead>
+      <tbody>
+        {% for r in c.rows|reverse %}<tr><td>{{ r.day.strftime('%a %-d %b') }}</td><td class="num">{{ r[c.value_key] }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </details>
+</div>
+{% endmacro %}
+
+{% macro funnel(rows, title, note) %}
+<div class="card">
+  <div class="chart-head"><h3>{{ title }}</h3><span class="soft">{{ note }}</span></div>
+  <div class="funnel">
+    {% for r in rows %}
+    <div class="f-row" data-tip="{{ r.label }} · {{ r.n }} ({{ r.pct }}% of the first step)">
+      <span class="f-label">{{ r.label }}</span>
+      <span class="f-track"><span class="f-bar" style="width: {{ [r.pct, 0.6 if r.n else 0]|max }}%"></span></span>
+      <span class="f-val num">{{ r.n }}</span>
+      <span class="f-pct num">{{ r.pct }}%</span>
+      <span class="f-drop">{% if r.drop %}−{{ r.drop }}% from the step before{% endif %}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}
+
+<div class="page-head">
+  <h1>Analytics</h1>
+  <p>Last {{ days }} days unless a figure says otherwise. Test accounts are left out of everything here.</p>
+</div>
+
+<div class="tiles">
+  <div class="card tile">
+    <span class="t-label">Customer signups · {{ days }} days</span>
+    <div class="t-val">{{ '{:,}'.format(totals.month) }}</div>
+    <div class="t-note">{{ totals.week }} in the last 7 days · {{ '{:,}'.format(totals.all_time) }} all time</div>
+  </div>
+  <div class="card tile">
+    <span class="t-label">Active users · 7 days</span>
+    <div class="t-val">{{ '{:,}'.format(active.week) }}</div>
+    <div class="t-note">{{ active.day }} today · {{ active.month }} in 30 days · of {{ active.users }} users</div>
+  </div>
+  <div class="card tile">
+    <span class="t-label">Purchase drop-off · {{ days }} days</span>
+    <div class="t-val">{% if drop_off is none %}—{% else %}{{ drop_off }}%{% endif %}</div>
+    <div class="t-note">Checkouts started that didn't end in a ticket</div>
+  </div>
+  <div class="card tile">
+    <span class="t-label">Tickets booked · {{ days }} days</span>
+    <div class="t-val">{{ bookings|sum(attribute='recent') }}</div>
+    <div class="t-note">{{ money_list(bookings, 'recent_value', 'Nothing booked') }}</div>
+  </div>
+</div>
+
+<h2 class="sec">Growth</h2>
+<div class="grid-2">
+  {{ column_chart(signups_chart, "Customer signups per day",
+                  signups_chart.total ~ " in " ~ days ~ " days · " ~ scout_apps ~ " scout applications too") }}
+  {{ column_chart(signins_chart, "Users signing in per day", "distinct users, by UTC day") }}
+</div>
+<p class="hint">Referred by a scout: {{ totals.referred }} · from before referral codes (LEGACY): {{ totals.legacy }}.
+   "Active" counts anyone who loaded a page; it's recorded from this release on, so it starts low.</p>
+
+<h2 class="sec">Conversion</h2>
+<div class="grid-2">
+  {{ funnel(onboarding_funnel, "Onboarding", "every customer account, all time") }}
+  <div>
+    {{ funnel(checkout, "Checkout", "last " ~ days ~ " days · one count per offer") }}
+    <p class="hint" style="margin:8px 2px 0">
+      {{ '{:,}'.format(searches) }} searches with results in the same period.
+      {% if funnel_since %}Checkout tracking began {{ funnel_since.strftime('%-d %b %Y') }}.{% else %}Checkout tracking starts with this release; nothing recorded yet.{% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <div class="chart-head"><h3>Why purchases didn't go through</h3><span class="soft">last {{ days }} days</span></div>
+  {% if failures %}
+  <table>
+    <thead><tr><th>Reason</th><th class="num">Times</th></tr></thead>
+    <tbody>{% for f in failures %}<tr><td>{{ f.reason }}</td><td class="num">{{ f.n }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p class="muted" style="margin:0">None recorded.</p>{% endif %}
+</div>
+
+<h2 class="sec">Money</h2>
+<div class="grid-2">
+  <div class="card">
+    <div class="chart-head"><h3>Our records</h3><span class="soft">all time</span></div>
+    {% set ev = money.events %}
+    <dl class="facts">
+      <dt>Fares charged to cards</dt><dd>{{ money_list(money.fares, 'total') }}</dd>
+      <dt>Saved for customers</dt><dd>{{ money_list(ev, 'saved') }}</dd>
+      <dt>Refunded to cards</dt><dd>{{ money_list(ev, 'refunded') }}</dd>
+      <dt>Commission charged</dt><dd>{{ money_list(ev, 'commission_charged') }}</dd>
+      <dt>Commission still owed</dt><dd>{{ money_list(ev, 'commission_owed') }}</dd>
+      <dt>Paid out to scouts</dt><dd>{{ money_list(money.payouts, 'total') }}</dd>
+    </dl>
+    {% set failed_captures = bookings|sum(attribute='capture_failed') %}
+    {% if failed_captures %}<p class="hint"><a href="{{ url_for('admin_issues') }}">{{ failed_captures }} ticket(s) issued without the card charge going through →</a></p>{% endif %}
+  </div>
+
+  <div class="card">
+    <div class="chart-head">
+      <h3>Stripe</h3>
+      {% if stripe %}<span class="tag {{ 'tag-alert' if stripe.livemode else 'tag-mute' }}">{{ 'Live mode' if stripe.livemode else 'Test mode' }}</span>{% endif %}
+    </div>
+    {% if stripe %}
+    <dl class="facts">
+      <dt>Balance available</dt><dd>{{ by_currency(stripe.available, '0.00') }}</dd>
+      <dt>Balance pending</dt><dd>{{ by_currency(stripe.pending, '0.00') }}</dd>
+    </dl>
+    <table style="margin-top:12px">
+      <thead><tr><th>Charges · {{ stripe.days }} days</th><th class="num">Succeeded</th><th class="num">Gross</th>
+                 <th class="num">Refunded</th><th class="num">Failed</th><th class="num">Disputed</th></tr></thead>
+      <tbody>
+        {% for cur, c in stripe.charges|dictsort %}
+        <tr><td>{{ cur }}</td><td class="num">{{ c.succeeded }}</td><td class="num">{{ '{:,.2f}'.format(c.gross) }}</td>
+            <td class="num">{{ '{:,.2f}'.format(c.refunded) }}</td><td class="num">{{ c.failed }}</td><td class="num">{{ c.disputed }}</td></tr>
+        {% else %}
+        <tr><td colspan="6" class="muted">No charges in this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if stripe.truncated %}<p class="hint">Only the latest {{ stripe.read }} charges were read.</p>{% endif %}
+    {% else %}
+    <p class="muted" style="margin:0">Stripe couldn't be reached: {{ stripe_error }}</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="tooltip" id="tip" role="status" aria-live="polite"></div>
+
+<style>
+  .sec { font-size:15px; letter-spacing:-.01em; margin:28px 0 12px; }
+  .tiles { display:grid; grid-template-columns:repeat(4, 1fr); gap:14px; }
+  .tile { padding:14px 16px; }
+  .t-label { display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .t-val { font-size:28px; font-weight:600; letter-spacing:-.03em; line-height:1.1; }
+  .t-note { font-size:12px; color:var(--muted-2); margin-top:6px; line-height:1.45; }
+  .t-note .cur { font-size:11px; }
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start; }
+  .chart-head { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .chart-head h3 { font-size:14px; }
+  .chart-head .soft { font-size:12px; }
+  .chart { width:100%; height:auto; display:block; }
+  .chart .grid { stroke:var(--line-soft); stroke-width:1; }
+  .chart .tick { font: 10.5px 'IBM Plex Mono', monospace; fill:var(--muted-2); }
+  .chart .col { fill:var(--gold); }
+  .chart .hit { fill:transparent; cursor:default; }
+  .chart .hit:hover { fill:rgba(47,93,138,.06); }
+  .as-table { margin-top:8px; font-size:12.5px; }
+  .as-table summary { cursor:pointer; color:var(--muted); }
+  .as-table table { margin-top:6px; }
+  .funnel { display:flex; flex-direction:column; gap:10px; }
+  .f-row { display:grid; grid-template-columns:150px 1fr 44px 44px; grid-template-rows:auto auto; column-gap:10px;
+           align-items:center; font-size:13px; }
+  .f-track { height:18px; background:var(--surface-2); border-radius:0 4px 4px 0; overflow:hidden; }
+  .f-bar { display:block; height:100%; background:var(--gold); border-radius:0 4px 4px 0; }
+  .f-val, .f-pct { text-align:right; font-size:12.5px; }
+  .f-pct { color:var(--muted); }
+  .f-drop { grid-column:2 / -1; font-size:11.5px; color:var(--muted-2); min-height:0; }
+  .facts { display:grid; grid-template-columns:180px 1fr; gap:8px 12px; margin:0; font-size:13.5px; }
+  .facts dt { color:var(--muted); }
+  .facts dd { margin:0; }
+  .tooltip { position:fixed; pointer-events:none; z-index:50; background:var(--text); color:#fff; font-size:12px;
+             padding:5px 8px; border-radius:4px; opacity:0; transition:opacity .08s; white-space:nowrap; }
+  @media (max-width:1100px){ .tiles { grid-template-columns:repeat(2, 1fr); } }
+  @media (max-width:860px){ .grid-2 { grid-template-columns:1fr; } .facts { grid-template-columns:1fr; }
+                            .f-row { grid-template-columns:110px 1fr 36px 40px; } }
+</style>
+<script>
+  (function () {
+    var tip = document.getElementById('tip');
+    document.addEventListener('mousemove', function (e) {
+      var t = e.target.closest && e.target.closest('[data-tip]');
+      if (!t) { tip.style.opacity = 0; return; }
+      tip.textContent = t.getAttribute('data-tip');
+      tip.style.left = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+      tip.style.top = (e.clientY - 30) + 'px';
+      tip.style.opacity = 1;
+    });
+  })();
+</script>
+
+{% endblock %}

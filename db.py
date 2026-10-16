@@ -2159,3 +2159,209 @@ def scout_payouts_stuck(older_than_minutes=10):
                   JOIN scouts s ON s.id = p.scout_id
                  WHERE p.status = 'pending' AND p.opened_at < now() - make_interval(mins => %s)""",
              (older_than_minutes,), fetch="all")
+
+
+# ---------------------------------------------------------------------------
+# activity and the booking funnel (migration 040)
+# ---------------------------------------------------------------------------
+
+def user_seen(user_id):
+    q("UPDATE users SET last_seen_at = now() WHERE id = %s", (user_id,))
+
+
+def funnel_event(account_id, user_id, step, *, offer_ref=None, detail="", amount=None, currency=""):
+    q("""INSERT INTO funnel_events (account_id, user_id, step, offer_ref, detail, amount, currency)
+         VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+      (account_id, user_id, step, offer_ref, (detail or "")[:200], _num(amount), currency or ""))
+
+
+# ---------------------------------------------------------------------------
+# admin — TD staff's views across every account (auth.staff_required only)
+# ---------------------------------------------------------------------------
+#
+# The one deliberate exception to "functions that read tenant data take
+# account_id": these are for /admin/*, which is staff-only, and they exist to
+# see every account at once. Nothing else may call them. Test accounts
+# (TEST_ACCOUNT_NAME) are left out of every one.
+
+_REAL = f"a.name <> '{TEST_ACCOUNT_NAME}'"
+# A customer account, as opposed to one that exists only because its owner
+# applied to be a scout.
+_CUSTOMER = f"{_REAL} AND rc.code <> 'SCOUT-APPLICANT'"
+
+
+def admin_signups(days=30):
+    """Per UTC day for the last `days`: customer signups and scout-only
+    applications, zero-filled."""
+    return q(f"""SELECT d::date AS day,
+                        count(a.id) FILTER (WHERE rc.code <> 'SCOUT-APPLICANT') AS customers,
+                        count(a.id) FILTER (WHERE rc.code = 'SCOUT-APPLICANT') AS scouts
+                   FROM generate_series((now() AT TIME ZONE 'UTC')::date - (%s - 1), (now() AT TIME ZONE 'UTC')::date,
+                                        interval '1 day') d
+                   LEFT JOIN accounts a ON (a.created_at AT TIME ZONE 'UTC')::date = d::date AND {_REAL}
+                   LEFT JOIN referral_codes rc ON rc.id = a.referral_code_id
+                  GROUP BY d ORDER BY d""", (days,), fetch="all")
+
+
+def admin_signup_totals():
+    return q(f"""SELECT count(*) FILTER (WHERE a.created_at > now() - interval '7 days') AS week,
+                        count(*) FILTER (WHERE a.created_at > now() - interval '30 days') AS month,
+                        count(*) AS all_time,
+                        count(*) FILTER (WHERE NOT rc.internal) AS referred,
+                        count(*) FILTER (WHERE rc.code = 'LEGACY') AS legacy
+                   FROM accounts a JOIN referral_codes rc ON rc.id = a.referral_code_id
+                  WHERE {_CUSTOMER}""", fetch="one")
+
+
+def admin_active_users():
+    """Users who loaded a page in the last day / 7 days / 30 days
+    (users.last_seen_at, recorded from migration 040 on)."""
+    return q(f"""SELECT count(*) FILTER (WHERE u.last_seen_at > now() - interval '1 day') AS day,
+                        count(*) FILTER (WHERE u.last_seen_at > now() - interval '7 days') AS week,
+                        count(*) FILTER (WHERE u.last_seen_at > now() - interval '30 days') AS month,
+                        count(*) AS users
+                   FROM users u JOIN accounts a ON a.id = u.account_id WHERE {_REAL}""", fetch="one")
+
+
+def admin_signins(days=30):
+    """Distinct users who signed in, per UTC day — from sessions, so it has
+    history from before last_seen_at existed."""
+    return q(f"""SELECT d::date AS day, count(DISTINCT s.user_id) AS users
+                   FROM generate_series((now() AT TIME ZONE 'UTC')::date - (%s - 1), (now() AT TIME ZONE 'UTC')::date,
+                                        interval '1 day') d
+                   LEFT JOIN (SELECT s.user_id, s.created_at FROM sessions s
+                                JOIN users u ON u.id = s.user_id JOIN accounts a ON a.id = u.account_id
+                               WHERE {_REAL}) s
+                          ON (s.created_at AT TIME ZONE 'UTC')::date = d::date
+                  GROUP BY d ORDER BY d""", (days,), fetch="all")
+
+
+def admin_onboarding_funnel():
+    """Customer accounts through each onboarding step, all time — computable
+    from what is already stored."""
+    return q(f"""SELECT count(*) AS signed_up,
+                        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM users u WHERE u.account_id = a.id
+                                                        AND u.given_name <> '' AND u.family_name <> '')) AS profile,
+                        count(*) FILTER (WHERE a.stripe_payment_method_id IS NOT NULL) AS card,
+                        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM orders o WHERE o.account_id = a.id)) AS booked,
+                        count(*) FILTER (WHERE EXISTS (SELECT 1 FROM savings_events se JOIN orders o
+                                                         ON o.order_id = se.order_id
+                                                        WHERE o.account_id = a.id AND se.action = 'exchange')) AS saved
+                   FROM accounts a JOIN referral_codes rc ON rc.id = a.referral_code_id
+                  WHERE {_CUSTOMER}""", fetch="one")
+
+
+def admin_checkout_funnel(days=30):
+    """Each checkout step in the last `days`, counted once per offer (a
+    refreshed page is not a second checkout), plus why purchases failed."""
+    steps = q(f"""SELECT f.step, count(DISTINCT COALESCE(f.offer_ref, f.id::text)) AS n, count(*) AS events
+                    FROM funnel_events f JOIN accounts a ON a.id = f.account_id
+                   WHERE {_REAL} AND f.ts > now() - make_interval(days => %s)
+                   GROUP BY f.step""", (days,), fetch="all")
+    reasons = q(f"""SELECT f.detail AS reason, count(*) AS n
+                      FROM funnel_events f JOIN accounts a ON a.id = f.account_id
+                     WHERE {_REAL} AND f.step = 'purchase_failed' AND f.ts > now() - make_interval(days => %s)
+                     GROUP BY f.detail ORDER BY n DESC""", (days,), fetch="all")
+    first = q("SELECT min(ts) AS since FROM funnel_events", fetch="one")
+    return {"steps": {r["step"]: r["n"] for r in steps},
+            "searches": next((r["events"] for r in steps if r["step"] == "search"), 0),
+            "reasons": reasons, "since": first["since"]}
+
+
+def admin_bookings(days=30):
+    """Tickets bought in the last `days` and all time, by currency."""
+    return q(f"""SELECT o.currency,
+                        count(*) FILTER (WHERE o.created_at > now() - make_interval(days => %s)) AS recent,
+                        COALESCE(sum(o.paid) FILTER (WHERE o.created_at > now() - make_interval(days => %s)), 0)
+                            AS recent_value,
+                        count(*) AS all_time, COALESCE(sum(o.paid), 0) AS all_value,
+                        count(*) FILTER (WHERE o.payment_capture_failed_at IS NOT NULL) AS capture_failed
+                   FROM orders o JOIN accounts a ON a.id = o.account_id
+                  WHERE {_REAL} AND o.source = 'td_rebook' AND o.stripe_payment_intent_id IS NOT NULL
+                  GROUP BY o.currency ORDER BY all_time DESC""", (days, days), fetch="all")
+
+
+def admin_money():
+    """TD's own record of what moved through Stripe, by currency: fares
+    charged, recoveries refunded to cards, commission charged or still owed,
+    and scout payouts made."""
+    fares = q(f"""SELECT o.currency, COALESCE(sum(o.paid), 0) AS total, count(*) AS n
+                    FROM orders o JOIN accounts a ON a.id = o.account_id
+                   WHERE {_REAL} AND o.stripe_payment_intent_id IS NOT NULL
+                     AND o.payment_capture_failed_at IS NULL
+                   GROUP BY o.currency""", fetch="all")
+    events = q(f"""SELECT se.currency,
+                          COALESCE(sum(se.realized_savings) FILTER (WHERE se.stripe_refund_id IS NOT NULL), 0)
+                              AS refunded,
+                          COALESCE(sum(se.commission_amount) FILTER (WHERE se.commission_charged_at IS NOT NULL), 0)
+                              AS commission_charged,
+                          COALESCE(sum(se.commission_amount) FILTER (WHERE se.action = 'exchange'
+                                         AND se.commission_charged_at IS NULL AND se.commission_amount > 0), 0)
+                              AS commission_owed,
+                          COALESCE(sum(se.realized_savings) FILTER (WHERE se.action = 'exchange'), 0) AS saved
+                     FROM savings_events se JOIN orders o ON o.order_id = se.order_id
+                     JOIN accounts a ON a.id = o.account_id
+                    WHERE {_REAL}
+                    GROUP BY se.currency""", fetch="all")
+    payouts = q("""SELECT currency, COALESCE(sum(amount), 0) AS total, count(*) AS n
+                     FROM scout_payouts WHERE status = 'paid' GROUP BY currency""", fetch="all")
+    return {"fares": fares, "events": events, "payouts": payouts}
+
+
+def admin_accounts(search="", limit=200):
+    """Every customer account, newest first, filtered by company or a user's
+    email."""
+    like = f"%{(search or '').strip()}%"
+    return q(f"""SELECT a.id, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business, a.created_at,
+                        rc.code::text AS code, rc.internal AS unreferred,
+                        (a.stripe_payment_method_id IS NOT NULL) AS has_card,
+                        (SELECT u.email FROM users u WHERE u.account_id = a.id ORDER BY u.created_at LIMIT 1) AS email,
+                        (SELECT count(*) FROM users u WHERE u.account_id = a.id) AS users,
+                        (SELECT max(u.last_seen_at) FROM users u WHERE u.account_id = a.id) AS last_seen,
+                        (SELECT count(*) FROM orders o WHERE o.account_id = a.id) AS orders,
+                        (SELECT count(*) FROM savings_events se JOIN orders o ON o.order_id = se.order_id
+                          WHERE o.account_id = a.id AND se.action = 'exchange') AS savings,
+                        EXISTS (SELECT 1 FROM users u JOIN scouts s ON s.user_id = u.id
+                                 WHERE u.account_id = a.id) AS is_scout
+                   FROM accounts a JOIN referral_codes rc ON rc.id = a.referral_code_id
+                  WHERE {_REAL}
+                    AND (%s OR a.name ILIKE %s OR a.legal_name ILIKE %s
+                         OR EXISTS (SELECT 1 FROM users u WHERE u.account_id = a.id AND u.email ILIKE %s))
+                  ORDER BY a.created_at DESC LIMIT %s""",
+             (not (search or "").strip(), like, like, like, limit), fetch="all")
+
+
+def admin_issues():
+    """Money that needs a person: a ticket issued but its card charge failed,
+    a recovery not yet refunded to the card, a commission whose charge failed,
+    and scout payouts that failed."""
+    captures = q(f"""SELECT o.order_id, o.booking_reference, o.paid, o.currency, o.payment_capture_failed_at AS at,
+                            o.payment_capture_error AS error, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business
+                       FROM orders o JOIN accounts a ON a.id = o.account_id
+                      WHERE {_REAL} AND o.payment_capture_failed_at IS NOT NULL
+                      ORDER BY o.payment_capture_failed_at DESC""", fetch="all")
+    refunds = q(f"""SELECT se.id, o.order_id, o.booking_reference, se.realized_savings AS amount, se.currency,
+                           se.payout_failed_at AS at, se.payout_error AS error,
+                           COALESCE(NULLIF(a.legal_name, ''), a.name) AS business
+                      FROM savings_events se JOIN orders o ON o.order_id = se.order_id
+                      JOIN accounts a ON a.id = o.account_id
+                     WHERE {_REAL} AND se.payout_failed_at IS NOT NULL AND se.stripe_refund_id IS NULL
+                     ORDER BY se.payout_failed_at DESC""", fetch="all")
+    commissions = q(f"""SELECT se.id, o.order_id, o.booking_reference, se.commission_amount AS amount, se.currency,
+                               se.commission_charge_failed_at AS at, se.commission_charge_error AS error,
+                               COALESCE(NULLIF(a.legal_name, ''), a.name) AS business
+                          FROM savings_events se JOIN orders o ON o.order_id = se.order_id
+                          JOIN accounts a ON a.id = o.account_id
+                         WHERE {_REAL} AND se.commission_charge_failed_at IS NOT NULL
+                           AND se.commission_charged_at IS NULL
+                         ORDER BY se.commission_charge_failed_at DESC""", fetch="all")
+    payouts = q("""SELECT p.id, p.amount, p.currency, p.period, p.error, p.opened_at AS at,
+                          u.email, u.given_name, u.family_name
+                     FROM scout_payouts p JOIN scouts s ON s.id = p.scout_id LEFT JOIN users u ON u.id = s.user_id
+                    WHERE p.status = 'failed' ORDER BY p.opened_at DESC""", fetch="all")
+    return {"captures": captures, "refunds": refunds, "commissions": commissions, "payouts": payouts}
+
+
+def admin_issue_count():
+    i = admin_issues()
+    return sum(len(v) for v in i.values())
