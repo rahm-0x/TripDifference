@@ -24,8 +24,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from flask import (Flask, abort, flash, g, get_flashed_messages, make_response, redirect,
-                   render_template, request, send_from_directory, session, url_for)
+from flask import (Flask, abort, flash, g, make_response, redirect, render_template,
+                   request, send_from_directory, session, url_for)
 
 import requests
 
@@ -44,9 +44,8 @@ import referrals
 import supabase_auth
 from duffel_http import DuffelError
 from engine import (OrderSnapshot, Outcome, ReshopPolicy,
-                    evaluate, log_decision, log_eligibility)
-from prices import (DuffelPriceSource, Route, SimulatedPriceSource,
-                    get_price_source)
+                    evaluate, log_eligibility)
+from prices import SimulatedPriceSource, get_price_source
 
 HERE = Path(__file__).parent
 PORT = 8000
@@ -740,28 +739,6 @@ def spend_chart(rows):
             "has_data": any(float(r["spend"]) or float(r["recovered"]) for r in rows)}
 
 
-def saved_chart(rows, w=720, h=170):
-    """Home's headline trend — total saved over time, one dashed line.
-    Same geometry as spend_chart but isolated to the 'recovered' series;
-    kept separate rather than parameterising spend_chart since Home and the
-    Reservations page (which keeps the two-series version) want different
-    axis heights."""
-    top = _nice_top(max([float(r["recovered"]) for r in rows] + [0]))
-    pad_l, pad_r, pad_t, pad_b = 44, 14, 14, 30
-    inner_w, inner_h = w - pad_l - pad_r, h - pad_t - pad_b
-    n = max(len(rows) - 1, 1)
-    pts = []
-    for i, r in enumerate(rows):
-        x = pad_l + inner_w * i / n
-        y = pad_t + inner_h * (1 - float(r["recovered"]) / top) if top else pad_t + inner_h
-        pts.append({"x": round(x, 1), "y": round(y, 1),
-                    "label": r["label"], "value": f"{float(r['recovered']):,.2f}"})
-    grid = [{"y": round(pad_t + inner_h * (1 - f), 1),
-             "label": f"{int(top * f):,}"} for f in (0, .5, 1)]
-    return {"points": pts, "grid": grid, "top": top, "w": w, "h": h,
-            "has_data": any(float(r["recovered"]) for r in rows)}
-
-
 def activity_chart(rows, w=720, h=150):
     """One series, so one colour for every bar — a value ramp here would
     double-encode height as hue."""
@@ -782,38 +759,6 @@ def activity_chart(rows, w=720, h=150):
     return {"bars": bars, "top": top, "w": w, "h": h,
             "baseline": round(pad_t + inner_h, 1),
             "has_data": any(r["checks"] for r in rows)}
-
-
-def carrier_chart(rows, w=720, row_h=30):
-    """Horizontal bars, ranked by spend. Not a donut: this is a comparison,
-    and a pie of close values is unreadable — with a single carrier it
-    would be one 100% slice, which is a stat tile, not a chart.
-
-    Computes both spend and saved widths/values per bar (not just the
-    ranking metric) so the Saved/Spent toggle can flip client-side with
-    no server round trip — a real interaction, not two separate charts."""
-    spend_total = sum(float(r["spend"]) for r in rows) or 1.0
-    saved_total = sum(float(r["saved"]) for r in rows) or 1.0
-    spend_biggest = max([float(r["spend"]) for r in rows] + [1.0])
-    saved_biggest = max([float(r["saved"]) for r in rows] + [1.0])
-    label_w, pad_r = 150, 96
-    track = w - label_w - pad_r
-    bars = []
-    for i, r in enumerate(rows):
-        sv, av = float(r["spend"]), float(r["saved"])
-        bars.append({
-            "y": i * row_h, "h": row_h - 10,
-            "spend_w": round(track * sv / spend_biggest, 1),
-            "saved_w": round(track * av / saved_biggest, 1),
-            "carrier": r["carrier"],
-            "spend_value": f"{sv:,.2f}", "saved_value": f"{av:,.2f}",
-            "spend_share": f"{sv / spend_total * 100:.0f}%",
-            "saved_share": f"{av / saved_total * 100:.0f}%" if av else "0%",
-            "bookings": r["bookings"],
-        })
-    return {"bars": bars, "w": w, "h": max(len(rows) * row_h, row_h),
-            "label_w": label_w, "spend_total": f"{spend_total:,.2f}",
-            "saved_total": f"{saved_total:,.2f}"}
 
 
 # --- the difference band (Item 3's signature element) -----------------------

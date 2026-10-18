@@ -15,14 +15,13 @@ test asserting exactly that (test_cheaper_market_but_positive_change_total).
 
 import json
 from dataclasses import dataclass, asdict, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
-from pathlib import Path
 
 import eligibility
 import paths
-from eligibility import Eligibility, EligibilityReason
+from eligibility import EligibilityReason
 from prices import Itinerary, Route, SliceSpec
 
 DECISION_LOG = paths.data_path("decisions.log")

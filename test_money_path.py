@@ -39,7 +39,6 @@ load_dotenv(".env")
 import app as app_module
 import billing
 import db
-import policy
 from duffel_http import DuffelError
 
 CSRF = "test-csrf-token"
@@ -642,7 +641,7 @@ def test_duffel_failure_cancels_authorization_not_captures(logged_in_carded):
          patch("billing.authorize_fare", return_value=MagicMock(id="pi_test_2")), \
          patch("billing.cancel_authorization") as mock_cancel, \
          patch("billing.capture_authorization") as mock_capture:
-        resp = client.post("/book", data=book_form(offer["id"]))
+        client.post("/book", data=book_form(offer["id"]))
     mock_cancel.assert_called_once_with("pi_test_2")
     mock_capture.assert_not_called()
     assert db.order_for_offer(account["account_id"], offer["id"]) is None
@@ -1770,7 +1769,7 @@ def test_invoice_lines_for_refuses_a_foreign_account():
     a = new_account()
     b = new_account()
     try:
-        order = make_real_order(a["account_id"])
+        make_real_order(a["account_id"])
         today = datetime.now(timezone.utc).date()  # matches generate_invoice_route()
         invoice = db.generate_invoice(a["account_id"], today, today + timedelta(days=1))
         db.q("""INSERT INTO invoice_lines (invoice_id, line_type, description, amount)

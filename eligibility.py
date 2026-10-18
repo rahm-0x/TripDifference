@@ -283,9 +283,9 @@ def assess(order, max_penalty_ratio=MAX_PENALTY_RATIO, fare_type="cash",
     if confirmed == 0 and denied == 1:
         return Assessment(
             Eligibility.LIKELY_MONITORING, EligibilityReason.CARRIER_SINGLE_DENIAL,
-            f"conditions claim changes are allowed, but the one real order seen from "
-            f"this carrier came back without a 'change' action — one data point, not "
-            f"enough to exclude outright, but not trusted at face value either",
+            "conditions claim changes are allowed, but the one real order seen from "
+            "this carrier came back without a 'change' action — one data point, not "
+            "enough to exclude outright, but not trusted at face value either",
             penalty=penalty, penalty_currency=penalty_currency, penalty_ratio=ratio,
             needs_attention=True)
 

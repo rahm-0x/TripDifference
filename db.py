@@ -14,14 +14,12 @@ templates render come from str(Decimal), which round-trips Duffel's "221.51".
 """
 
 import hashlib
-import json
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
@@ -413,7 +411,6 @@ def upsert_order(record, account_id):
         return _to_record(cur.fetchone())
 
 
-
 # ---------------------------------------------------------------------------
 # idempotency for the calls that move money
 # ---------------------------------------------------------------------------
@@ -698,8 +695,6 @@ def account_card(account_id):
 # ---------------------------------------------------------------------------
 
 
-
-
 def start_session(user_id):
     """Returns the raw cookie value. Only its hash is stored."""
     token = secrets.token_urlsafe(32)
@@ -939,32 +934,6 @@ def weekly_activity(account_id, weeks=8):
                  GROUP BY span.w
                  ORDER BY span.w""", (weeks, account_id), fetch="all")
     return [dict(r) for r in rows]
-
-
-def recent_bookings(account_id, limit=5):
-    rows = q("""SELECT order_id, booking_reference, route, carrier, departure_date,
-                       paid, refunded, currency, monitoring, raw
-                  FROM orders WHERE account_id = %s
-                 ORDER BY created_at DESC LIMIT %s""",
-             (account_id, limit), fetch="all")
-    out = []
-    for r in rows:
-        pax = (r["raw"] or {}).get("passengers") or []
-        lead = pax[0] if pax else {}
-        out.append({
-            "order_id": r["order_id"],
-            "reference": r["booking_reference"],
-            "route": r["route"],
-            "carrier": r["carrier"],
-            "departure_date": r["departure_date"].isoformat() if r["departure_date"] else "",
-            "traveler": f"{lead.get('given_name','')} {lead.get('family_name','')}".strip() or "—",
-            "party": len(pax),
-            "paid": str(r["paid"]) if r["paid"] is not None else "—",
-            "saved": str(r["refunded"]) if r["refunded"] is not None else None,
-            "currency": r["currency"],
-            "monitoring": r["monitoring"],
-        })
-    return out
 
 
 def spend_by_carrier(account_id, top=5):
@@ -1390,14 +1359,6 @@ def account_company_update(account_id, *, legal_name, employee_count, billing_ad
 # savings screen — recovery events and the airline-credit liability register
 # ---------------------------------------------------------------------------
 
-def savings_events_for_account(account_id, limit=200):
-    return q("""SELECT se.*, o.route, o.carrier, o.booking_reference
-               FROM savings_events se
-               JOIN orders o ON o.order_id = se.order_id
-              WHERE o.account_id = %s
-              ORDER BY se.created_at DESC LIMIT %s""",
-             (account_id, limit), fetch="all")
-
 
 def savings_totals_for_account(account_id):
     """Cash and credit are kept apart throughout — different currencies in
@@ -1587,7 +1548,6 @@ def live_search_record(log_id, **fields):
         return
     sets = ", ".join(f"{k} = %s" for k in updates)
     q(f"UPDATE live_search_log SET {sets} WHERE id = %s", (*updates.values(), log_id))
-
 
 
 # ---------------------------------------------------------------------------
@@ -2638,6 +2598,3 @@ def admin_issues():
     return {"captures": captures, "refunds": refunds, "commissions": commissions, "payouts": payouts}
 
 
-def admin_issue_count():
-    i = admin_issues()
-    return sum(len(v) for v in i.values())

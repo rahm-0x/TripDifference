@@ -46,7 +46,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
-from pathlib import Path
 
 import requests
 from dotenv import load_dotenv

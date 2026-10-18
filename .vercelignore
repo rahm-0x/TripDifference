@@ -9,9 +9,8 @@ __pycache__/
 orders.json
 decisions.log
 
-# Local-only: source art, dev deps, the superseded stdlib server, tests
+# Local-only: source art, dev deps, tests
 /tripdifference.png
-/static/
 /requirements-dev.txt
 /test_engine.py
 /test_money_path.py
@@ -21,7 +20,5 @@ decisions.log
 /conftest.py
 /pytest.ini
 /scripts/
-/server.py
-/index.html
 /duffel.py
 /scripts_migrate.py

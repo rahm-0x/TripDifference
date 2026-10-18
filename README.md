@@ -87,5 +87,4 @@ same URL works in both environments.
 `duffel.py` and `duffel_reshop_test.py` are earlier standalone scripts (a CLI spike
 and a Duffel API validation harness) — not imported by `app.py`, not part of the
 deployed app, kept for the sandbox-behaviour notes now folded into
-`docs/architecture.md`. `server.py` and `index.html` are an even earlier
-stdlib-only local UI, fully superseded by the Flask app.
+`docs/architecture.md`.

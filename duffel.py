@@ -321,7 +321,7 @@ def reshop(order_id):
         click.echo("no market offers returned")
 
     # 2. the real question: what does the airline actually charge to change?
-    click.echo(f"\n--- pricing the change via /air/order_change_requests ---")
+    click.echo("\n--- pricing the change via /air/order_change_requests ---")
     ocr = api("POST", "/air/order_change_requests", body={
         "data": {
             "order_id": order_id,

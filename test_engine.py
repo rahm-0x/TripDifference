@@ -12,9 +12,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-import pytest
-
-from engine import (Decision, Outcome, Reason, OrderSnapshot, ReshopPolicy,
+from engine import (Outcome, Reason, OrderSnapshot, ReshopPolicy,
                     evaluate, log_decision)
 from prices import Itinerary, Route, SimulatedPriceSource
 

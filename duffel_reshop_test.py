@@ -797,7 +797,7 @@ def summary():
         LOG(f"   credit entity: {json.dumps(ids, default=str)}")
         LOG(f"   refund_to was '{RESULT['cancel_refund_to']}'.")
     elif credit_refund:
-        LOG(f"   YES, AS A REFUND TYPE — but NO RETRIEVABLE ENTITY.")
+        LOG("   YES, AS A REFUND TYPE — but NO RETRIEVABLE ENTITY.")
         LOG(f"   The cancellation on order {RESULT['cancel_order_id']} settled with")
         LOG(f"   refund_to = '{RESULT['cancel_refund_to']}', so the money came back as a")
         LOG("   credit rather than cash. However no airline credit object was")
