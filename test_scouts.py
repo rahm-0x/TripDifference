@@ -57,8 +57,15 @@ class Ledger:
 
     def purge(self):
         scouts, accounts = self.scouts or [-1], self.accounts or ["00000000-0000-0000-0000-000000000000"]
+        # overrides first: each points at a direct earning (migration 041)
+        db.q("""DELETE FROM scout_earnings WHERE kind = 'override'
+                 AND (scout_id = ANY(%s) OR account_id = ANY(%s::uuid[]))""", (scouts, accounts))
         db.q("DELETE FROM scout_earnings WHERE scout_id = ANY(%s) OR account_id = ANY(%s::uuid[])", (scouts, accounts))
         db.q("DELETE FROM scout_payouts WHERE scout_id = ANY(%s)", (scouts,))
+        # an application's pending invite points at the inviter's code
+        db.q("""UPDATE scouts SET invite_code_id = NULL WHERE invite_code_id IN
+                (SELECT id FROM scout_invite_codes WHERE scout_id = ANY(%s))""", (scouts,))
+        db.q("DELETE FROM scout_invite_codes WHERE scout_id = ANY(%s)", (scouts,))
         own = [r["account_id"] for r in db.q("""SELECT u.account_id FROM scouts s JOIN users u ON u.id = s.user_id
                                                  WHERE s.id = ANY(%s)""", (scouts,), fetch="all")]
         referred = [a for a in accounts if a not in own]
@@ -78,16 +85,18 @@ def ledger():
     led.purge()
 
 
-def make_scout(ledger, *, status="approved", email=None, rate=None):
+def make_scout(ledger, *, status="approved", email=None, rate=None, name="Sam", invited_by=None):
     """A scout on a test account of its own, approved with a code unless told
-    otherwise."""
+    otherwise — applied through `invited_by`'s invite (a make_scout result)
+    when given, so approval makes that scout their master."""
     user = new_account("scout")
     ledger.accounts.append(user["account_id"])
     if email:
-        db.q("UPDATE users SET email = %s, given_name = 'Sam' WHERE id = %s", (email, user["id"]))
+        db.q("UPDATE users SET email = %s, given_name = %s WHERE id = %s", (email, name, user["id"]))
     else:
-        db.q("UPDATE users SET given_name = 'Sam' WHERE id = %s", (user["id"],))
-    scout = db.scout_apply(user["id"], company="Test Scouting", sourcing_plan="tests")
+        db.q("UPDATE users SET given_name = %s WHERE id = %s", (name, user["id"]))
+    invite = db.scout_invite_lookup(invited_by.invite) if invited_by else None
+    scout = db.scout_apply(user["id"], company="Test Scouting", sourcing_plan="tests", invite=invite)
     ledger.scouts.append(scout["id"])
     code = None
     if status != "applied":
@@ -96,7 +105,7 @@ def make_scout(ledger, *, status="approved", email=None, rate=None):
             db.scout_set_rate(scout["id"], Decimal(rate), user["id"])
         if status in ("suspended", "terminated"):
             db.scout_transition(scout["id"], "suspend" if status == "suspended" else "terminate", user["id"])
-    return SimpleNamespace(user=user, id=scout["id"], code=code)
+    return SimpleNamespace(user=user, id=scout["id"], code=code, invite=db.scout_invite_code(scout["id"]))
 
 
 def referred_account(ledger, scout):

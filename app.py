@@ -119,6 +119,7 @@ PUBLIC_ENDPOINTS = frozenset({
     "login", "signup",
     "signup_google",                               # checks the referral code, then Google
     "referral_link",                               # /r/<code>: a scout's link
+    "scout_invite_link",                           # /join/<code>: a scout's invite to scout
     "scout_apply",                                 # applying to be a scout
     "google_auth_start", "google_auth_callback",   # auth callbacks
     "static", "logo",                              # static
@@ -982,6 +983,8 @@ def healthz_env():
         # What the scheduler will do if something calls it.
         "reshop_autopilot_enabled": config.RESHOP_AUTOPILOT_ENABLED,
         "cron_secret_set": bool(config.CRON_SECRET),
+        # Whether master scouts' overrides are being written (migration 041).
+        "master_override_enabled": config.MASTER_OVERRIDE_ENABLED,
         # Whose cards get charged: 'live' is real ones. charges_enabled is
         # Stripe's own answer for a live key (null in test mode, or unasked).
         "stripe_live_enabled": config.STRIPE_LIVE_ENABLED,
@@ -3196,13 +3199,20 @@ def _charge_commission(record, event):
 def _accrue_scout_earning(event):
     """The referring scout's share of a commission that has just been
     collected — written only now, after the charge succeeded and was recorded,
-    never on a fee that is merely owed. Never raises: the rebooking and its
-    fee stand whatever happens here, and the daily /cron/scouts catch-up
-    writes any earning this misses."""
+    never on a fee that is merely owed — then the override of whoever
+    introduced that scout (migration 041), on the earning just written or one
+    a retry finds already there. Never raises, and each write stands on its
+    own: the rebooking and its fee stand whatever happens here, an override
+    that fails never takes the scout's earning with it, and the daily
+    /cron/scouts catch-up writes whatever this misses."""
     try:
         db.scout_earning_accrue(event["id"], config.SCOUT_HOLD_DAYS)
     except Exception as exc:
         print(f"  scout earning for savings event {event.get('id')} not recorded: {type(exc).__name__}: {exc}")
+    try:
+        db.scout_override_accrue(event["id"])
+    except Exception as exc:
+        print(f"  scout override for savings event {event.get('id')} not recorded: {type(exc).__name__}: {exc}")
 
 
 @app.route("/orders/<order_id>/execute/<action>", methods=["POST"])
@@ -3293,7 +3303,52 @@ def scout_required(view):
 
 
 def _scout_page(template, **ctx):
-    return render_template(template, portal="scout", scout=g.scout, **ctx)
+    return render_template(template, portal="scout", scout=g.scout,
+                           master_override_enabled=config.MASTER_OVERRIDE_ENABLED, **ctx)
+
+
+def _scout_apply_page(*, user, form, error=None, status=200, clear_invite=False):
+    """The application, with the invite field in whichever state the visitor
+    is in: locked to the invite a /join/<code> link set (td_scout_ref), or
+    empty, optional and editable. A td_scout_ref that does not verify — or one
+    an application just refused — is dropped here, so the visitor is not
+    stuck behind it."""
+    locked, verified = referrals.invite_locked_code(request.cookies.get(referrals.INVITE_COOKIE))
+    invite = {"code": (form.get("invite_code") or "").strip(), "locked": False, "inviter": None}
+    if locked and not clear_invite:
+        row = db.scout_invite_lookup(locked)
+        invite = {"code": row["code"] if row else locked, "locked": True,
+                  "inviter": referrals.referrer_name(row) if row else None}
+    if user:
+        form = {**form, "given_name": user["given_name"], "family_name": user["family_name"],
+                "email": user["email"]}
+    resp = make_response(render_template(
+        "scout_apply.html", hide_nav=not user, form=form, error=error, signed_in=bool(user), invite=invite,
+        hold_days=config.SCOUT_HOLD_DAYS, payout_minimum=config.SCOUT_PAYOUT_MINIMUM), status)
+    if clear_invite or not verified:
+        resp.delete_cookie(referrals.INVITE_COOKIE)
+    return resp
+
+
+@app.route("/join/<code>")
+def scout_invite_link(code):
+    """A scout's invite to become a scout (migration 041). A code an
+    application can use sets td_scout_ref — signed, httpOnly, 90 days — which
+    locks the application's invite field to it, then goes on to the
+    application. Anything else shows the application with the link refused;
+    it can still be made without one."""
+    user = auth.current_user()
+    if db.referral_recent_failures(_client_ip(), referrals.FAILURE_WINDOW_MIN) >= referrals.MAX_FAILURES:
+        return _scout_apply_page(user=user, form={}, error=referrals.THROTTLED, status=429)
+    row, problem = referrals.invite_check(code)
+    if problem:
+        db.referral_failure_record(_client_ip(), code)
+        return _scout_apply_page(user=user, form={}, error=referrals.INVITE_INACTIVE, status=404)
+    resp = redirect(url_for("scout_apply"))
+    resp.set_cookie(referrals.INVITE_COOKIE, referrals.invite_sign(row["code"]),
+                    max_age=int(referrals.COOKIE_MAX_AGE.total_seconds()),
+                    httponly=True, secure=paths.ON_VERCEL, samesite="Lax")
+    return resp
 
 
 @app.route("/scout/apply", methods=["GET", "POST"])
@@ -3301,28 +3356,33 @@ def scout_apply():
     """Apply to be a scout. A signed-in customer applies as themselves; anyone
     else creates a login here too, on an account attributed to SCOUT-APPLICANT
     (no referral code — a scout is someone TD approves, not someone a scout
-    referred). Either way the application waits for a person to approve it."""
+    referred). Either way the application waits for a person to approve it.
+
+    The invite is optional. With one — from a /join/<code> link, whose code
+    wins over whatever the field says, or typed — the inviter is kept as the
+    pending master and attributed only on approval (db.scout_approve). It is
+    refused from anyone who already has a scout record, so nobody gains a
+    master by applying again, and under the self-referral rules."""
     user = auth.current_user()
-    if user and db.scout_for_user(user["id"]):
+    existing = db.scout_for_user(user["id"]) if user else None
+    # A rejected applicant may apply again (db.scout_apply reopens it).
+    if existing and existing["status"] != "rejected":
         return redirect(url_for("scout_dashboard"))
     form = {k: request.form.get(k, "").strip() for k in
-            ("given_name", "family_name", "email", "company", "sourcing_plan")}
-    terms = {"hold_days": config.SCOUT_HOLD_DAYS, "payout_minimum": config.SCOUT_PAYOUT_MINIMUM}
+            ("given_name", "family_name", "email", "company", "sourcing_plan", "invite_code")}
 
-    def again(msg):
-        return render_template("scout_apply.html", hide_nav=not user, form=form, error=msg,
-                               signed_in=bool(user), **terms), 400
+    def again(msg, status=400, clear_invite=False):
+        return _scout_apply_page(user=user, form=form, error=msg, status=status, clear_invite=clear_invite)
 
-    if request.method == "POST":
-        if request.form.get("agree") != "yes":
-            return again("Accept the scout terms to apply.")
-        if not form["company"] or not form["sourcing_plan"]:
-            return again("Tell us your company or network and how you'll find businesses.")
-        if user:
-            db.scout_apply(user["id"], company=form["company"], sourcing_plan=form["sourcing_plan"])
-            return redirect(url_for("scout_dashboard"))
+    if request.method != "POST":
+        return _scout_apply_page(user=user, form=form)
 
-        email = form["email"].lower()
+    if request.form.get("agree") != "yes":
+        return again("Accept the scout terms to apply.")
+    if not form["company"] or not form["sourcing_plan"]:
+        return again("Tell us your company or network and how you'll find businesses.")
+    email = user["email"] if user else form["email"].lower()
+    if not user:
         if not (form["given_name"] and form["family_name"]):
             return again("First and last name are required.")
         if not email:
@@ -3330,18 +3390,37 @@ def scout_apply():
         problem = auth.password_problem(request.form.get("password", ""), request.form.get("confirm", ""))
         if problem:
             return again(problem)
+
+    invite, refusal = referrals.invite_resolve(cookie_value=request.cookies.get(referrals.INVITE_COOKIE),
+                                               form_code=form["invite_code"], ip=_client_ip())
+    if refusal:
+        message, status = refusal
+        # An invite that can't be used is dropped, so applying again goes ahead without it.
+        return again(message, status, clear_invite=message != referrals.THROTTLED)
+    invite_flag = None
+    if invite:
+        if existing or db.scout_by_email(email):
+            return again(referrals.ALREADY_A_SCOUT.format(email=email), clear_invite=True)
+        verdict, why = referrals.self_invite(email, invite)
+        if verdict == "block":
+            return again(why, clear_invite=True)
+        invite_flag = why if verdict == "flag" else None
+
+    if user:
+        db.scout_apply(user["id"], company=form["company"], sourcing_plan=form["sourcing_plan"],
+                       invite=invite, invite_flag=invite_flag)
+    else:
         if db.email_taken(email):
             return again("An account already exists for that email. Sign in, then apply.")
         new_user = db.create_account(email, auth.hash_password(request.form["password"]),
                                      referral=db.internal_referral_code("SCOUT-APPLICANT"))
         db.user_set_name(new_user["id"], given_name=form["given_name"], family_name=form["family_name"])
-        db.scout_apply(new_user["id"], company=form["company"], sourcing_plan=form["sourcing_plan"])
+        db.scout_apply(new_user["id"], company=form["company"], sourcing_plan=form["sourcing_plan"],
+                       invite=invite, invite_flag=invite_flag)
         auth.sign_in(new_user["id"])
-        return redirect(url_for("scout_dashboard"))
-
-    if user:
-        form.update(given_name=user["given_name"], family_name=user["family_name"], email=user["email"])
-    return render_template("scout_apply.html", hide_nav=not user, form=form, signed_in=bool(user), **terms)
+    resp = redirect(url_for("scout_dashboard"))
+    resp.delete_cookie(referrals.INVITE_COOKIE)
+    return resp
 
 
 def _scout_code(scout_id):
@@ -3351,6 +3430,13 @@ def _scout_code(scout_id):
     return active[-1]["code"] if active else None
 
 
+def _scout_invite_link(scout_id):
+    """The scout's /join/<code> link, or None when they have no active invite
+    code (migration 041)."""
+    code = db.scout_invite_code(scout_id)
+    return url_for("scout_invite_link", code=code, _external=True) if code else None
+
+
 @app.route("/scout")
 @scout_required
 def scout_dashboard():
@@ -3358,7 +3444,10 @@ def scout_dashboard():
     code = _scout_code(scout["id"])
     return _scout_page("scout_dashboard.html", nav="scout_dashboard", code=code,
                        link=url_for("referral_link", code=code, _external=True) if code else None,
+                       invite_link=_scout_invite_link(scout["id"]),
                        balances=db.scout_balances(scout["id"]),
+                       override_balances=db.scout_balances(scout["id"], kind="override"),
+                       introduced=len(db.scout_team(scout["id"])),
                        referred=len(db.scout_referrals(scout["id"])),
                        connected=bool(db.scout_connect_account(scout)),
                        payout_currency=SCOUT_PAYOUT_CURRENCY,
@@ -3371,6 +3460,17 @@ def scout_dashboard():
 def scout_referrals():
     return _scout_page("scout_referrals.html", nav="scout_referrals",
                        referrals=db.scout_referrals(g.scout["id"]))
+
+
+@app.route("/scout/team")
+@scout_required
+def scout_team():
+    """The scouts this scout introduced, and the override earned from each —
+    never which businesses those scouts referred."""
+    scout = g.scout
+    return _scout_page("scout_team.html", nav="scout_team", team=db.scout_team(scout["id"]),
+                       invite_link=_scout_invite_link(scout["id"]),
+                       override_balances=db.scout_balances(scout["id"], kind="override"))
 
 
 @app.route("/scout/earnings")
@@ -3547,11 +3647,13 @@ def _run_scout_payouts(period):
 
 
 def _scout_release():
-    """Write any earning the charge hook missed, then make every earning whose
-    hold has passed available."""
+    """Write any earning the charge hook missed, then any override (before
+    the release, so an override written now is still pending beside its
+    parent), then make every earning whose hold has passed available."""
     accrued = db.scout_earnings_accrue_missing(config.SCOUT_HOLD_DAYS)
+    overrides = db.scout_overrides_accrue_missing()
     released = db.scout_earnings_release()
-    return {"accrued": len(accrued), "released": len(released)}
+    return {"accrued": len(accrued), "overrides": len(overrides), "released": len(released)}
 
 
 @app.route("/cron/scouts")
@@ -3579,6 +3681,7 @@ def admin_scouts():
     return render_template("admin_scouts.html", nav="admin_scouts",
                            scouts=db.scouts_admin_list(search_text, status), flagged=db.referrals_flagged(),
                            q=search_text, status=status, statuses=db.SCOUT_STATUSES,
+                           master_override_enabled=config.MASTER_OVERRIDE_ENABLED,
                            message=request.args.get("m"))
 
 
@@ -3590,7 +3693,9 @@ def _admin_back(message):
 @auth.staff_required
 def admin_scout_approve(scout_id):
     code = db.scout_approve(scout_id, auth.current_user()["id"])
-    return _admin_back(f"Approved — code {code} issued." if code else "That scout isn't awaiting approval.")
+    if not code:
+        return _admin_back("That scout isn't awaiting approval.")
+    return _admin_back(f"Approved — code {code} and invite {db.scout_invite_code(scout_id)} issued.")
 
 
 @app.route("/admin/scouts/<int:scout_id>/status/<action>", methods=["POST"])
@@ -3615,6 +3720,53 @@ def admin_scout_rate(scout_id):
         return _admin_back("The rate must be between 0 and 100%.")
     db.scout_set_rate(scout_id, (percent / 100).quantize(Decimal("0.0001")), auth.current_user()["id"])
     return _admin_back(f"Scout {scout_id}'s rate is now {percent}% for future signups.")
+
+
+@app.route("/admin/scouts/<int:scout_id>/override-rate", methods=["POST"])
+@auth.staff_required
+def admin_scout_override_rate(scout_id):
+    """The share of an introduced scout's earnings this scout gets for scouts
+    they introduce from now on. Scouts already introduced keep their rate."""
+    try:
+        percent = Decimal(request.form.get("override_percent", "").strip())
+    except InvalidOperation:
+        return _admin_back("Enter the override rate as a percentage, e.g. 20.")
+    if not (0 <= percent <= 100):
+        return _admin_back("The override rate must be between 0 and 100%.")
+    db.scout_set_override_rate(scout_id, (percent / 100).quantize(Decimal("0.0001")), auth.current_user()["id"])
+    return _admin_back(f"Scout {scout_id}'s override rate is now {percent}% for future introductions.")
+
+
+@app.route("/admin/introductions", methods=["POST"])
+@auth.staff_required
+def admin_introduction():
+    """Change who introduced a scout, or remove it (master email left blank).
+    Reason required; audited in the same transaction
+    (db.scout_introduction_override). Overrides already written stay where
+    they are."""
+    email = request.form.get("email", "").strip()
+    master_email = request.form.get("master_email", "").strip()
+    reason = request.form.get("reason", "").strip()
+    if not reason:
+        return _admin_back("Changing an introduction needs a reason.")
+    scout = db.scout_by_email(email)
+    if not scout or scout["is_system"]:
+        return _admin_back(f"No scout has the email {email}.")
+    master = None
+    if master_email:
+        master = db.scout_by_email(master_email)
+        if not master or master["is_system"]:
+            return _admin_back(f"No scout has the email {master_email}.")
+        if master["id"] == scout["id"]:
+            return _admin_back("A scout can't be their own master.")
+        if master["status"] != "approved":
+            return _admin_back(f"{master_email} is {master['status']}; only an approved scout can introduce scouts.")
+    new_id = master["id"] if master else None
+    if new_id == scout["introduced_by_scout_id"]:
+        return _admin_back("That's already who introduced them — nothing changed.")
+    db.scout_introduction_override(scout["id"], new_id, reason=reason, staff_user_id=auth.current_user()["id"])
+    return _admin_back(f"{email}: introduced by {master_email}." if master
+                       else f"{email}: introduction removed.")
 
 
 @app.route("/admin/codes/<int:code_id>/deactivate", methods=["POST"])
@@ -3658,7 +3810,8 @@ def admin_scouts_run(job):
     for the current month, so they never pay a scout twice in it."""
     if job == "release":
         r = _scout_release()
-        return _admin_back(f"{r['released']} earning(s) released, {r['accrued']} written by the catch-up.")
+        return _admin_back(f"{r['released']} earning(s) released, {r['accrued']} written by the catch-up"
+                           f" and {r['overrides']} override(s).")
     if job == "payouts":
         r = _run_scout_payouts(datetime.now(timezone.utc).date().replace(day=1))
         return _admin_back(f"{len(r['paid'])} payout(s) made, {len(r['failed'])} failed"
@@ -3799,7 +3952,8 @@ def stripe_webhook():
       account.updated          a scout's connected account: mirror whether it
                                can be paid (scouts.payouts_enabled)
       charge.refunded,         the commission charge on a rebooking was
-      charge.dispute.created   refunded or disputed: reverse the scout's share
+      charge.dispute.created   refunded or disputed: reverse the scout's share,
+                               and a master's override on it with it
                                (db.scout_earning_reverse). Matched on the
                                commission's own PaymentIntent, so a fare
                                refunded to the card never matches.
@@ -3818,9 +3972,9 @@ def stripe_webhook():
         return {"scouts": touched}
     if kind in _COMMISSION_REVERSALS:
         intent = obj.get("payment_intent")
-        outcome = db.scout_earning_reverse(intent, _COMMISSION_REVERSALS[kind],
-                                           config.SCOUT_HOLD_DAYS) if intent else None
-        return {"scout_earning": outcome}
+        outcome, override = db.scout_earning_reverse(intent, _COMMISSION_REVERSALS[kind],
+                                                     config.SCOUT_HOLD_DAYS) if intent else (None, None)
+        return {"scout_earning": outcome, **({"override": override} if override else {})}
     return {"ignored": kind}
 
 

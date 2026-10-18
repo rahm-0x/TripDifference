@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_scout_macros.html" import money, scout_status_tag %}
+{% block title %}Team — Trip Difference{% endblock %}
+{% block crumb %}Scout · Team{% endblock %}
+{% block body %}
+
+<div class="page-head">
+  <h1>Team</h1>
+  <p>Scouts who applied through your invite and were approved. You see how many businesses each has referred and
+     what you've earned from them — never which businesses, or anyone's trips.</p>
+</div>
+
+<div class="card team-invite">
+  <div>
+    <div class="eyebrow">Invite a scout</div>
+    {% if invite_link %}
+    <span class="mono">{{ invite_link }}</span>
+    {% else %}
+    <span class="soft">You don't have an invite link. Contact Trip Difference to get one.</span>
+    {% endif %}
+  </div>
+  <div class="team-total">
+    <span class="k-label">Override earned</span>
+    <div class="k-val">{{ money(override_balances.lifetime) }}</div>
+  </div>
+</div>
+
+<div class="card" style="padding:0; overflow-x:auto">
+  {% if team %}
+  <table>
+    <thead>
+      <tr><th>Scout</th><th>Status</th><th>Approved</th><th class="num">Businesses referred</th>
+          <th class="num">Your rate</th><th class="num">Override earned</th></tr>
+    </thead>
+    <tbody>
+      {% for t in team %}
+      <tr>
+        <td><b>{{ t.given_name }} {{ t.family_name }}</b></td>
+        <td>{{ scout_status_tag(t.status) }}</td>
+        <td class="mono">{{ t.approved_at.strftime('%-d %b %Y') if t.approved_at else '—' }}</td>
+        <td class="num">{{ t.businesses }}</td>
+        <td class="num">{{ t.override_rate|pct }}</td>
+        <td class="num">{{ t.override_earned or '0.00' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="text-align:center; padding:48px 24px">
+    <p class="muted" style="margin:0">No one yet. When someone applies through your invite link and is approved,
+       they appear here.</p>
+  </div>
+  {% endif %}
+</div>
+
+<p class="hint" style="margin-top:14px">
+  {% if master_override_enabled %}
+  Your rate is a share of what each scout earns directly from their own businesses — paid by Trip Difference, never
+  taken from theirs. Nothing is earned on scouts they invite.
+  {% else %}
+  Earning a share of what your team earns isn't switched on yet.
+  {% endif %}
+</p>
+
+<style>
+  .team-invite { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:18px; }
+  .team-invite .mono { font-size:13px; word-break:break-all; }
+  .team-total { text-align:right; flex-shrink:0; }
+  .k-label { font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em;
+             text-transform:uppercase; color:var(--muted-2); display:block; margin-bottom:5px; }
+  .k-val { font-family:'IBM Plex Mono', monospace; font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; }
+  .k-val .cur { font-size:11px; }
+  @media (max-width:720px){ .team-invite { flex-direction:column; align-items:flex-start; } .team-total { text-align:left; } }
+</style>
+
+{% endblock %}

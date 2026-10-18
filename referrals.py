@@ -10,6 +10,9 @@ there is no public code, and no code means no account — by email and password
                         the throttle and check() — or why not
   self_referral(...)    whether the scout is referring themselves
 
+and, for the scout application's invite (migration 041), invite_check,
+invite_resolve and self_invite, the same three for /join/<code>.
+
 The link lock. /r/<code> sets td_ref, a signed cookie holding the code. While it
 is present the signup is attributed to that code and nothing else: a form value
 that differs is refused, not quietly swapped, and a cookie whose signature does
@@ -28,6 +31,9 @@ import db
 COOKIE = "td_ref"
 COOKIE_MAX_AGE = timedelta(days=90)
 
+# Scout-invite codes (migration 041) and nothing else start with this.
+INVITE_PREFIX = "INVITE-"
+
 # Wrong codes per address before it has to wait — the same shape as the login
 # throttle (auth.throttled), counted in Postgres for the same reason.
 MAX_FAILURES = 10
@@ -40,6 +46,8 @@ LOCKED = "This signup is locked to the referral link you arrived with ({code})."
 UNVERIFIED = ("Your referral link couldn't be verified. Open the link again, or clear this "
               "site's cookies and enter the code yourself.")
 THROTTLED = "Too many referral codes tried. Wait a few minutes and try again."
+INVITE_AT_SIGNUP = ("Codes starting with INVITE- are for applying to be a scout, not for opening a business "
+                    "account. Use the referral code a scout gave you.")
 
 # A shared domain here says nothing about who someone works for, so a signup
 # sharing one with its scout is let through and flagged for review instead of
@@ -77,8 +85,9 @@ def custom_code_problem(code):
         return "Use letters, numbers and single hyphens only, starting and ending with a letter or number."
     if code.upper() in _RESERVED:
         return "That name is reserved. Pick another."
-    if code.upper().startswith("SCOUT-"):
-        return "Codes starting with SCOUT- are the ones Trip Difference issues. Pick another."
+    for issued in ("SCOUT-", INVITE_PREFIX):
+        if code.upper().startswith(issued):
+            return f"Codes starting with {issued} are the ones Trip Difference issues. Pick another."
     return None
 
 
@@ -110,6 +119,8 @@ def check(code):
     code = normalize(code)
     if not code:
         return None, MISSING
+    if code.startswith(INVITE_PREFIX):   # an invite is never a business code (migration 041)
+        return None, INVITE_AT_SIGNUP
     row = db.referral_code_lookup(code)
     if not row or row["internal"]:
         return None, INVALID
@@ -150,25 +161,123 @@ def resolve(*, cookie_value, form_code, ip):
     return row, None
 
 
+def _shared_identity(email, scout_email):
+    """What `email` shares with the scout's: 'email', 'company' (a domain that
+    isn't free mail), 'free_mail', or None — with the domain."""
+    email, scout_email = (email or "").strip().lower(), (scout_email or "").strip().lower()
+    if not email or not scout_email:
+        return None, None
+    if email == scout_email:
+        return "email", None
+    domain, scout_domain = email.rpartition("@")[2], scout_email.rpartition("@")[2]
+    if domain and domain == scout_domain:
+        return ("free_mail" if domain in FREE_MAIL else "company"), domain
+    return None, None
+
+
 def self_referral(email, referral):
     """('block', message) when the signup is the scout's own: the same email,
     or the same company domain. ('flag', reason) when it shares only a
     free-mail domain with the scout — let through, and listed for an admin
     (accounts.referral_flag). (None, None) otherwise."""
-    email = (email or "").strip().lower()
-    scout_email = (referral.get("scout_email") or "").strip().lower()
-    if not email or not scout_email:
-        return None, None
-    if email == scout_email:
+    shared, domain = _shared_identity(email, referral.get("scout_email"))
+    if shared == "email":
         return "block", "You can't sign up with your own referral code."
-    domain, scout_domain = email.rpartition("@")[2], scout_email.rpartition("@")[2]
-    if domain and domain == scout_domain:
-        if domain in FREE_MAIL:
-            return "flag", f"Signup email shares the scout's free-mail domain ({domain})."
+    if shared == "company":
         return "block", "This referral code can't be used by someone at the scout's own company."
+    if shared == "free_mail":
+        return "flag", f"Signup email shares the scout's free-mail domain ({domain})."
     return None, None
 
 
 def referrer_name(referral):
     """How the signup form names the scout: their first name, or a fallback."""
     return (referral.get("scout_given_name") or "").strip() or "a Trip Difference scout"
+
+
+# ---------------------------------------------------------------------------
+# scout invites (migration 041)
+# ---------------------------------------------------------------------------
+#
+# /join/<code> sets td_scout_ref, signed under a salt of its own, so a
+# business link's cookie can never stand in for an invite or the other way
+# round. Invite codes live in their own table (db.scout_invite_lookup), so a
+# business code is never found here and an invite never at signup. Unlike
+# signup's lock, this one does not refuse a form value that differs: the
+# invite is optional, so with the cookie present the application uses the
+# cookie's code and ignores the field. Either way the server decides, not the
+# readonly field.
+
+INVITE_COOKIE = "td_scout_ref"
+
+INVITE_INVALID = "That isn't a valid scout invite code. Scout invite codes start with INVITE-."
+INVITE_INACTIVE = "This invite link is no longer active."
+INVITE_UNVERIFIED = ("Your invite link couldn't be verified. Open the link again, or apply without an invite.")
+ALREADY_A_SCOUT = ("{email} already has a scout application or scout account, and an invite can't be added "
+                   "to an existing scout. Apply without the invite, or sign in.")
+
+
+def _invite_serializer():
+    return URLSafeTimedSerializer(current_app.secret_key, salt="td-scout-ref")
+
+
+def invite_sign(code):
+    return _invite_serializer().dumps(normalize(code))
+
+
+def invite_locked_code(cookie_value):
+    """(code, verified) for a td_scout_ref cookie, like locked_code."""
+    if not cookie_value:
+        return None, True
+    try:
+        code = _invite_serializer().loads(cookie_value, max_age=int(COOKIE_MAX_AGE.total_seconds()))
+    except BadSignature:  # SignatureExpired included
+        return None, False
+    return code, True
+
+
+def invite_check(code):
+    """(row, None) when an application may come in on this invite: it exists,
+    is active, and its scout is approved. Else (None, message)."""
+    code = normalize(code)
+    row = db.scout_invite_lookup(code) if code.startswith(INVITE_PREFIX) else None
+    if not row or row["is_system"]:
+        return None, INVITE_INVALID
+    if not row["active"] or row["scout_status"] != "approved":
+        return None, INVITE_INACTIVE
+    return row, None
+
+
+def invite_resolve(*, cookie_value, form_code, ip):
+    """The invite an application is made through: (row, None); (None, None)
+    when it has none, which is allowed; or (None, (message, status)). The
+    cookie's code wins over the form's, then the throttle (shared with
+    referral codes: guessing either kind counts) and invite_check()."""
+    locked, verified = invite_locked_code(cookie_value)
+    if not verified:
+        return None, (INVITE_UNVERIFIED, 400)
+    code = normalize(locked) or normalize(form_code)
+    if not code:
+        return None, None
+    if db.referral_recent_failures(ip, FAILURE_WINDOW_MIN) >= MAX_FAILURES:
+        return None, (THROTTLED, 429)
+    row, problem = invite_check(code)
+    if problem:
+        db.referral_failure_record(ip, code)
+        return None, (problem, 400)
+    return row, None
+
+
+def self_invite(email, invite):
+    """self_referral's rules for an invite: ('block', message) for the
+    inviting scout's own email or company domain, ('flag', reason) for a
+    shared free-mail domain — allowed, and shown to whoever reviews the
+    application (scouts.invite_flag) — else (None, None)."""
+    shared, domain = _shared_identity(email, invite.get("scout_email"))
+    if shared == "email":
+        return "block", "You can't apply with your own invite link."
+    if shared == "company":
+        return "block", "This invite can't be used by someone at the inviting scout's own company."
+    if shared == "free_mail":
+        return "flag", f"Applicant shares the inviting scout's free-mail domain ({domain})."
+    return None, None

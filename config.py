@@ -54,6 +54,10 @@ read).
                                 share of was charged — the customer's dispute window.
   SCOUT_PAYOUT_MINIMUM          Decimal > 0; 25.00 when unset or invalid. A scout's
                                 available balance below this rolls to the next month.
+  MASTER_OVERRIDE_ENABLED       True only when exactly "true" (default false). Writes a
+                                master scout's override (migration 041) beside each direct
+                                earning of a scout they introduced. Off, no override row is
+                                written; invites and introductions are recorded either way.
 """
 
 import os
@@ -155,6 +159,7 @@ _READERS = {
     "STRIPE_WEBHOOK_SECRETS": _webhook_secrets,
     "SCOUT_HOLD_DAYS": _scout_hold_days,
     "SCOUT_PAYOUT_MINIMUM": lambda: _usd("SCOUT_PAYOUT_MINIMUM") or Decimal("25.00"),
+    "MASTER_OVERRIDE_ENABLED": lambda: _flag("MASTER_OVERRIDE_ENABLED"),
 }
 
 

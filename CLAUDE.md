@@ -4,8 +4,9 @@ TripDifference is **merchant of record**. A corporate travel manager books fligh
 employees through the portal; we issue the ticket via Duffel, funded from TD's own
 Duffel balance, charged to the company's card via Stripe (`app.py:book()`); we then
 monitor the fare and exchange to cheaper identical flights, billing a commission on
-what's actually recovered (`accounts.commission_rate`, default 25%) plus a monthly
-subscription (`accounts.subscription_fee`).
+what's actually recovered (`accounts.commission_rate`, default 25%). Revenue is a
+percentage of realized savings only — there is no subscription
+(`accounts.subscription_fee` is deprecated and never billed).
 
 **Only the ticket's owner of record can exchange it.** That single constraint is why
 we issue the ticket rather than bolting onto someone else's booking, and it's the
@@ -34,7 +35,11 @@ notes, and the list of known, deliberate gaps.
   **staging creates, changes and cancels nothing, live or sandbox** — `book()` and
   `execute()` refuse up front and `duffel_http.request()` refuses every non-search call.
   `app.py` runs `config.startup_check()`, `duffel_http.startup_check()`,
-  `billing.startup_check()` (staging needs an `sk_test_` Stripe key) and
+  `billing.startup_check()` (staging needs an `sk_test_` Stripe key — or
+  `STRIPE_LIVE_ENABLED=true`, staging only, which charges real cards through
+  `STRIPE_LIVE_SECRET_KEY`/`STRIPE_LIVE_PUBLISHABLE_KEY` and needs that live pair over a
+  live Duffel token; `config.STRIPE_SECRET_KEY` is the key in use, never read the
+  environment variable directly) and
   `db.startup_check()` (staging must be on Supabase project `bcqzwnoifwkuimrrdysy`,
   production must not) at import. `GET /healthz/env` shows the result without secrets. Every offer request goes through `live_search`: a live
   one is counted against `STAGING_MAX_MONTHLY_SEARCHES` in `live_search_log` first, and
@@ -68,6 +73,31 @@ notes, and the list of known, deliberate gaps.
   integer. `duffel_http.py` checks `Retry-After` first (harmless if absent), falls
   back to date-parsing `ratelimit-reset`, retries once, then gives up
   (`duffel_http.py:59-109`).
+
+### Stays (hotels)
+
+- **Not enabled on this Duffel account, and nothing books a stay yet.** Every `/stays`
+  call answers `403` with a plain-text body (`stays.StaysNotEnabled`); access is
+  requested from Duffel. `stays.py` (calls and value objects) and `stays_engine.py` (the
+  rebook decision) exist and are tested against payloads built from Duffel's published
+  client types — **no real response has been seen**, and there is no route, table or
+  execution path for a stay.
+- **Sandbox-only.** `duffel_http._check_request` refuses any non-`/air` path made with a
+  live token. A stay paid from the Duffel balance carries no `payment` object, so the
+  live spend check (which reads the payment in the body) would otherwise pass it with no
+  `live_guard` reservation. Lifting this needs a spend guard that understands a Stays
+  booking, not a path added to an allowlist.
+- **No exchange — book the cheaper rate, then cancel the old booking.** There is no
+  change endpoint. The saving is `refund if cancelled now − new total`, read from the
+  booked rate's `cancellation_timeline`, never `paid − new total`
+  (`test_the_saving_is_measured_from_the_refund_not_from_what_was_paid`).
+- **Same room on terms at least as good, or it is not a saving** (`stays_engine.not_comparable`):
+  same room name (Duffel gives rooms no stable id), board no worse, cancellation no
+  stricter, same loyalty programme, and payable in full from the balance — a `guarantee`,
+  `deposit` or card-only rate is settled by the hotel, which makes the hotel merchant of
+  record, not TD.
+- A refund on a cancelled stay returns to **TD's Duffel balance**, not the company's
+  card. Passing it on needs a Stripe refund, and `billing.py` has none.
 
 ### Eligibility
 
@@ -106,10 +136,38 @@ notes, and the list of known, deliberate gaps.
   `$0.00` refund from Duffel gets classified as, and it is never billable
   (`savings_events.delivery_type` CHECK constraint; a forfeited event's
   `commission_amount` is always `0.00`).
+- **Commission is on rebooking only.** `savings_events.action` (`exchange | cancel`,
+  migration 034) says which an event was. A cancellation is the customer's own money
+  coming back: `db.savings_event_create` writes it at a rate of zero whatever the
+  account's rate, it is never invoiced or charged, the wallet words it "Booking
+  cancelled", and it is left out of every recovered/saved total. Don't count a
+  `cancel` event as a saving anywhere.
+- **The fee is charged to the card on file when a rebooking delivers its saving**
+  (`app._charge_commission` → `billing.charge_commission`, migration 035): one Stripe
+  charge of the event's `commission_amount`, keyed on the savings event. Only after the
+  saving has reached the customer — for cash that means `_pay_out` succeeded; airline
+  credit counts as delivered. It never raises: a charge that fails is recorded on the
+  event (`commission_charge_failed_at`/`_error`) and stays invoiceable, and one that
+  succeeds stamps `commission_charged_at`, which `db.generate_invoice` skips. The fee
+  is never netted out of the refund.
 - **Cash and credit never net against each other.** `invoice_lines.amount CHECK
   (amount >= 0)` makes that structurally impossible; don't work around it.
-- Cash refunds return to the company's card directly via Duffel and **never appear as
-  an invoice line** — only the commission on them does.
+- **A cash refund does not reach the company's card by itself.** The ticket was bought
+  from TD's Duffel balance, so that is where Duffel returns the money; `_pay_out()`
+  (`app.py`) passes it on with `billing.refund_to_card` — a partial Stripe refund of
+  the order's own PaymentIntent, the whole recovery, keyed on the savings event so a
+  retry cannot pay twice. It runs after the order is marked executed and never raises:
+  a payout that fails is recorded on the event (`payout_failed_at`/`payout_error`,
+  migration 033) and the exchange stands. Airline credit and forfeiture send nothing.
+  The refund **never appears as an invoice line** — only the commission on it does.
+  Not yet seen against a real Duffel refund: that the money lands in the balance is
+  read from how balance payments work, not from a live response.
+- **A saved card belongs to the Stripe mode it was saved under**
+  (`accounts.stripe_livemode`, migration 036). `db.account_stripe_ids` and
+  `db.account_card` return only ids of the mode the key in use is in, so a test card
+  reads as nothing on file under a live key; `billing.ensure_customer` then creates a
+  customer in that mode, which clears the old card. Under a live key a `__pytest__`
+  account is never charged (`billing._card_to_charge`).
 - **`savings_events` is canonical for recovery reporting.** `orders.refunded` is a
   convenience field on that one order — never aggregate it across orders for a
   reported total.
@@ -150,12 +208,61 @@ notes, and the list of known, deliberate gaps.
   way after `/decisions` was found leaking every account's rows to any authenticated
   user. Don't reintroduce an unscoped mode.
 
+### Scouts and referral codes
+
+- **No code, no account.** Every signup — password (`/signup`) or Google (`/signup/google`,
+  then the callback) — needs a real referral code (`referrals.resolve`); there is no public
+  code. `accounts.referral_code_id`, `scout_id`, `scout_rate`, `referred_at` are `NOT NULL`
+  (migration 038), and `db.create_account` takes `referral=` as a required keyword. Accounts
+  from before 038 are on `LEGACY`; a scout applicant who isn't a customer is on
+  `SCOUT-APPLICANT`. Both are internal codes of the one system scout, rate 0, refused at
+  signup. A test account uses `db.internal_referral_code("LEGACY")`.
+- **The `/r/<code>` lock is the server's, not the form's.** `td_ref` is a signed cookie; while
+  it is present a different form code is refused and a cookie that doesn't verify is refused.
+- **Attribution is fixed at signup by a trigger.** The only way past it is
+  `db.account_attribution_override`, which writes its `audit_events` row in the same
+  transaction. `audit_events` rows of kind `referral`/`scout` describe an account:
+  `order_id = ''`, `account_id` set.
+- **A scout earns only on commission actually collected** — `_charge_commission`'s success
+  path calls `_accrue_scout_earning`, and `/cron/scouts` catches up any it missed
+  (`db._EARNING_INSERT` is the rule: `exchange`, `commission_charged_at` set, rate > 0, not a
+  terminated scout). One earning and at most one reversal per savings event and `kind`
+  (unique key `(savings_event_id, kind, entry)`).
+  A refunded or disputed commission (Stripe webhook, matched on
+  `commission_payment_intent_id`) reverses an unpaid earning or writes a negative row that
+  nets against the next payout.
+- **Payouts are USD-only and test-mode-only.** `billing.transfer_to_scout` refuses under a live
+  key. `/cron/scouts` runs daily and pays on the 1st (UTC); like `/cron/reshop` it only fires
+  on production. Connect has to be enabled in the Stripe dashboard — it isn't yet.
+- **Staff is `users.is_staff`, set by hand in SQL** (`auth.staff_required`, `/admin/scouts`).
+  `users.role = 'admin'` is every customer's role in their own account and grants nothing here.
+- **A scout sees earnings, never the client's travel.** `db.scout_referrals` returns no trip,
+  route, traveler or fare data; keep it that way.
+- **Master scouts earn an override, one level deep** (migration 041). An approved scout's
+  invite link is `/join/<INVITE-code>` (`scout_invite_codes`, a table of its own — an invite
+  never opens a business account, a business code never attributes a scout; `td_scout_ref`
+  cookie, whose code wins over the form's). The inviter is attributed only when the
+  application is approved (`scouts.introduced_by_scout_id`, `override_rate` snapshotted from
+  the inviter's `default_override_rate`, 20%); after that a trigger fixes it and only
+  `db.scout_introduction_override` changes it, audited. The override is a `scout_earnings` row
+  of `kind = 'override'` whose `parent_earning_id` is a `direct` earning — never another
+  override — written beside it by `_accrue_scout_earning` and the `/cron/scouts` catch-up,
+  only while `MASTER_OVERRIDE_ENABLED=true`, only while the parent is still `pending`. TD
+  funds it: the scout's own earning never shrinks. A refund or dispute undoes each row by its
+  own state. Override rows never name the business — it's the other scout's client.
+
 ### Behaviour
 
 - **A human confirms every exchange and cancel, unless autopilot is on.** `execute()`
-  requires a typed CONFIRM (`confirm_text == "CONFIRM"`). The one exception is the
-  scheduler with `RESHOP_AUTOPILOT_ENABLED=true` (default false): it calls the same
-  `_execute_action` for an order whose cycle just decided RESHOP.
+  requires a typed CONFIRM (`confirm_text == "CONFIRM"`). With
+  `RESHOP_AUTOPILOT_ENABLED=true` (default false) every recheck — the scheduler and
+  the "Recheck all fares" button — calls the same `_execute_action` with
+  `unattended=True` for an order whose cycle just decided RESHOP.
+- **An unattended exchange never pays.** It acts only on the engine's own RESHOP
+  decision, and stops without confirming if the change Duffel creates is not a refund
+  of at least `min_saving` (10.00). Paying to exchange stays a choice a person makes
+  at CONFIRM. None is started after `CRON_EXECUTE_BY_SECONDS` in a run, because an
+  exchange cut off by the function's time limit could land with nothing recorded.
 - **The scheduler is `GET /cron/reshop`** (`vercel.json` `crons`, daily; a `CRON_SECRET`
   bearer token, and every request is refused while that is unset). It runs `_recheck`
   over `db.orders_due_a_check` — monitored, unexecuted orders across every real
@@ -163,10 +270,11 @@ notes, and the list of known, deliberate gaps.
   `CRON_BUDGET_SECONDS`. **Vercel fires crons on production deployments only**, so on
   staging (a Preview deployment) nothing calls it unless something external does.
 - **"Recheck all fares"** (`POST /orders/recheck`; the button is on Reservations, each
-  trip page and the ops console) runs the same loop for the signed-in account's orders
-  and never executes, whatever the autopilot flag says. A trip page links to the
-  exchange's CONFIRM step once its last decision is a real (non-simulated) RESHOP, so a
-  booked ticket needs nothing from the ops console. There is no per-order cycle button.
+  trip page and the ops console) runs the same loop for the signed-in account's orders,
+  as the person who pressed it. With autopilot off it only decides, and the trip page
+  links to the exchange's CONFIRM step once its last decision is a real (non-simulated)
+  RESHOP. A booked ticket needs nothing from the ops console. There is no per-order
+  cycle button.
 
 ## What's dormant, not deleted
 

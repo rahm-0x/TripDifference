@@ -9,6 +9,13 @@
   <p>Applications, scouts, their codes and rates. Every action here is written to the audit log.</p>
 </div>
 
+<div class="flag-bar {{ 'flag-on' if master_override_enabled else 'flag-off' }}">
+  <span class="tag {{ 'tag-sage' if master_override_enabled else 'tag-mute' }}">{{ 'On' if master_override_enabled else 'Off' }}</span>
+  <span><b>Master scout overrides</b> (MASTER_OVERRIDE_ENABLED) ·
+    {% if master_override_enabled %}overrides are written beside each direct earning of an introduced scout.
+    {% else %}no override is written. Invites and introductions are still recorded.{% endif %}</span>
+</div>
+
 {% if message %}
 <div class="notice" style="margin-bottom:18px"><span>✓</span><div>{{ message }}</div></div>
 {% endif %}
@@ -39,6 +46,13 @@
       <div class="soft">{{ s.company }}</div>
       <p class="plan">{{ s.sourcing_plan }}</p>
       <span class="hint">Applied {{ s.applied_at.strftime('%-d %b %Y') }}</span>
+      {% if s.applied_invite_code %}
+      <div class="invited">Invited by <b>{{ s.inviter_given_name }} {{ s.inviter_family_name }}</b>
+        <span class="soft">· {{ s.inviter_email }} · <span class="mono">{{ s.applied_invite_code }}</span></span>
+        {% if s.inviter_status != 'approved' %}<span class="tag tag-alert">inviter {{ s.inviter_status }}</span>{% endif %}
+        {% if s.invite_flag %}<div class="flag-note">⚑ {{ s.invite_flag }}</div>{% endif %}
+      </div>
+      {% endif %}
     </div>
     <div class="acts">
       <form method="post" action="{{ url_for('admin_scout_approve', scout_id=s.id) }}">
@@ -62,13 +76,16 @@
   {% if others %}
   <table style="margin-top:10px">
     <thead>
-      <tr><th>Scout</th><th>Status</th><th>Codes</th><th class="num">Referred</th><th class="num">Lifetime earned</th>
-          <th>Rate (future signups)</th><th>Payouts</th><th></th></tr>
+      <tr><th>Scout</th><th>Status</th><th>Codes</th><th class="num">Referred</th><th class="num">Introduced</th>
+          <th class="num">Lifetime earned</th><th>Rates (future only)</th><th>Payouts</th><th></th></tr>
     </thead>
     <tbody>
       {% for s in others %}
       <tr>
-        <td><b>{{ s.given_name }} {{ s.family_name }}</b><small class="soft">{{ s.email }}</small></td>
+        <td><b>{{ s.given_name }} {{ s.family_name }}</b><small class="soft">{{ s.email }}</small>
+          <small class="intro">Introduced by
+            {% if s.master_email %}<b>{{ s.master_given_name }} {{ s.master_family_name }}</b> · {{ s.override_rate|pct }}
+            {% else %}—{% endif %}</small></td>
         <td>{{ scout_status_tag(s.status) }}</td>
         <td>
           {% for c in s.codes %}
@@ -82,13 +99,23 @@
             {% endif %}
           </div>
           {% endfor %}
+          {% if s.invite_code %}<div class="code-row"><span class="mono soft">{{ s.invite_code }}</span><span class="hint">invite</span></div>{% endif %}
         </td>
         <td class="num">{{ s.referred }}</td>
+        <td class="num">{{ s.introduced }}</td>
         <td class="num">{{ s.lifetime or '0.00' }}</td>
         <td>
           <form method="post" action="{{ url_for('admin_scout_rate', scout_id=s.id) }}" class="rate-form">
             <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-            <input name="rate_percent" value="{{ (s.default_rate * 100)|round(2) }}" inputmode="decimal" aria-label="Rate percent">
+            <label class="rate-label" for="rate-{{ s.id }}">Signups</label>
+            <input id="rate-{{ s.id }}" name="rate_percent" value="{{ (s.default_rate * 100)|round(2) }}" inputmode="decimal">
+            <span>%</span>
+            <button type="submit" class="btn-sm btn-ghost">Set</button>
+          </form>
+          <form method="post" action="{{ url_for('admin_scout_override_rate', scout_id=s.id) }}" class="rate-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <label class="rate-label" for="override-{{ s.id }}">Override</label>
+            <input id="override-{{ s.id }}" name="override_percent" value="{{ (s.default_override_rate * 100)|round(2) }}" inputmode="decimal">
             <span>%</span>
             <button type="submit" class="btn-sm btn-ghost">Set</button>
           </form>
@@ -127,6 +154,21 @@
       <div class="field"><label for="ov-reason">Reason</label>
         <input id="ov-reason" name="reason" required></div>
       <button type="submit" class="btn-sm">Change attribution</button>
+    </form>
+
+    <h3 style="margin:22px 0 6px">Change who introduced a scout</h3>
+    <p class="hint" style="margin-top:0">An introduction is fixed at approval. This moves a scout to another master —
+       at that master's current override rate — or removes it, and records who did it and why. Overrides already
+       written stay with the master who earned them.</p>
+    <form method="post" action="{{ url_for('admin_introduction') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="field"><label for="in-email">Scout's email</label>
+        <input id="in-email" name="email" type="email" required></div>
+      <div class="field"><label for="in-master">Introduced by (master's email — leave blank to remove)</label>
+        <input id="in-master" name="master_email" type="email"></div>
+      <div class="field"><label for="in-reason">Reason</label>
+        <input id="in-reason" name="reason" required></div>
+      <button type="submit" class="btn-sm">Change introduction</button>
     </form>
   </div>
 
@@ -182,7 +224,14 @@
   .link-btn { background:none; border:0; padding:0; color:var(--gold); font-size:12px; cursor:pointer; }
   .link-btn:hover { background:none; color:var(--gold-hi); text-decoration:underline; }
   .rate-form { display:flex; align-items:center; gap:6px; }
+  .rate-form + .rate-form { margin-top:6px; }
   .rate-form input { width:70px; padding:6px 8px; }
+  .rate-label { width:58px; margin:0; font-size:11.5px; color:var(--muted); text-transform:none; letter-spacing:0; }
+  .flag-bar { display:flex; align-items:center; gap:10px; padding:10px 14px; margin-bottom:18px; font-size:13px;
+              border:1px solid var(--line-soft); border-radius:var(--r); background:var(--surface-2); }
+  .invited { margin-top:8px; font-size:13px; }
+  .flag-note { font-size:12px; color:var(--credit); margin-top:3px; }
+  td small.intro { margin-top:3px; color:var(--muted); }
 </style>
 
 {% endblock %}

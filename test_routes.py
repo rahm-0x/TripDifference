@@ -1,7 +1,7 @@
 """
 Every route requires a signed-in session except the ones app.PUBLIC_ENDPOINTS
 names — landing, the privacy policy and terms, login, signup (and its Google
-step), a scout's /r/<code> link,
+step), a scout's /r/<code> link and /join/<code> invite,
 the scout application, the Google auth callbacks, static files, the
 CRON_SECRET-authenticated schedulers and the signature-authenticated Stripe
 webhook — and /healthz/env reports what a
@@ -32,7 +32,8 @@ LIVE_TOKEN = "duffel_live_" + "0" * 32
 # The allowlist, restated here on purpose: making a route public means editing
 # both app.PUBLIC_ENDPOINTS and this set.
 EXPECTED_PUBLIC = {
-    "index", "privacy", "terms", "login", "signup", "signup_google", "referral_link", "scout_apply",
+    "index", "privacy", "terms", "login", "signup", "signup_google", "referral_link", "scout_invite_link",
+    "scout_apply",
     "google_auth_start", "google_auth_callback",
     "static", "logo",
     "cron_reshop", "cron_scouts", "stripe_webhook",
@@ -419,11 +420,12 @@ def test_healthz_env_reports_identity_without_secrets(logged_in, monkeypatch):
     monkeypatch.setenv("STAGING_ALLOWED_EMAILS", f"someone.else@example.com, {account['email'].upper()}")
     monkeypatch.delenv("RESHOP_AUTOPILOT_ENABLED", raising=False)
     monkeypatch.setenv("CRON_SECRET", "s3cret-cron-value")
+    monkeypatch.delenv("MASTER_OVERRIDE_ENABLED", raising=False)
     body = client.get("/healthz/env").get_json()
     assert set(body) == {"app_env", "vercel_git_commit_sha", "duffel_token_mode", "db_project_ref",
                          "duffel_live_search_enabled", "duffel_live_orders_enabled",
                          "staging_max_order_usd", "staging_max_daily_usd", "viewer_on_live_allowlist",
-                         "reshop_autopilot_enabled", "cron_secret_set",
+                         "reshop_autopilot_enabled", "cron_secret_set", "master_override_enabled",
                          "stripe_live_enabled", "stripe_mode", "stripe_charges_enabled"}
     # the suite runs as dev, against the staging database, with a test token
     assert body["app_env"] == "dev"
@@ -435,6 +437,7 @@ def test_healthz_env_reports_identity_without_secrets(logged_in, monkeypatch):
     assert body["staging_max_order_usd"] == "250.50" and body["staging_max_daily_usd"] is None
     assert body["viewer_on_live_allowlist"] is True
     assert body["reshop_autopilot_enabled"] is False and body["cron_secret_set"] is True
+    assert body["master_override_enabled"] is False
     # Stripe as a mode, and never asked about a test key
     assert body["stripe_live_enabled"] is False and body["stripe_charges_enabled"] is None
 
@@ -456,7 +459,8 @@ def test_healthz_env_on_a_staging_live_search_deploy(monkeypatch, logged_in):
     monkeypatch.setenv("DUFFEL_LIVE_SEARCH_ENABLED", "true")
     monkeypatch.setenv("DUFFEL_TOKEN", LIVE_TOKEN)
     monkeypatch.setenv("VERCEL_GIT_COMMIT_SHA", "abc1234")
-    for name in ("STAGING_MAX_ORDER_USD", "STAGING_MAX_DAILY_USD", "STAGING_ALLOWED_EMAILS", "CRON_SECRET"):
+    for name in ("STAGING_MAX_ORDER_USD", "STAGING_MAX_DAILY_USD", "STAGING_ALLOWED_EMAILS", "CRON_SECRET",
+                 "MASTER_OVERRIDE_ENABLED"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("RESHOP_AUTOPILOT_ENABLED", "true")
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
@@ -469,5 +473,6 @@ def test_healthz_env_on_a_staging_live_search_deploy(monkeypatch, logged_in):
                     "staging_max_order_usd": None, "staging_max_daily_usd": None,
                     "viewer_on_live_allowlist": False,
                     "reshop_autopilot_enabled": True, "cron_secret_set": False,
+                    "master_override_enabled": False,
                     # a live token over a test key: what staging is until told otherwise
                     "stripe_live_enabled": False, "stripe_mode": "test", "stripe_charges_enabled": None}

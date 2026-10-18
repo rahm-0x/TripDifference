@@ -6,27 +6,33 @@
 
 <div class="page-head">
   <h1>Earnings</h1>
-  <p>One line for each fee Trip Difference collected from a business you referred. <b>Pending</b> becomes
-     <b>Available</b> after the hold, and <b>Available</b> is paid on the 1st of the month.</p>
+  <p>One line for each fee Trip Difference collected from a business you referred, and an <b>Override</b> line for
+     each earning of a scout you introduced. <b>Pending</b> becomes <b>Available</b> after the hold, and
+     <b>Available</b> is paid on the 1st of the month.</p>
 </div>
 
 <div class="card" style="padding:0; overflow-x:auto">
   {% if earnings %}
   <table>
     <thead>
-      <tr><th>Date</th><th>Business</th><th class="num">Our fee</th><th class="num">Rate</th>
+      <tr><th>Date</th><th>Type</th><th>From</th><th class="num">Earned on</th><th class="num">Rate</th>
           <th class="num">You earn</th><th>Status</th></tr>
     </thead>
     <tbody>
       {% for e in earnings %}
       <tr>
         <td class="mono">{{ e.created_at.strftime('%-d %b %Y') }}</td>
+        <td>{% if e.kind == 'override' %}<span class="tag tag-credit">Override</span>{% else %}<span class="tag tag-mute">Direct</span>{% endif %}</td>
         <td>
-          {{ e.business }}
+          {# An override never names the business: it's the other scout's client. #}
+          {% if e.kind == 'override' %}from {{ e.from_scout or 'a scout you introduced' }}{% else %}{{ e.business }}{% endif %}
           {% if e.entry == 'reversal' %}<small class="soft">Fee refunded after payout — taken from your next one</small>{% endif %}
           {% if e.status == 'reversed' and e.reversal_reason %}<small class="soft">{{ e.reversal_reason|capitalize }}</small>{% endif %}
         </td>
-        <td class="num">{{ '%.2f'|format(e.commission_amount) }}</td>
+        <td class="num">
+          {% if e.kind == 'override' %}{{ '%.2f'|format(e.base_amount) }}<small class="soft">their earning</small>
+          {% else %}{{ '%.2f'|format(e.commission_amount) }}<small class="soft">our fee</small>{% endif %}
+        </td>
         <td class="num">{{ e.rate|pct }}</td>
         <td class="num {{ 'pos' if e.amount < 0 }}">{{ '%.2f'|format(e.amount) }} <span class="cur">{{ e.currency }}</span></td>
         <td>

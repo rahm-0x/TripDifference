@@ -27,18 +27,37 @@
   <div>Nothing new accrues. Anything you earned before is still paid out once it's available.</div></div>
 {% endif %}
 
-<div class="card ref-card">
-  <div class="eyebrow">Your referral link</div>
-  {% if link %}
-  <div class="ref-row">
-    <input id="ref-link" value="{{ link }}" readonly aria-label="Referral link">
-    <button type="button" class="btn-sm" id="copy-link" data-copy="{{ link }}">Copy link</button>
+{# Two links, kept apart on purpose: one signs up a business, the other only
+   lets someone apply to be a scout (migration 041). #}
+<div class="links">
+  <div class="card ref-card">
+    <div class="eyebrow">Invite a business</div>
+    {% if link %}
+    <div class="ref-row">
+      <input id="ref-link" value="{{ link }}" readonly aria-label="Business referral link">
+      <button type="button" class="btn-sm copy-btn" data-copy="{{ link }}" data-field="ref-link">Copy link</button>
+    </div>
+    <p class="hint">Code <b class="mono">{{ code }}</b> · For a company that books travel. Every business that signs
+       up through it is yours for the life of its account.
+       <a href="{{ url_for('scout_settings') }}#link">Choose your own link</a></p>
+    {% else %}
+    <p class="soft" style="margin:8px 0 0">You don't have an active code. Contact Trip Difference to get a new one.</p>
+    {% endif %}
   </div>
-  <p class="hint">Code <b class="mono">{{ code }}</b> · Every business that signs up through it is yours for
-     the life of its account. <a href="{{ url_for('scout_settings') }}#link">Choose your own link</a></p>
-  {% else %}
-  <p class="soft" style="margin:8px 0 0">You don't have an active code. Contact Trip Difference to get a new one.</p>
-  {% endif %}
+
+  <div class="card ref-card invite-card">
+    <div class="eyebrow">Invite a scout</div>
+    {% if invite_link %}
+    <div class="ref-row">
+      <input id="invite-link" value="{{ invite_link }}" readonly aria-label="Scout invite link">
+      <button type="button" class="btn-sm btn-ghost copy-btn" data-copy="{{ invite_link }}" data-field="invite-link">Copy link</button>
+    </div>
+    <p class="hint">For someone who could refer businesses too. It opens the scout application, not a business
+       account. <a href="{{ url_for('scout_team') }}">Your team</a></p>
+    {% else %}
+    <p class="soft" style="margin:8px 0 0">You don't have an invite link. Contact Trip Difference to get one.</p>
+    {% endif %}
+  </div>
 </div>
 
 <div class="kpis kpis-5">
@@ -66,11 +85,49 @@
   </div>
 </div>
 
+<div class="card override-card">
+  <div class="override-head">
+    <h3>From scouts you introduced</h3>
+    <a href="{{ url_for('scout_team') }}" class="btn btn-sm btn-ghost">View team</a>
+  </div>
+  <div class="kpis kpis-5 kpis-flat">
+    <div class="kpi">
+      <span class="k-label">Scouts introduced</span>
+      <div class="k-val">{{ introduced }}</div>
+    </div>
+    <div class="kpi">
+      <span class="k-label">Override earned</span>
+      <div class="k-val">{{ money(override_balances.lifetime) }}</div>
+    </div>
+    <div class="kpi">
+      <span class="k-label">Pending</span>
+      <div class="k-val">{{ money(override_balances.pending) }}</div>
+    </div>
+    <div class="kpi">
+      <span class="k-label">Available</span>
+      <div class="k-val">{{ money(override_balances.available) }}</div>
+    </div>
+    <div class="kpi">
+      <span class="k-label">Paid</span>
+      <div class="k-val">{{ money(override_balances.paid) }}</div>
+    </div>
+  </div>
+  <p class="hint" style="margin:10px 0 0">Included in the totals above.</p>
+</div>
+
 <div class="card-flat how">
   <h3>How you earn</h3>
   <p>You earn <b>{{ scout.default_rate|pct }}</b> of the fee Trip Difference collects whenever a business you
      referred saves money on a rebooked flight — only once that fee has actually been charged, never on a
      saving that's still pending. Each business keeps the rate it signed up under.</p>
+  {% if master_override_enabled %}
+  <p>When a scout you invited is approved, you also earn <b>{{ scout.default_override_rate|pct }}</b> of what they
+     earn directly from their own businesses, for as long as they do. Trip Difference pays it — it never comes out
+     of their share. Nothing is paid for the introduction itself, and nothing on scouts they invite.</p>
+  {% else %}
+  <p>Scouts you invite are recorded as yours once they're approved. Earning a share of what they earn isn't
+     switched on yet.</p>
+  {% endif %}
   {% if balances.lifetime|reject('equalto', payout_currency)|list %}
   <p class="hint">Earnings in currencies other than {{ payout_currency }} are held until we can pay them out.</p>
   {% endif %}
@@ -79,7 +136,13 @@
 <style>
   .scout-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
   .gate-off { color:var(--muted); }
-  .ref-card { margin-bottom:18px; }
+  .links { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px; }
+  .ref-card { margin:0; }
+  .invite-card { border-left:3px solid var(--line); }
+  .override-card { margin-bottom:22px; }
+  .override-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
+  .kpis-flat { margin-bottom:0; }
+  .kpis-flat .kpi { padding:0; }
   .ref-row { display:flex; gap:8px; margin-top:10px; }
   .ref-row input { flex:1; font-family:'IBM Plex Mono', monospace; font-size:13px; }
   .kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:22px; }
@@ -93,18 +156,17 @@
   .how h3 { margin-bottom:6px; }
   .how p { margin:0 0 6px; font-size:13.5px; color:var(--muted); }
   @media (max-width:1180px){ .kpis { grid-template-columns:repeat(3,1fr); } }
+  @media (max-width:980px){ .links { grid-template-columns:1fr; } }
   @media (max-width:720px){ .kpis { grid-template-columns:repeat(2,1fr); } .ref-row { flex-direction:column; } }
 </style>
 <script>
-  (function () {
-    var btn = document.getElementById('copy-link');
-    if (!btn) return;
+  document.querySelectorAll('.copy-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy link'; }, 1600); };
       if (navigator.clipboard) { navigator.clipboard.writeText(btn.dataset.copy).then(done); }
-      else { var i = document.getElementById('ref-link'); i.select(); document.execCommand('copy'); done(); }
+      else { var i = document.getElementById(btn.dataset.field); i.select(); document.execCommand('copy'); done(); }
     });
-  })();
+  });
 </script>
 
 {% endblock %}

@@ -52,6 +52,25 @@
                   placeholder="Who you know, which industries, roughly how many companies">{{ form.sourcing_plan }}</textarea>
       </div>
 
+      {# Optional. Locked when another scout's /join/<code> link set
+         td_scout_ref — and on the server the cookie's code is the one used,
+         whatever this field says (referrals.invite_resolve). #}
+      <div class="field">
+        <label for="invite_code">Scout invite code <span class="opt">optional</span></label>
+        {% if invite.locked %}
+        <div class="ref-locked">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 9V7a5 5 0 0 0-10 0v2H5v13h14V9h-2zm-8-2a3 3 0 0 1 6 0v2H9V7zm4 10.7V19h-2v-1.3a2 2 0 1 1 2 0z"/></svg>
+          <input id="invite_code" name="invite_code" value="{{ invite.code }}" readonly aria-describedby="invite-who">
+        </div>
+        <p class="hint" id="invite-who">{% if invite.inviter %}Invited by {{ invite.inviter }}. {% endif %}Once you're
+           approved, whoever invited you earns a share that Trip Difference pays — it never comes out of yours.</p>
+        {% else %}
+        <input id="invite_code" name="invite_code" value="{{ invite.code }}" placeholder="INVITE-XXXXX"
+               autocomplete="off" autocapitalize="characters">
+        <p class="hint">If a Trip Difference scout invited you, enter their code. You can apply without one.</p>
+        {% endif %}
+      </div>
+
       <div class="terms">
         <b>Scout terms</b>
         <ul>
@@ -90,6 +109,11 @@
            letter-spacing:0; color:var(--text); }
   .check input { width:auto; }
   .foot { text-align:center; margin-top:18px; font-size:13.5px; color:var(--muted); }
+  .opt { font-weight:400; text-transform:none; letter-spacing:0; color:var(--muted-2); margin-left:4px; }
+  .ref-locked { position:relative; }
+  .ref-locked svg { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--muted); }
+  .ref-locked input { padding-left:34px; background:var(--surface-2); color:var(--text);
+                      font-family:'IBM Plex Mono', monospace; cursor:not-allowed; }
   textarea { width:100%; font:inherit; }
 </style>
 

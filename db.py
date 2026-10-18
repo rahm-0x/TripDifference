@@ -1661,18 +1661,27 @@ def scout(scout_id):
                  WHERE s.id = %s""", (scout_id,), fetch="one")
 
 
-def scout_apply(user_id, *, company, sourcing_plan):
+def scout_apply(user_id, *, company, sourcing_plan, invite=None, invite_flag=None):
     """A scout record for this user, status 'applied', the agreement accepted
     now. One per user: applying again changes nothing unless the last
-    application was rejected, which this reopens."""
-    row = q("""INSERT INTO scouts (user_id, company, sourcing_plan, agreement_accepted_at)
-               VALUES (%s, %s, %s, now())
+    application was rejected, which this reopens.
+
+    `invite` is the scout_invite_lookup() row the application came in on,
+    already checked by referrals.invite_resolve — kept as the pending inviter
+    and attributed only when the application is approved (scout_approve).
+    Reopening a rejected application never adds or changes one: the app
+    refuses an invite from anyone who already has a scout record."""
+    row = q("""INSERT INTO scouts (user_id, company, sourcing_plan, agreement_accepted_at,
+                                   invite_code_id, invite_flag)
+               VALUES (%s, %s, %s, now(), %s, %s)
                ON CONFLICT (user_id) DO UPDATE
                   SET status = 'applied', company = EXCLUDED.company,
                       sourcing_plan = EXCLUDED.sourcing_plan, applied_at = now(),
                       agreement_accepted_at = now(), status_changed_at = now()
                 WHERE scouts.status = 'rejected'
-               RETURNING *""", (user_id, company, sourcing_plan), fetch="one")
+               RETURNING *""",
+            (user_id, company, sourcing_plan, invite["invite_code_id"] if invite else None,
+             invite_flag if invite else None), fetch="one")
     return row or scout_for_user(user_id)
 
 
@@ -1696,16 +1705,32 @@ def _scout_for_update(cur, scout_id):
 
 
 def scout_approve(scout_id, staff_user_id):
-    """applied → approved, with the scout's first code issued, in one
-    transaction. Returns the code, or None when the scout was not awaiting
+    """applied → approved, in one transaction: the scout's first referral code
+    and their invite code issued, and — when they applied through another
+    scout's invite — the introduction recorded (migration 041), at the
+    inviter's override rate as it stands now, with its scout_introduced audit
+    row. Returns the referral code, or None when the scout was not awaiting
     approval."""
     with pool().connection() as conn, conn.cursor() as cur:
         row = _scout_for_update(cur, scout_id)
         if not row or row["status"] != "applied":
             return None
+        inviter = None
+        if row["invite_code_id"]:
+            cur.execute("""SELECT s.id, s.default_override_rate, ic.code::text AS code
+                             FROM scout_invite_codes ic JOIN scouts s ON s.id = ic.scout_id
+                            WHERE ic.id = %s AND NOT s.is_system AND s.id <> %s""",
+                        (row["invite_code_id"], scout_id))
+            inviter = cur.fetchone()
+        # One UPDATE for the status and the introduction: the trigger lets an
+        # introduction be written only by the statement that approves.
         cur.execute("""UPDATE scouts SET status = 'approved', approved_at = now(), approved_by = %s,
-                                         status_changed_at = now()
-                        WHERE id = %s""", (staff_user_id, scout_id))
+                                         status_changed_at = now(), introduced_by_scout_id = %s,
+                                         override_rate = %s,
+                                         introduced_at = CASE WHEN %s THEN now() END
+                        WHERE id = %s""",
+                    (staff_user_id, inviter and inviter["id"], inviter and inviter["default_override_rate"],
+                     inviter is not None, scout_id))
         for _ in range(10):
             cur.execute("""INSERT INTO referral_codes (scout_id, code) VALUES (%s, %s)
                            ON CONFLICT (code) DO NOTHING RETURNING code::text AS code""",
@@ -1715,8 +1740,19 @@ def scout_approve(scout_id, staff_user_id):
                 break
         else:
             raise RuntimeError("could not issue a unique referral code")
-        _scout_audit(cur, row, "approved", f"Scout {scout_id} approved; code {issued['code']} issued",
-                     by=str(staff_user_id), code=issued["code"])
+        invite_code = _issue_invite_code(cur, scout_id)
+        _scout_audit(cur, row, "approved",
+                     f"Scout {scout_id} approved; code {issued['code']} and invite {invite_code} issued",
+                     by=str(staff_user_id), code=issued["code"], invite_code=invite_code)
+        if inviter:
+            _audit_insert(cur, {
+                "kind": "scout_introduced", "outcome": "introduced",
+                "account_id": str(row["own_account_id"]) if row.get("own_account_id") else None,
+                "detail": (f"Scout {scout_id} introduced by scout {inviter['id']} via {inviter['code']}, "
+                           f"override {inviter['default_override_rate']}"),
+                "scout_id": scout_id, "introduced_by_scout_id": inviter["id"], "code": inviter["code"],
+                "override_rate": str(inviter["default_override_rate"]), "flag": row["invite_flag"],
+                "by": str(staff_user_id)})
         return issued["code"]
 
 
@@ -1761,6 +1797,21 @@ def scout_set_rate(scout_id, rate, staff_user_id):
         return True
 
 
+def scout_set_override_rate(scout_id, rate, staff_user_id):
+    """The override rate future introductions by this scout are snapshotted
+    at (migration 041). Scouts already introduced keep theirs."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        row = _scout_for_update(cur, scout_id)
+        if not row:
+            return False
+        cur.execute("UPDATE scouts SET default_override_rate = %s WHERE id = %s", (_num(rate), scout_id))
+        _scout_audit(cur, row, "override_rate_changed",
+                     f"Scout {scout_id} override rate {row['default_override_rate']} → {rate} "
+                     "(future introductions only)",
+                     by=str(staff_user_id), old=str(row["default_override_rate"]), new=str(rate))
+        return True
+
+
 def referral_code_deactivate(code_id, staff_user_id):
     """Stops a code working at signup. Accounts already referred through it are
     unaffected. Internal codes are not deactivated this way."""
@@ -1792,11 +1843,21 @@ SCOUT_STATUSES = ("applied", "approved", "suspended", "terminated", "rejected")
 
 def scouts_admin_list(search="", status=""):
     """Every scout but the system one, applications first — narrowed to those
-    whose name, email, company or any code contains `search`, and to one
-    `status` when given."""
+    whose name, email, company or any code (referral or invite) contains
+    `search`, and to one `status` when given. With each: who introduced them
+    (or, for an application, whose invite it came in on) and how many scouts
+    they have introduced (migration 041)."""
     return q(f"""SELECT s.id, s.status, s.default_rate, s.company, s.sourcing_plan, s.applied_at,
                         s.approved_at, s.payouts_enabled, s.stripe_connect_account_id,
+                        s.default_override_rate, s.override_rate, s.introduced_at, s.invite_flag,
                         u.email, u.given_name, u.family_name,
+                        mu.given_name AS master_given_name, mu.family_name AS master_family_name,
+                        mu.email AS master_email,
+                        ic.code::text AS applied_invite_code, iu.given_name AS inviter_given_name,
+                        iu.family_name AS inviter_family_name, iu.email AS inviter_email,
+                        isc.status AS inviter_status,
+                        (SELECT code::text FROM scout_invite_codes WHERE scout_id = s.id AND active) AS invite_code,
+                        (SELECT count(*) FROM scouts x WHERE x.introduced_by_scout_id = s.id) AS introduced,
                         COALESCE((SELECT json_agg(json_build_object('id', rc.id, 'code', rc.code,
                                                                     'active', rc.active)
                                                   ORDER BY rc.created_at)
@@ -1804,10 +1865,17 @@ def scouts_admin_list(search="", status=""):
                         (SELECT count(*) FROM accounts a WHERE a.scout_id = s.id) AS referred,
                         {_amounts_by_currency("e.scout_id = s.id")} AS lifetime
                    FROM scouts s JOIN users u ON u.id = s.user_id
+                   LEFT JOIN scouts ms ON ms.id = s.introduced_by_scout_id
+                   LEFT JOIN users mu ON mu.id = ms.user_id
+                   LEFT JOIN scout_invite_codes ic ON ic.id = s.invite_code_id
+                   LEFT JOIN scouts isc ON isc.id = ic.scout_id
+                   LEFT JOIN users iu ON iu.id = isc.user_id
                   WHERE NOT s.is_system
                     AND (%(any)s OR u.email ILIKE %(like)s OR u.given_name || ' ' || u.family_name ILIKE %(like)s
                          OR s.company ILIKE %(like)s
-                         OR EXISTS (SELECT 1 FROM referral_codes rc WHERE rc.scout_id = s.id AND rc.code ILIKE %(like)s))
+                         OR EXISTS (SELECT 1 FROM referral_codes rc WHERE rc.scout_id = s.id AND rc.code ILIKE %(like)s)
+                         OR EXISTS (SELECT 1 FROM scout_invite_codes sic
+                                     WHERE sic.scout_id = s.id AND sic.code ILIKE %(like)s))
                     AND (%(status)s = '' OR s.status = %(status)s)
                   ORDER BY (s.status = 'applied') DESC, s.applied_at DESC""",
              {"any": not (search or "").strip(), "like": f"%{(search or '').strip()}%",
@@ -1856,13 +1924,121 @@ def scout_choose_code(scout_id, code, limit):
         return "added"
 
 
-def scout_balances(scout_id):
+# ---------------------------------------------------------------------------
+# scout invites and introductions (migration 041; the rules live in referrals.py)
+# ---------------------------------------------------------------------------
+
+def _new_invite_code():
+    return "INVITE-" + "".join(secrets.choice(_CODE_ALPHABET) for _ in range(5))
+
+
+def _issue_invite_code(cur, scout_id):
+    """The scout's active invite code, issued now if they have none. Called
+    under the scout's row lock (scout_approve), so two can't race."""
+    cur.execute("SELECT code::text AS code FROM scout_invite_codes WHERE scout_id = %s AND active",
+                (scout_id,))
+    row = cur.fetchone()
+    if row:
+        return row["code"]
+    for _ in range(10):
+        cur.execute("""INSERT INTO scout_invite_codes (scout_id, code) VALUES (%s, %s)
+                       ON CONFLICT (code) DO NOTHING RETURNING code::text AS code""",
+                    (scout_id, _new_invite_code()))
+        issued = cur.fetchone()
+        if issued:
+            return issued["code"]
+    raise RuntimeError("could not issue a unique invite code")
+
+
+_INVITE_COLS = """ic.id AS invite_code_id, ic.code::text AS code, ic.active,
+                  s.id AS scout_id, s.status AS scout_status, s.default_override_rate, s.is_system,
+                  u.email AS scout_email, u.given_name AS scout_given_name"""
+
+
+def scout_invite_lookup(code):
+    """An invite code and the scout behind it, or None. Looks in
+    scout_invite_codes only, so a business referral code is never found here.
+    Whether an application may use it is referrals.invite_check's to say."""
+    code = (code or "").strip()
+    if not code:
+        return None
+    return q(f"""SELECT {_INVITE_COLS}
+                   FROM scout_invite_codes ic
+                   JOIN scouts s ON s.id = ic.scout_id
+                   LEFT JOIN users u ON u.id = s.user_id
+                  WHERE ic.code = %s""", (code,), fetch="one")
+
+
+def scout_invite_code(scout_id):
+    row = q("SELECT code::text AS code FROM scout_invite_codes WHERE scout_id = %s AND active",
+            (scout_id,), fetch="one")
+    return row["code"] if row else None
+
+
+def scout_by_email(email):
+    """The scout record of whoever has this login email, whatever its status."""
+    return q("""SELECT s.* FROM scouts s JOIN users u ON u.id = s.user_id
+                 WHERE u.email = %s""", ((email or "").strip(),), fetch="one")
+
+
+def scout_introduction_override(scout_id, master_scout_id, *, reason, staff_user_id):
+    """Change who introduced a scout, or remove the introduction
+    (master_scout_id None). The one way past the introduction trigger
+    (migration 041): it opens the override for this transaction only and
+    writes the introduction_override audit row in the same transaction. A new
+    master's override rate is their current default; overrides already
+    written stay with the master who earned them. Returns the previous
+    master's id (None when there was none), or False when there is no such
+    scout."""
+    with pool().connection() as conn, conn.cursor() as cur:
+        row = _scout_for_update(cur, scout_id)
+        if not row:
+            return False
+        rate = None
+        if master_scout_id is not None:
+            cur.execute("SELECT default_override_rate FROM scouts WHERE id = %s", (master_scout_id,))
+            rate = cur.fetchone()["default_override_rate"]
+        cur.execute("SELECT set_config('td.introduction_override', 'on', true)")
+        cur.execute("""UPDATE scouts SET introduced_by_scout_id = %s, override_rate = %s,
+                                         introduced_at = CASE WHEN %s THEN NULL
+                                                              ELSE COALESCE(introduced_at, now()) END
+                        WHERE id = %s""", (master_scout_id, rate, master_scout_id is None, scout_id))
+        _audit_insert(cur, {
+            "kind": "introduction_override", "outcome": "removed" if master_scout_id is None else "changed",
+            "account_id": str(row["own_account_id"]) if row.get("own_account_id") else None,
+            "detail": (f"Scout {scout_id} introduction changed from scout {row['introduced_by_scout_id']} to "
+                       f"{'none' if master_scout_id is None else f'scout {master_scout_id}'}: {reason}"),
+            "scout_id": scout_id, "by": str(staff_user_id), "reason": reason,
+            "from_scout_id": row["introduced_by_scout_id"],
+            "from_rate": str(row["override_rate"]) if row["override_rate"] is not None else None,
+            "to_scout_id": master_scout_id, "to_rate": str(rate) if rate is not None else None})
+        return row["introduced_by_scout_id"]
+
+
+def scout_team(scout_id):
+    """One row per scout this scout introduced: name, status, when approved,
+    how many businesses they have referred, and the override earned from them.
+    Never which businesses, and nothing about anyone's travel."""
+    return q(f"""SELECT s.id, u.given_name, u.family_name, s.status, s.approved_at, s.introduced_at,
+                        s.override_rate,
+                        (SELECT count(*) FROM accounts a WHERE a.scout_id = s.id) AS businesses,
+                        {_amounts_by_currency(
+                            "e.kind = 'override' AND e.scout_id = %(master)s AND EXISTS "
+                            "(SELECT 1 FROM scout_earnings p WHERE p.id = e.parent_earning_id AND p.scout_id = s.id)")}
+                            AS override_earned
+                   FROM scouts s JOIN users u ON u.id = s.user_id
+                  WHERE s.introduced_by_scout_id = %(master)s
+                  ORDER BY s.introduced_at DESC""", {"master": scout_id}, fetch="all")
+
+
+def scout_balances(scout_id, kind=None):
     """{'pending'|'available'|'paid'|'lifetime': {currency: Decimal}} — a
     reversal row (negative) nets inside whichever status it holds; a reversed
-    earning counts nowhere."""
+    earning counts nowhere. Every kind of earning, or only 'direct' or
+    'override' ones when `kind` says."""
     rows = q("""SELECT currency, status, sum(amount) AS total FROM scout_earnings
-                 WHERE scout_id = %s AND status <> 'reversed'
-                 GROUP BY currency, status""", (scout_id,), fetch="all")
+                 WHERE scout_id = %s AND status <> 'reversed' AND (%s::text IS NULL OR kind = %s)
+                 GROUP BY currency, status""", (scout_id, kind, kind), fetch="all")
     out = {k: {} for k in ("pending", "available", "paid", "lifetime")}
     for r in rows:
         out[r["status"]][r["currency"]] = out[r["status"]].get(r["currency"], Decimal("0")) + r["total"]
@@ -1879,15 +2055,25 @@ def scout_referrals(scout_id):
                         EXISTS (SELECT 1 FROM orders o WHERE o.account_id = a.id) AS has_orders,
                         (SELECT count(*) FROM savings_events se JOIN orders o ON o.order_id = se.order_id
                           WHERE o.account_id = a.id AND se.action = 'exchange') AS savings_events,
-                        {_amounts_by_currency("e.account_id = a.id AND e.scout_id = a.scout_id")} AS earned
+                        {_amounts_by_currency(
+                            "e.account_id = a.id AND e.scout_id = a.scout_id AND e.kind = 'direct'")} AS earned
                    FROM accounts a
                   WHERE a.scout_id = %s
                   ORDER BY a.referred_at DESC""", (scout_id,), fetch="all")
 
 
 def scout_earnings_ledger(scout_id, limit=500):
-    return q("""SELECT e.*, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business
-                  FROM scout_earnings e JOIN accounts a ON a.id = e.account_id
+    """Every row of the scout's ledger. A direct row carries the business it
+    came from; an override row carries only the first name of the scout whose
+    earning it is a share of, and that earning's amount (base_amount) — never
+    the business behind it, which is that scout's client, not this one's."""
+    return q("""SELECT e.*, COALESCE(NULLIF(a.legal_name, ''), a.name) AS business,
+                       pu.given_name AS from_scout, p.amount AS base_amount
+                  FROM scout_earnings e
+                  LEFT JOIN accounts a ON a.id = e.account_id AND e.kind = 'direct'
+                  LEFT JOIN scout_earnings p ON p.id = e.parent_earning_id
+                  LEFT JOIN scouts ps ON ps.id = p.scout_id
+                  LEFT JOIN users pu ON pu.id = ps.user_id
                  WHERE e.scout_id = %s
                  ORDER BY e.created_at DESC, e.id DESC LIMIT %s""", (scout_id, limit), fetch="all")
 
@@ -1995,9 +2181,9 @@ def referral_flag_reviewed(account_id):
 # zero (LEGACY, SCOUT-APPLICANT), never the system scout, never a terminated
 # scout.
 _EARNING_INSERT = """
-INSERT INTO scout_earnings (scout_id, account_id, savings_event_id, entry, commission_amount, rate,
+INSERT INTO scout_earnings (scout_id, account_id, savings_event_id, kind, entry, commission_amount, rate,
                             amount, currency, status, available_at, reversed_at, reversal_reason)
-SELECT a.scout_id, a.id, se.id, 'earning', se.commission_amount, a.scout_rate,
+SELECT a.scout_id, a.id, se.id, 'direct', 'earning', se.commission_amount, a.scout_rate,
        round(se.commission_amount * a.scout_rate, 2), se.currency, %(status)s,
        se.commission_charged_at + make_interval(days => %(hold_days)s),
        CASE WHEN %(status)s = 'reversed' THEN now() END, %(reason)s
@@ -2011,7 +2197,37 @@ SELECT a.scout_id, a.id, se.id, 'earning', se.commission_amount, a.scout_rate,
    AND round(se.commission_amount * a.scout_rate, 2) > 0
    AND NOT s.is_system AND s.status <> 'terminated'
    AND {where}
-ON CONFLICT (savings_event_id, entry) DO NOTHING
+ON CONFLICT (savings_event_id, kind, entry) DO NOTHING
+RETURNING *"""
+
+# A master's override (migration 041): a share, at the introduced scout's
+# snapshotted override_rate, of one direct earning — never of another
+# override, so it goes one level deep and no further. It mirrors its parent:
+# the same commission, currency, status and available_at, so the daily
+# release flips both together. Written only while the parent is still pending
+# — inside its hold, before it can be paid or have been reversed — so a child
+# is always born pending beside its parent; never to the system scout or a
+# terminated master (a suspended one still accrues); never as a row of 0.00;
+# and only while MASTER_OVERRIDE_ENABLED is on (the callers check).
+# FOR SHARE OF d: a reversal of the parent in flight finishes first, and the
+# parent is then no longer pending.
+_OVERRIDE_INSERT = """
+INSERT INTO scout_earnings (scout_id, account_id, savings_event_id, kind, entry, parent_earning_id,
+                            commission_amount, rate, amount, currency, status, available_at)
+SELECT m.id, d.account_id, d.savings_event_id, 'override', 'earning', d.id,
+       d.commission_amount, s.override_rate, round(d.amount * s.override_rate, 2),
+       d.currency, d.status, d.available_at
+  FROM scout_earnings d
+  JOIN scouts s ON s.id = d.scout_id
+  JOIN scouts m ON m.id = s.introduced_by_scout_id
+ WHERE d.kind = 'direct' AND d.entry = 'earning'
+   AND d.status = 'pending'
+   AND s.override_rate > 0
+   AND round(d.amount * s.override_rate, 2) > 0
+   AND NOT m.is_system AND m.status <> 'terminated'
+   AND {where}
+   FOR SHARE OF d
+ON CONFLICT (savings_event_id, kind, entry) DO NOTHING
 RETURNING *"""
 
 
@@ -2027,9 +2243,32 @@ def scout_earning_accrue(savings_event_id, hold_days):
 def scout_earnings_accrue_missing(hold_days):
     """The daily catch-up: every collected commission that should have an
     earning and does not, should the hook in app._charge_commission have
-    failed. Idempotent by the (savings_event_id, entry) key."""
+    failed. Idempotent by the (savings_event_id, kind, entry) key."""
     return q(_EARNING_INSERT.format(where="true"),
              {"status": "pending", "hold_days": hold_days, "reason": None}, fetch="all")
+
+
+def scout_override_accrue(savings_event_id):
+    """The master's override on the direct earning for one savings event, or
+    None: the switch is off, nothing is owed (see _OVERRIDE_INSERT), or the
+    override already exists. Separate from scout_earning_accrue on purpose —
+    a failure here never undoes the direct earning, and the daily catch-up
+    (scout_overrides_accrue_missing) retries it."""
+    if not config.MASTER_OVERRIDE_ENABLED:
+        return None
+    return q(_OVERRIDE_INSERT.format(where="d.savings_event_id = %(event)s"),
+             {"event": savings_event_id}, fetch="one")
+
+
+def scout_overrides_accrue_missing():
+    """The daily catch-up for overrides the hook did not write. Idempotent by
+    the (savings_event_id, kind, entry) key. Because a parent must still be
+    pending, a failed write has the whole hold (SCOUT_HOLD_DAYS) to be
+    retried, and switching MASTER_OVERRIDE_ENABLED on reaches back no further
+    than the earnings still inside it."""
+    if not config.MASTER_OVERRIDE_ENABLED:
+        return []
+    return q(_OVERRIDE_INSERT.format(where="true"), {}, fetch="all")
 
 
 def scout_earnings_release():
@@ -2039,56 +2278,82 @@ def scout_earnings_release():
                 RETURNING id, scout_id, amount, currency""", fetch="all")
 
 
+def _reverse_earning(cur, earning, reason):
+    """Undo one earning row, direct or override, by its own state: 'reversed'
+    while it is unpaid, 'clawback' — a negative row of the same kind, netting
+    against the scout's next payout — once it is paid or in a payout being
+    made, 'already' when that was done before."""
+    if earning["status"] == "reversed":
+        return "already"
+    if earning["status"] in ("pending", "available") and earning["payout_id"] is None:
+        cur.execute("""UPDATE scout_earnings SET status = 'reversed', reversed_at = now(),
+                                                 reversal_reason = %s
+                        WHERE id = %s""", (reason, earning["id"]))
+        return "reversed"
+    cur.execute("""INSERT INTO scout_earnings
+                       (scout_id, account_id, savings_event_id, kind, entry, parent_earning_id,
+                        commission_amount, rate, amount, currency, status, available_at, reversal_reason)
+                   VALUES (%s, %s, %s, %s, 'reversal', %s, %s, %s, %s, %s, 'available', now(), %s)
+                   ON CONFLICT (savings_event_id, kind, entry) DO NOTHING RETURNING id""",
+                (earning["scout_id"], earning["account_id"], earning["savings_event_id"], earning["kind"],
+                 earning["parent_earning_id"], earning["commission_amount"], earning["rate"],
+                 -earning["amount"], earning["currency"], reason))
+    return "clawback" if cur.fetchone() else "already"
+
+
 def scout_earning_reverse(payment_intent_id, reason, hold_days):
     """The commission charge behind an earning was refunded or disputed.
     Matched on savings_events.commission_payment_intent_id, so a refund of a
-    fare (refund_to_card) never matches. Returns what happened:
+    fare (refund_to_card) never matches. Returns (direct, override): what
+    happened to the referring scout's earning, and to a master's override on
+    it (migration 041) — each one of:
 
-      None             not a commission charge, or no scout is owed anything on it
+      None             not a commission charge, or nothing is owed on it
       'reversed'       an unpaid earning, now reversed
       'clawback'       the earning was paid (or is in a payout being made): a
                        negative row now nets against the scout's next payout
       'already'        reversed before
-      'never_accrued'  recorded as reversed, so the catch-up never pays it
+      'never_accrued'  (direct only) recorded as reversed, so the catch-up
+                       never pays it — nor writes an override on it
+
+    The override follows its parent in the same transaction, each decided by
+    its own state: the two scouts are paid separately, so one can be paid
+    while the other is not.
     """
     with pool().connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT id FROM savings_events WHERE commission_payment_intent_id = %s",
                     (payment_intent_id,))
         event = cur.fetchone()
         if not event:
-            return None
-        cur.execute("""SELECT * FROM scout_earnings WHERE savings_event_id = %s AND entry = 'earning'
+            return None, None
+        cur.execute("""SELECT * FROM scout_earnings
+                        WHERE savings_event_id = %s AND kind = 'direct' AND entry = 'earning'
                        FOR UPDATE""", (event["id"],))
         earning = cur.fetchone()
         if earning is None:
             cur.execute(_EARNING_INSERT.format(where="se.id = %(event)s"),
                         {"status": "reversed", "hold_days": hold_days, "reason": reason,
                          "event": event["id"]})
-            return "never_accrued" if cur.fetchone() else None
-        if earning["status"] == "reversed":
-            return "already"
-        if earning["status"] in ("pending", "available") and earning["payout_id"] is None:
-            cur.execute("""UPDATE scout_earnings SET status = 'reversed', reversed_at = now(),
-                                                     reversal_reason = %s
-                            WHERE id = %s""", (reason, earning["id"]))
-            outcome = "reversed"
-        else:
-            cur.execute("""INSERT INTO scout_earnings
-                               (scout_id, account_id, savings_event_id, entry, commission_amount, rate,
-                                amount, currency, status, available_at, reversal_reason)
-                           VALUES (%s, %s, %s, 'reversal', %s, %s, %s, %s, 'available', now(), %s)
-                           ON CONFLICT (savings_event_id, entry) DO NOTHING RETURNING id""",
-                        (earning["scout_id"], earning["account_id"], earning["savings_event_id"],
-                         earning["commission_amount"], earning["rate"], -earning["amount"],
-                         earning["currency"], reason))
-            outcome = "clawback" if cur.fetchone() else "already"
-        if outcome != "already":
-            cur.execute("SELECT s.*, u.account_id AS own_account_id FROM scouts s "
-                        "LEFT JOIN users u ON u.id = s.user_id WHERE s.id = %s", (earning["scout_id"],))
-            _scout_audit(cur, cur.fetchone(), f"earning_{outcome}",
-                         f"Earning on savings event {event['id']} {outcome}: {reason}",
-                         savings_event_id=event["id"], amount=str(earning["amount"]))
-        return outcome
+            return ("never_accrued" if cur.fetchone() else None), None
+        outcomes = []
+        cur.execute("""SELECT * FROM scout_earnings
+                        WHERE savings_event_id = %s AND kind = 'override' AND entry = 'earning'
+                       FOR UPDATE""", (event["id"],))
+        override = cur.fetchone()
+        for row in (earning, override):
+            if row is None:
+                outcomes.append(None)
+                continue
+            outcome = _reverse_earning(cur, row, reason)
+            outcomes.append(outcome)
+            if outcome != "already":
+                cur.execute("SELECT s.*, u.account_id AS own_account_id FROM scouts s "
+                            "LEFT JOIN users u ON u.id = s.user_id WHERE s.id = %s", (row["scout_id"],))
+                label = "earning" if row["kind"] == "direct" else "override"
+                _scout_audit(cur, cur.fetchone(), f"{label}_{outcome}",
+                             f"{label.capitalize()} on savings event {event['id']} {outcome}: {reason}",
+                             savings_event_id=event["id"], amount=str(row["amount"]))
+        return tuple(outcomes)
 
 
 # ---------------------------------------------------------------------------
