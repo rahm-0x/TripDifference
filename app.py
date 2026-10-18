@@ -122,7 +122,7 @@ PUBLIC_ENDPOINTS = frozenset({
     "scout_invite_link",                           # /join/<code>: a scout's invite to scout
     "scout_apply",                                 # applying to be a scout
     "google_auth_start", "google_auth_callback",   # auth callbacks
-    "static", "logo",                              # static
+    "static", "logo", "og_image",                  # static
     # Server-to-server: Vercel Cron can't hold a session. Authenticated by a
     # CRON_SECRET bearer token instead, and refused without one.
     "cron_reshop", "cron_scouts",
@@ -1002,6 +1002,12 @@ def logo():
     request ever reaches this function (docs: don't use Flask's static_folder).
     """
     return send_from_directory(HERE / "public", "logo.png")
+
+
+@app.route("/og.png")
+def og_image():
+    """The link-preview banner (templates/_og_meta.html). Local-dev only, like logo()."""
+    return send_from_directory(HERE / "public", "og.png")
 
 
 def _safe_next(target, default=None):

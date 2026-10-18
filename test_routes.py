@@ -35,7 +35,7 @@ EXPECTED_PUBLIC = {
     "index", "privacy", "terms", "login", "signup", "signup_google", "referral_link", "scout_invite_link",
     "scout_apply",
     "google_auth_start", "google_auth_callback",
-    "static", "logo",
+    "static", "logo", "og_image",
     "cron_reshop", "cron_scouts", "stripe_webhook",
 }
 
