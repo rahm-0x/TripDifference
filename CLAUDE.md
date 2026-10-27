@@ -231,8 +231,9 @@ notes, and the list of known, deliberate gaps.
   A refunded or disputed commission (Stripe webhook, matched on
   `commission_payment_intent_id`) reverses an unpaid earning or writes a negative row that
   nets against the next payout.
-- **Payouts are USD-only and test-mode-only.** `billing.transfer_to_scout` refuses under a live
-  key. `/cron/scouts` runs daily and pays on the 1st (UTC); like `/cron/reshop` it only fires
+- **Payouts are USD-only, and live ones are behind a switch.** `billing.transfer_to_scout`
+  refuses under a live key unless `SCOUT_LIVE_PAYOUTS_ENABLED=true` (default false). Only
+  staging can hold a live key (`STRIPE_LIVE_ENABLED`), so that is the only place it applies. `/cron/scouts` runs daily and pays on the 1st (UTC); like `/cron/reshop` it only fires
   on production. Connect has to be enabled in the Stripe dashboard — it isn't yet.
 - **Staff is `users.is_staff`, set by hand in SQL** (`auth.staff_required`, `/admin/scouts`).
   `users.role = 'admin'` is every customer's role in their own account and grants nothing here.

@@ -54,6 +54,11 @@ read).
                                 share of was charged — the customer's dispute window.
   SCOUT_PAYOUT_MINIMUM          Decimal > 0; 25.00 when unset or invalid. A scout's
                                 available balance below this rolls to the next month.
+  SCOUT_LIVE_PAYOUTS_ENABLED    True only when exactly "true" (default false). Lets a scout
+                                payout go out as a real transfer under a live Stripe key
+                                (billing.transfer_to_scout). Off, a live key pays nobody
+                                and the payout is recorded as failed, its earnings back in
+                                the pool for the next run. No effect under a test key.
   MASTER_OVERRIDE_ENABLED       True only when exactly "true" (default false). Writes a
                                 master scout's override (migration 041) beside each direct
                                 earning of a scout they introduced. Off, no override row is
@@ -159,6 +164,7 @@ _READERS = {
     "STRIPE_WEBHOOK_SECRETS": _webhook_secrets,
     "SCOUT_HOLD_DAYS": _scout_hold_days,
     "SCOUT_PAYOUT_MINIMUM": lambda: _usd("SCOUT_PAYOUT_MINIMUM") or Decimal("25.00"),
+    "SCOUT_LIVE_PAYOUTS_ENABLED": lambda: _flag("SCOUT_LIVE_PAYOUTS_ENABLED"),
     "MASTER_OVERRIDE_ENABLED": lambda: _flag("MASTER_OVERRIDE_ENABLED"),
 }
 

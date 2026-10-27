@@ -490,10 +490,27 @@ def test_a_failed_transfer_returns_the_earnings_to_the_pool(ledger, monkeypatch)
     assert payout["status"] == "paid" and payout["attempts"] == 2
 
 
-def test_transfers_refuse_a_live_key(monkeypatch):
+@pytest.mark.parametrize("flag", [None, "", "false", "TRUE", "1"])
+def test_transfers_refuse_a_live_key_unless_live_payouts_are_on(monkeypatch, flag):
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_not_a_real_key")
-    with pytest.raises(billing.PayoutError, match="test mode only"):
-        billing.transfer_to_scout("acct_x", amount=Decimal("30"), currency="USD", payout_id=1, attempt=1)
+    if flag is None:
+        monkeypatch.delenv("SCOUT_LIVE_PAYOUTS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("SCOUT_LIVE_PAYOUTS_ENABLED", flag)
+    with patch.object(billing, "_client") as client:
+        with pytest.raises(billing.PayoutError, match="live scout payouts are not switched on"):
+            billing.transfer_to_scout("acct_x", amount=Decimal("30"), currency="USD", payout_id=1, attempt=1)
+    client.assert_not_called()
+
+
+def test_a_live_key_transfers_once_live_payouts_are_on(monkeypatch):
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_not_a_real_key")
+    monkeypatch.setenv("SCOUT_LIVE_PAYOUTS_ENABLED", "true")
+    with patch.object(billing, "_client") as client:
+        billing.transfer_to_scout("acct_x", amount=Decimal("30"), currency="USD", payout_id=7, attempt=2)
+    client.return_value.Transfer.create.assert_called_once_with(
+        amount=3000, currency="usd", destination="acct_x", transfer_group="scout-payout-7",
+        metadata={"scout_payout_id": "7"}, idempotency_key="scout-payout-7-2")
 
 
 # ---------------------------------------------------------------------------

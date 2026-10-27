@@ -365,11 +365,11 @@ def transfer_to_scout(connect_account_id, *, amount, currency, payout_id, attemp
     made (scout_transfer_for); the idempotency key names the attempt, so a
     retry of the same attempt never pays twice.
 
-    Test mode only, for now: under a live key this refuses. Real money to a
-    real scout is switched on deliberately, not by a staging deploy that
-    happens to hold a live key."""
-    if config.STRIPE_LIVEMODE:
-        raise PayoutError("scout payouts run in Stripe test mode only; live transfers are not switched on")
+    Under a live key this refuses unless SCOUT_LIVE_PAYOUTS_ENABLED is on:
+    real money to a real scout is switched on deliberately, not by a staging
+    deploy that happens to hold a live key."""
+    if config.STRIPE_LIVEMODE and not config.SCOUT_LIVE_PAYOUTS_ENABLED:
+        raise PayoutError("live scout payouts are not switched on (SCOUT_LIVE_PAYOUTS_ENABLED)")
     try:
         return _client().Transfer.create(
             amount=_to_minor_units(amount), currency=currency.lower(),
