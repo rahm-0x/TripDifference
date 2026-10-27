@@ -1,0 +1,521 @@
+{
+  "data": {
+    "created_at": "2026-10-21T09:59:56.426651Z",
+    "driver": {
+      "age": 31,
+      "residence_country_code": "US"
+    },
+    "dropoff_date": "2026-11-23",
+    "dropoff_location": {
+      "geographic_coordinates": {
+        "latitude": -24.38,
+        "longitude": -128.32
+      },
+      "radius": 1
+    },
+    "dropoff_time": "15:00",
+    "id": "seh_0000BBdJdV1UDOwDHlRRco",
+    "live_mode": false,
+    "pickup_date": "2026-11-20",
+    "pickup_location": {
+      "geographic_coordinates": {
+        "latitude": -24.38,
+        "longitude": -128.32
+      },
+      "radius": 1
+    },
+    "pickup_time": "10:00",
+    "rates": [
+      {
+        "base_amount": "88.50",
+        "base_currency": "GBP",
+        "car": {
+          "air_conditioning": true,
+          "baggage": {
+            "large": 3,
+            "small": 2
+          },
+          "category": "compact",
+          "code": "CDAV",
+          "fuel": "petrol",
+          "images": [
+            {
+              "url": "https://assets.duffel.com/img/cars/duffel-test-drive/compact.png"
+            }
+          ],
+          "max_passengers": 5,
+          "name": "Successful Prepaid Booking",
+          "transmission": "automatic",
+          "type": "four_door"
+        },
+        "dropoff_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "2 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Dropoff",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "id": "rae_0000BBdJdV3c5UdhOMR8wJ",
+        "mileage": {
+          "type": "unlimited"
+        },
+        "payment_type": "prepaid",
+        "pickup_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "1 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Pickup",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "supplier": {
+          "logo_url": "https://assets.duffel.com/duffel-lockup/Duffel_Logo_Lock-up_Positive_RGB.png",
+          "name": "Duffel Test Drive"
+        },
+        "total_amount": "94.62",
+        "total_currency": "GBP"
+      },
+      {
+        "base_amount": "95.22",
+        "base_currency": "GBP",
+        "car": {
+          "air_conditioning": true,
+          "baggage": {
+            "large": 3,
+            "small": 2
+          },
+          "category": "standard",
+          "code": "SSAV",
+          "fuel": "petrol",
+          "images": [
+            {
+              "url": "https://assets.duffel.com/img/cars/duffel-test-drive/sport.png"
+            }
+          ],
+          "max_passengers": 5,
+          "name": "Successful Postpaid Booking",
+          "transmission": "automatic",
+          "type": "sport"
+        },
+        "dropoff_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "2 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Dropoff",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "id": "rae_0000BBdJdV3c5UdhOMR8wD",
+        "mileage": {
+          "type": "unlimited"
+        },
+        "payment_type": "postpaid",
+        "pickup_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "1 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Pickup",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "supplier": {
+          "logo_url": "https://assets.duffel.com/duffel-lockup/Duffel_Logo_Lock-up_Positive_RGB.png",
+          "name": "Duffel Test Drive"
+        },
+        "total_amount": "101.34",
+        "total_currency": "GBP"
+      },
+      {
+        "base_amount": "95.22",
+        "base_currency": "GBP",
+        "car": {
+          "air_conditioning": true,
+          "baggage": {
+            "large": 3,
+            "small": 2
+          },
+          "category": "fullsize",
+          "code": "FDAV",
+          "fuel": "petrol",
+          "images": [
+            {
+              "url": "https://assets.duffel.com/img/cars/duffel-test-drive/saloon.png"
+            }
+          ],
+          "max_passengers": 5,
+          "name": "Successful Guarantee Booking",
+          "transmission": "automatic",
+          "type": "four_door"
+        },
+        "dropoff_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "2 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Dropoff",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "id": "rae_0000BBdJdV3c5UdhOMR8wE",
+        "mileage": {
+          "type": "unlimited"
+        },
+        "payment_type": "guarantee",
+        "pickup_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "1 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Pickup",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "supplier": {
+          "logo_url": "https://assets.duffel.com/duffel-lockup/Duffel_Logo_Lock-up_Positive_RGB.png",
+          "name": "Duffel Test Drive"
+        },
+        "total_amount": "101.34",
+        "total_currency": "GBP"
+      },
+      {
+        "base_amount": "168.30",
+        "base_currency": "GBP",
+        "car": {
+          "air_conditioning": true,
+          "baggage": {
+            "large": 3,
+            "small": 2
+          },
+          "category": "standard",
+          "code": "PFBV",
+          "fuel": "petrol",
+          "images": [
+            {
+              "url": "https://assets.duffel.com/img/cars/duffel-test-drive/saloon.png"
+            }
+          ],
+          "max_passengers": 5,
+          "name": "Pending then Failed Booking",
+          "transmission": "automatic",
+          "type": "four_door"
+        },
+        "dropoff_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "2 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Dropoff",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "id": "rae_0000BBdJdV3c5UdhOMR8wL",
+        "mileage": {
+          "type": "unlimited"
+        },
+        "payment_type": "postpaid",
+        "pickup_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "1 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Pickup",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "supplier": {
+          "logo_url": "https://assets.duffel.com/duffel-lockup/Duffel_Logo_Lock-up_Positive_RGB.png",
+          "name": "Duffel Test Drive"
+        },
+        "total_amount": "172.12",
+        "total_currency": "GBP"
+      },
+      {
+        "base_amount": "178.20",
+        "base_currency": "GBP",
+        "car": {
+          "air_conditioning": true,
+          "baggage": {
+            "large": 3,
+            "small": 2
+          },
+          "category": "standard",
+          "code": "PSBV",
+          "fuel": "petrol",
+          "images": [
+            {
+              "url": "https://assets.duffel.com/img/cars/duffel-test-drive/sport.png"
+            }
+          ],
+          "max_passengers": 5,
+          "name": "Accepted then Successful Booking",
+          "transmission": "automatic",
+          "type": "four_door"
+        },
+        "dropoff_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "2 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Dropoff",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "id": "rae_0000BBdJdV3c5UdhOMR8wM",
+        "mileage": {
+          "type": "unlimited"
+        },
+        "payment_type": "postpaid",
+        "pickup_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "1 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Pickup",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "supplier": {
+          "logo_url": "https://assets.duffel.com/duffel-lockup/Duffel_Logo_Lock-up_Positive_RGB.png",
+          "name": "Duffel Test Drive"
+        },
+        "total_amount": "184.52",
+        "total_currency": "GBP"
+      },
+      {
+        "base_amount": "188.50",
+        "base_currency": "GBP",
+        "car": {
+          "air_conditioning": true,
+          "baggage": {
+            "large": 3,
+            "small": 2
+          },
+          "category": "compact",
+          "code": "UNAV",
+          "fuel": "petrol",
+          "images": [
+            {
+              "url": "https://assets.duffel.com/img/cars/duffel-test-drive/compact.png"
+            }
+          ],
+          "max_passengers": 5,
+          "name": "Rate Unavailable",
+          "transmission": "automatic",
+          "type": "four_door"
+        },
+        "dropoff_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "2 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Dropoff",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "id": "rae_0000BBdJdV3c5UdhOMR8wF",
+        "mileage": {
+          "type": "unlimited"
+        },
+        "payment_type": "postpaid",
+        "pickup_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "1 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Pickup",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "supplier": {
+          "logo_url": "https://assets.duffel.com/duffel-lockup/Duffel_Logo_Lock-up_Positive_RGB.png",
+          "name": "Duffel Test Drive"
+        },
+        "total_amount": "194.62",
+        "total_currency": "GBP"
+      },
+      {
+        "base_amount": "198.50",
+        "base_currency": "GBP",
+        "car": {
+          "air_conditioning": true,
+          "baggage": {
+            "large": 3,
+            "small": 2
+          },
+          "category": "compact",
+          "code": "PDCL",
+          "fuel": "petrol",
+          "images": [
+            {
+              "url": "https://assets.duffel.com/img/cars/duffel-test-drive/compact.png"
+            }
+          ],
+          "max_passengers": 5,
+          "name": "Payment Declined",
+          "transmission": "automatic",
+          "type": "four_door"
+        },
+        "dropoff_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "2 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Dropoff",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "id": "rae_0000BBdJdV3c5UdhOMR8wH",
+        "mileage": {
+          "type": "unlimited"
+        },
+        "payment_type": "prepaid",
+        "pickup_location": {
+          "access": null,
+          "additional_information": [],
+          "address": {
+            "city_name": "Henderson Island",
+            "country_code": "GB",
+            "line_one": "1 Rental Road",
+            "postal_code": "PCRN 1ZZ",
+            "region": null
+          },
+          "geographic_coordinates": {
+            "latitude": -24.38,
+            "longitude": -128.32
+          },
+          "name": "Duffel Test Drive Pickup",
+          "opening_hours": [],
+          "phone_number": null
+        },
+        "supplier": {
+          "logo_url": "https://assets.duffel.com/duffel-lockup/Duffel_Logo_Lock-up_Positive_RGB.png",
+          "name": "Duffel Test Drive"
+        },
+        "total_amount": "204.62",
+        "total_currency": "GBP"
+      }
+    ]
+  }
+}

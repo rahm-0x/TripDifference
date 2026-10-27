@@ -20,7 +20,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -31,6 +31,7 @@ import requests
 
 import auth
 import billing
+import cars
 import config
 import db
 import duffel_http
@@ -39,8 +40,10 @@ import live_guard
 import live_search
 import offer_eligibility
 import paths
+import places
 import policy
 import referrals
+import stays
 import supabase_auth
 from duffel_http import DuffelError
 from engine import (OrderSnapshot, Outcome, ReshopPolicy,
@@ -1408,6 +1411,162 @@ def search():
 
 
 # ---------------------------------------------------------------------------
+# cars and stays: search only
+# ---------------------------------------------------------------------------
+#
+# Both are sandbox-only (duffel_http refuses /cars and /stays with a live
+# token) and neither books anything: Stays isn't enabled on the Duffel account,
+# and a car can't be bought from the Duffel balance (cars.py). These pages
+# show what Duffel would offer, and say so.
+
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_COUNTRY = re.compile(r"^[A-Z]{2}$")
+MAX_STAY_ADULTS = 6
+MAX_STAY_ROOMS = 4
+
+
+def cars_stays_unavailable():
+    """Why car and hotel search can't run on this deployment, or None. Said up
+    front rather than sending a request duffel_http is certain to refuse."""
+    if duffel_http.configured_token_mode() == "live":
+        return ("Car and hotel search is sandbox-only, and this deployment holds a live Duffel token, "
+                "which may only be used for flights.")
+    return None
+
+
+def _bounded_int(raw, default, low, high):
+    try:
+        return max(low, min(high, int(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _date_range_error(start, end, start_label, end_label):
+    """A message for a date pair a search can't use, else None."""
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        return f"{start_label} and {end_label.lower()} dates are required."
+    if first < datetime.now(timezone.utc).date():
+        return f"{start_label} date is in the past."
+    if last < first:
+        return f"{end_label} date is before the {start_label.lower()} date."
+    return None
+
+
+@app.route("/cars", methods=["GET"])
+@auth.login_required
+def cars_search():
+    """Rental cars around an airport. GET for the same reasons as search()."""
+    sandbox = duffel_http.configured_token_mode() == "test"
+    form = {
+        "location": request.args.get("location", "").strip().upper(),
+        "pickup_date": request.args.get("pickup_date", "").strip(),
+        "pickup_time": request.args.get("pickup_time", "10:00").strip(),
+        "dropoff_date": request.args.get("dropoff_date", "").strip(),
+        "dropoff_time": request.args.get("dropoff_time", "10:00").strip(),
+        "driver_age": _bounded_int(request.args.get("driver_age"), 30, 18, 99),
+        "country": request.args.get("country", "US").strip().upper(),
+        # Sandbox has rates at Duffel Test Drive and nowhere else.
+        "test_drive": sandbox and request.args.get("test_drive") == "1",
+    }
+    page = {"nav": "overview", "form": form, "sandbox": sandbox,
+            "unavailable": cars_stays_unavailable(), "rates": None, "place": None}
+    if page["unavailable"] or not any((form["location"], form["pickup_date"], form["test_drive"])):
+        return render_template("cars.html", **page)
+
+    error = (_date_range_error(form["pickup_date"], form["dropoff_date"], "Pick-up", "Drop-off")
+             or (None if _HHMM.match(form["pickup_time"]) and _HHMM.match(form["dropoff_time"])
+                 else "Times must be HH:MM, like 10:00.")
+             or (None if _COUNTRY.match(form["country"]) else "Driver's country must be a two-letter code, like US."))
+    if not error and form["pickup_date"] == form["dropoff_date"] and form["dropoff_time"] <= form["pickup_time"]:
+        error = "Drop-off is before pick-up."
+    if error:
+        return render_template("cars.html", **page, error=error)
+
+    try:
+        if form["test_drive"]:
+            (latitude, longitude), radius = cars.TEST_DRIVE, 1
+            page["place"] = "Duffel Test Drive (sandbox)"
+        else:
+            airport = places.airport(form["location"])
+            latitude, longitude, radius = airport.latitude, airport.longitude, 5
+            page["place"] = f"{airport.name} ({airport.iata_code})"
+        result = cars.search(latitude, longitude, radius=radius,
+                             pickup_date=form["pickup_date"], pickup_time=form["pickup_time"],
+                             dropoff_date=form["dropoff_date"], dropoff_time=form["dropoff_time"],
+                             driver_age=form["driver_age"], residence_country=form["country"])
+    except (places.PlaceNotFound, RuntimeError) as exc:
+        return render_template("cars.html", **page, error=str(exc))
+    page["rates"] = cars.rates_in(result)
+    return render_template("cars.html", **page)
+
+
+def _money_or_none(value):
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError):
+        return None
+    return amount if amount.is_finite() else None
+
+
+def stay_result_view(result):
+    """One property from a Stays search, with its cheapest rate. Field names
+    follow Duffel's published client types; no real response has been seen."""
+    accommodation = result.get("accommodation") or {}
+    address = (accommodation.get("location") or {}).get("address") or {}
+    photos = accommodation.get("photos") or []
+    return {
+        "name": accommodation.get("name") or "",
+        "rating": accommodation.get("rating"),
+        "review_score": accommodation.get("review_score"),
+        "address": ", ".join(x for x in (address.get("line_one"), address.get("city_name")) if x),
+        "photo_url": ((photos[0] or {}).get("url") if photos else None) or "",
+        "total": _money_or_none(result.get("cheapest_rate_total_amount")),
+        "currency": result.get("cheapest_rate_currency") or "",
+    }
+
+
+@app.route("/stays", methods=["GET"])
+@auth.login_required
+def stays_search():
+    """Hotels around an airport. GET for the same reasons as search()."""
+    form = {
+        "location": request.args.get("location", "").strip().upper(),
+        "check_in": request.args.get("check_in", "").strip(),
+        "check_out": request.args.get("check_out", "").strip(),
+        "adults": _bounded_int(request.args.get("adults"), 1, 1, MAX_STAY_ADULTS),
+        "rooms": _bounded_int(request.args.get("rooms"), 1, 1, MAX_STAY_ROOMS),
+    }
+    page = {"nav": "overview", "form": form, "unavailable": cars_stays_unavailable(),
+            "results": None, "place": None, "not_enabled": False,
+            "max_adults": MAX_STAY_ADULTS, "max_rooms": MAX_STAY_ROOMS}
+    if page["unavailable"] or not any((form["location"], form["check_in"])):
+        return render_template("stays.html", **page)
+
+    error = _date_range_error(form["check_in"], form["check_out"], "Check-in", "Check-out")
+    if not error and form["check_in"] == form["check_out"]:
+        error = "Check-out has to be at least a night after check-in."
+    if not error and form["rooms"] > form["adults"]:
+        error = "Every room needs at least one adult."
+    if error:
+        return render_template("stays.html", **page, error=error)
+
+    try:
+        airport = places.airport(form["location"])
+        page["place"] = f"{airport.name} ({airport.iata_code})"
+        result = stays.search_near(airport.latitude, airport.longitude,
+                                   check_in=form["check_in"], check_out=form["check_out"],
+                                   adults=form["adults"], rooms=form["rooms"])
+    except stays.StaysNotEnabled:
+        return render_template("stays.html", **{**page, "not_enabled": True})
+    except (places.PlaceNotFound, RuntimeError) as exc:
+        return render_template("stays.html", **page, error=str(exc))
+    page["results"] = [stay_result_view(r) for r in result.get("results") or []]
+    return render_template("stays.html", **page)
+
+
+# ---------------------------------------------------------------------------
 # staging: which live fares could be rebooked on a price drop
 # ---------------------------------------------------------------------------
 
@@ -2036,7 +2195,11 @@ def overview():
                            activity=activity,
                            band=band, band_paid=band_paid, band_worth=band_worth,
                            band_recoverable=band_paid - band_worth,
-                           monitored_count=len(monitored))
+                           monitored_count=len(monitored),
+                           cars_stays_unavailable=cars_stays_unavailable(),
+                           sandbox=duffel_http.configured_token_mode() == "test",
+                           trip_start=(date.today() + timedelta(days=14)).isoformat(),
+                           trip_end=(date.today() + timedelta(days=17)).isoformat())
 
 
 CREDIT_EXPIRY_WARNING_DAYS = 30

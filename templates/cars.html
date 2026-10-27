@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Cars — Trip Difference{% endblock %}
+{% block body %}
+{% set cs_tab = 'cars' %}
+
+<div style="max-width:760px; margin:0 auto;">
+  {% include "_cars_stays_tabs.html" %}
+
+  <div class="page-head">
+    <h1>Rental cars</h1>
+    <p>Compare rental cars at the airport. You can search here, but booking a car isn't available yet.</p>
+  </div>
+
+  <div class="card">
+    <form method="get" action="{{ url_for('cars_search') }}">
+      <div class="field">
+        <label for="location">Pick-up and drop-off airport</label>
+        <input id="location" name="location" maxlength="3" placeholder="LHR" autocomplete="off"
+               value="{{ form.location }}" {{ 'disabled' if unavailable }}>
+        {% if sandbox %}
+        <label class="cs-check">
+          <input type="checkbox" name="test_drive" value="1" {{ 'checked' if form.test_drive }}>
+          <span>Use Duffel Test Drive instead. In the sandbox it's the only place that returns rates.</span>
+        </label>
+        {% endif %}
+      </div>
+      <div class="grid2">
+        <div class="field" style="margin:0">
+          <label for="pickup_date">Pick-up</label>
+          <div class="dt">
+            <input id="pickup_date" name="pickup_date" type="date" value="{{ form.pickup_date }}" required {{ 'disabled' if unavailable }}>
+            <input name="pickup_time" type="time" value="{{ form.pickup_time }}" aria-label="Pick-up time" required {{ 'disabled' if unavailable }}>
+          </div>
+        </div>
+        <div class="field" style="margin:0">
+          <label for="dropoff_date">Drop-off</label>
+          <div class="dt">
+            <input id="dropoff_date" name="dropoff_date" type="date" value="{{ form.dropoff_date }}" required {{ 'disabled' if unavailable }}>
+            <input name="dropoff_time" type="time" value="{{ form.dropoff_time }}" aria-label="Drop-off time" required {{ 'disabled' if unavailable }}>
+          </div>
+        </div>
+      </div>
+      <div class="grid2" style="margin-top:14px">
+        <div class="field">
+          <label for="driver_age">Driver's age</label>
+          <input id="driver_age" name="driver_age" type="number" min="18" max="99" value="{{ form.driver_age }}" {{ 'disabled' if unavailable }}>
+        </div>
+        <div class="field">
+          <label for="country">Driver's country of residence</label>
+          <input id="country" name="country" maxlength="2" placeholder="US" value="{{ form.country }}" {{ 'disabled' if unavailable }}>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-block" {{ 'disabled' if unavailable }}>Search cars</button>
+    </form>
+  </div>
+
+  {% if error %}
+  <div class="notice notice-err" style="margin-top:16px"><span>!</span><div>{{ error }}</div></div>
+  {% endif %}
+
+  {% if rates is not none %}
+  <div class="cs-results-head">
+    <h2>{{ rates|length }} car{{ 's' if rates|length != 1 }} at {{ place }}</h2>
+    <span>{{ form.pickup_date }} {{ form.pickup_time }} → {{ form.dropoff_date }} {{ form.dropoff_time }}</span>
+  </div>
+  {% if rates %}
+  <div class="cs-list">
+    {% for r in rates %}
+    <div class="card cs-row">
+      {% if r.image_url %}<img class="thumb" src="{{ r.image_url }}" alt="">{% else %}<div class="thumb-empty"></div>{% endif %}
+      <div>
+        <h3>{{ r.car_name }}</h3>
+        <div class="cs-meta">
+          <span>{{ r.supplier }}</span>
+          {% if r.category %}<span>{{ r.category|capitalize }}{% if r.code %} · {{ r.code }}{% endif %}</span>{% endif %}
+          {% if r.transmission %}<span>{{ r.transmission|capitalize }}</span>{% endif %}
+          {% if r.max_passengers %}<span>{{ r.max_passengers }} seats</span>{% endif %}
+          {% if r.large_bags is not none %}<span>{{ r.large_bags }} large · {{ r.small_bags or 0 }} small bags</span>{% endif %}
+          {% if r.mileage %}<span>{{ r.mileage|capitalize }} mileage</span>{% endif %}
+        </div>
+      </div>
+      <div class="cs-price">
+        <div><span class="amt">{{ '%.2f'|format(r.total) }}</span><span class="cur">{{ r.currency }}</span></div>
+        <span class="tag tag-mute">{{ r.payment_label }}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="cs-note">These are search prices. The rental company can change them when it confirms the booking.</p>
+  {% else %}
+  <div class="card"><p class="muted" style="padding:20px; text-align:center; margin:0; font-size:13.5px">
+    No cars for those dates.
+    {% if sandbox and not form.test_drive %}
+    The sandbox only returns rates at Duffel Test Drive —
+    <a href="{{ url_for('cars_search', **dict(form, test_drive='1', location='')) }}">search there with the same dates</a>.
+    {% endif %}
+  </p></div>
+  {% endif %}
+  {% endif %}
+</div>
+
+<style>
+  .dt { display:grid; grid-template-columns:1fr 110px; gap:8px; }
+  .cs-check { display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:12.5px;
+              color:var(--muted); font-weight:400; text-transform:none; letter-spacing:0; cursor:pointer; }
+  .cs-check input { width:auto; margin-top:2px; }
+</style>
+{% endblock %}

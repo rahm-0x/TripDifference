@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Stays — Trip Difference{% endblock %}
+{% block body %}
+{% set cs_tab = 'stays' %}
+
+<div style="max-width:760px; margin:0 auto;">
+  {% include "_cars_stays_tabs.html" %}
+
+  <div class="page-head">
+    <h1>Hotels</h1>
+    <p>Compare hotels near an airport. You can search here, but booking a stay isn't available yet.</p>
+  </div>
+
+  <div class="card">
+    <form method="get" action="{{ url_for('stays_search') }}">
+      <div class="field">
+        <label for="location">Near airport</label>
+        <input id="location" name="location" maxlength="3" placeholder="JFK" autocomplete="off"
+               value="{{ form.location }}" required {{ 'disabled' if unavailable }}>
+      </div>
+      <div class="grid2">
+        <div class="field" style="margin:0">
+          <label for="check_in">Check-in</label>
+          <input id="check_in" name="check_in" type="date" value="{{ form.check_in }}" required {{ 'disabled' if unavailable }}>
+        </div>
+        <div class="field" style="margin:0">
+          <label for="check_out">Check-out</label>
+          <input id="check_out" name="check_out" type="date" value="{{ form.check_out }}" required {{ 'disabled' if unavailable }}>
+        </div>
+      </div>
+      <div class="grid2" style="margin-top:14px">
+        <div class="field">
+          <label for="adults">Guests</label>
+          <select id="adults" name="adults" {{ 'disabled' if unavailable }}>
+            {% for n in range(1, max_adults + 1) %}
+            <option value="{{ n }}" {{ 'selected' if form.adults == n }}>{{ n }} adult{{ 's' if n > 1 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="rooms">Rooms</label>
+          <select id="rooms" name="rooms" {{ 'disabled' if unavailable }}>
+            {% for n in range(1, max_rooms + 1) %}
+            <option value="{{ n }}" {{ 'selected' if form.rooms == n }}>{{ n }} room{{ 's' if n > 1 }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-block" {{ 'disabled' if unavailable }}>Search stays</button>
+    </form>
+  </div>
+
+  {% if error %}
+  <div class="notice notice-err" style="margin-top:16px"><span>!</span><div>{{ error }}</div></div>
+  {% endif %}
+
+  {% if not_enabled %}
+  <div class="notice notice-terra" style="margin-top:16px"><span>i</span><div>
+    <b>Hotel search isn't on yet.</b> We've asked our travel provider, Duffel, to turn hotels on for
+    our account. Until it does, a hotel search returns nothing.
+  </div></div>
+  {% endif %}
+
+  {% if results is not none %}
+  <div class="cs-results-head">
+    <h2>{{ results|length }} hotel{{ 's' if results|length != 1 }} near {{ place }}</h2>
+    <span>{{ form.check_in }} → {{ form.check_out }} · {{ form.adults }} adult{{ 's' if form.adults > 1 }}, {{ form.rooms }} room{{ 's' if form.rooms > 1 }}</span>
+  </div>
+  {% if results %}
+  <div class="cs-list">
+    {% for h in results %}
+    <div class="card cs-row">
+      {% if h.photo_url %}<img class="thumb" src="{{ h.photo_url }}" alt="" style="object-fit:cover">{% else %}<div class="thumb-empty"></div>{% endif %}
+      <div>
+        <h3>{{ h.name }}</h3>
+        <div class="cs-meta">
+          {% if h.rating %}<span>{{ h.rating }}★</span>{% endif %}
+          {% if h.review_score %}<span>Guests rate it {{ h.review_score }}</span>{% endif %}
+          {% if h.address %}<span>{{ h.address }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="cs-price">
+        {% if h.total is not none %}
+        <div><span class="amt">{{ '%.2f'|format(h.total) }}</span><span class="cur">{{ h.currency }}</span></div>
+        <span class="tag tag-mute">From, whole stay</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card"><p class="muted" style="padding:20px; text-align:center; margin:0; font-size:13.5px">
+    No hotels for those dates.</p></div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

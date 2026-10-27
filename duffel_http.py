@@ -22,11 +22,12 @@ Per-request guard (_check_request):
   - on APP_ENV=staging, everything but a search request — order create,
     order change, cancel — is refused unless DUFFEL_LIVE_ORDERS_ENABLED=true,
     whatever the token: no sandbox bookings on staging either. A Stays search
-    (POST /stays/search, fetch_all_rates) counts as a search; a Stays quote,
+    (POST /stays/search, fetch_all_rates), a Cars search (POST /cars/search)
+    and a place lookup (GET /places/suggestions) count as a search; a quote,
     booking or cancel does not;
-  - with a live token, only /air endpoints are allowed at all. Stays is
-    sandbox-only: a booking paid from the Duffel balance carries no payment
-    object, so the spend check below would have nothing to refuse;
+  - with a live token, only /air endpoints are allowed at all. Stays and Cars
+    are sandbox-only: a Stays booking paid from the Duffel balance carries no
+    payment object, so the spend check below would have nothing to refuse;
   - with a live token, a search request (POST /air/offer_requests,
     GET /air/offer_requests…, GET /air/offers…) needs DUFFEL_LIVE_SEARCH_ENABLED,
     and a live offer request also needs a single-use SearchAuthorization from
@@ -187,14 +188,16 @@ def staging_orders_refusal():
 # ---------------------------------------------------------------------------
 
 def is_search_request(method, path):
-    """A request that only looks at prices. A Stays quote is not one: it is
-    the step before a booking, so staging treats it as part of ordering."""
+    """A request that only looks at prices, or (place suggestions) only looks
+    up where an airport is. A Stays or Cars quote is not one: it is the step
+    before a booking, so staging treats it as part of ordering."""
     method, path = method.upper(), path.split("?")[0].rstrip("/")
     if method == "POST":
-        return (path in ("/air/offer_requests", "/stays/search")
+        return (path in ("/air/offer_requests", "/stays/search", "/cars/search")
                 or (path.startswith("/stays/search_results/") and path.endswith("/actions/fetch_all_rates")))
     if method == "GET":
-        return any(path == p or path.startswith(p + "/") for p in ("/air/offer_requests", "/air/offers"))
+        return (path == "/places/suggestions"
+                or any(path == p or path.startswith(p + "/") for p in ("/air/offer_requests", "/air/offers")))
     return False
 
 

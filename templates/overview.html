@@ -80,6 +80,58 @@
   </div>
 </div>
 
+<div class="card cs-panel">
+  <div class="card-head">
+    <h2>Cars &amp; stays</h2>
+    <span class="tag tag-mute">Search only</span>
+  </div>
+  {% if cars_stays_unavailable %}
+  <p class="cs-off">{{ cars_stays_unavailable }}</p>
+  {% else %}
+  <div class="cs-forms">
+    <form method="get" action="{{ url_for('cars_search') }}" class="cs-form">
+      <div class="cs-form-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 6a1.5 1.5 0 0 0-1.4-1h-11a1.5 1.5 0 0 0-1.4 1L3 12v8a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-1h12v1a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1v-8l-2.1-6zM6.5 16a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm11 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM5 11l1.5-4.5h11L19 11H5z"/></svg>
+        Rental car
+      </div>
+      <div class="field">
+        <label for="car_location">Airport</label>
+        <input id="car_location" name="location" maxlength="3" placeholder="LHR" autocomplete="off"{{ '' if sandbox else ' required' }}>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="car_from">Pick-up</label>
+          <input id="car_from" name="pickup_date" type="date" value="{{ trip_start }}" required></div>
+        <div class="field"><label for="car_to">Drop-off</label>
+          <input id="car_to" name="dropoff_date" type="date" value="{{ trip_end }}" required></div>
+      </div>
+      {% if sandbox %}
+      <label class="cs-check"><input type="checkbox" name="test_drive" value="1">
+        <span>Sandbox: use Duffel Test Drive, the only place with car rates</span></label>
+      {% endif %}
+      <button type="submit" class="btn btn-ghost btn-block">Search cars</button>
+    </form>
+
+    <form method="get" action="{{ url_for('stays_search') }}" class="cs-form">
+      <div class="cs-form-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm12-6h-8v7H3V5H1v15h2v-3h18v3h2v-9a4 4 0 0 0-4-4z"/></svg>
+        Hotel
+      </div>
+      <div class="field">
+        <label for="stay_location">Near airport</label>
+        <input id="stay_location" name="location" maxlength="3" placeholder="JFK" autocomplete="off" required>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="stay_in">Check-in</label>
+          <input id="stay_in" name="check_in" type="date" value="{{ trip_start }}" required></div>
+        <div class="field"><label for="stay_out">Check-out</label>
+          <input id="stay_out" name="check_out" type="date" value="{{ trip_end }}" required></div>
+      </div>
+      <button type="submit" class="btn btn-ghost btn-block">Search stays</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
 <div class="cols">
   <div class="card">
     <div class="card-head"><h2>Upcoming departures</h2><a href="{{ url_for('trips') }}" class="btn ghost btn-sm">View all trips</a></div>
@@ -166,6 +218,28 @@
            letter-spacing:-.025em; font-variant-numeric:tabular-nums; line-height:1; }
   .k-note { font-size:11.5px; color:var(--muted-2); margin-top:6px; }
   @media (max-width:1080px){ .kpis { grid-template-columns:repeat(2,1fr); } }
+
+  /* cars & stays */
+  .cs-panel { margin-bottom:22px; }
+  .cs-panel .card-head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }
+  .cs-panel .card-head h2 { font-size:16px; }
+  .cs-off { font-size:12.5px; color:var(--muted); margin:0; }
+  .cs-forms { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+  .cs-form:first-child { padding-right:20px; }
+  .cs-form + .cs-form { border-left:1px solid var(--line); padding-left:20px; }
+  .cs-form-title { display:flex; align-items:center; gap:7px; font-size:13.5px; font-weight:600;
+                   margin-bottom:12px; color:var(--text); }
+  .cs-form-title svg { color:var(--muted); }
+  .cs-form .grid2 { gap:10px; }
+  .cs-check { display:flex; gap:8px; align-items:flex-start; margin:0 0 12px; font-size:12px;
+              color:var(--muted); font-weight:400; text-transform:none; letter-spacing:0; cursor:pointer; }
+  .cs-check input { width:auto; margin-top:1px; }
+  @media (max-width:760px){
+    .cs-forms { grid-template-columns:1fr; }
+    .cs-form:first-child { padding-right:0; }
+    .cs-form + .cs-form { border-left:0; padding-left:0; border-top:1px solid var(--line);
+                          padding-top:16px; margin-top:4px; }
+  }
 
   .route small { display:block; font-family:'IBM Plex Mono', monospace; font-size:10.5px;
                  color:var(--muted-2); font-weight:400; margin-top:1px; }
